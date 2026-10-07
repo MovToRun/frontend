@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import UniformTypeIdentifiers
 @testable import Mov
 
 private struct V1PointEntryFixture: Codable {
@@ -20,6 +21,35 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
+    }
+
+    func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
+        XCTAssertTrue(WProfilePhotoPolicy.accepts([.jpeg]))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts([.png]))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts([.webP]))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts([.heic]))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes+1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:0))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(width: 8_192, height: 2_000))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 8_193, height: 1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 5_000, height: 4_001))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 0, height: 1))
+    }
+
+    func testProfilePhotoCropExportsSquareJpegWithinReview52Limit() throws {
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:600,height:400))
+        let image=renderer.image{context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x:0,y:0,width:600,height:400))
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:100,y:0,width:400,height:400)))
+        let output=try XCTUnwrap(UIImage(data:data)?.cgImage)
+        XCTAssertEqual(output.width,256)
+        XCTAssertEqual(output.height,256)
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertEqual(data.prefix(3),Data([0xFF,0xD8,0xFF]))
+        XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
     }
 
     @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {

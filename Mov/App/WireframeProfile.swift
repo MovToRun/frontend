@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 extension WireframeRoot {
     var profile:some View {VStack(spacing:0){rootHeader("내 정보");ScrollView{VStack(alignment:.leading,spacing:14){HStack{Text("나의 러닝 카드").font(W.font(17,.semibold));Spacer();Button("카드 편집"){go("M02")}.font(W.font(12)).frame(minHeight:44)}
         runnerIdentityCard()
@@ -96,7 +97,7 @@ struct WAvatarEditor:View {
     var body:some View {VStack(alignment:.leading,spacing:12){(Text("프로필 사진").font(W.font(13))+Text("  선택").font(W.font(10)).foregroundColor(W.muted)).padding(.bottom,7);Group{if let picture{Image(uiImage:picture).resizable().scaledToFill()}else{WAvatarPlaceholder().stroke(W.muted,style:StrokeStyle(lineWidth:1.6*34/24,lineCap:.butt,lineJoin:.miter)).frame(width:34,height:34)}}.frame(width:80,height:80).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line)).frame(maxWidth:.infinity).padding(.bottom,6);HStack{PhotosPicker(selection:$item,matching:.images){Text("사진 선택").font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.lime,in:RoundedRectangle(cornerRadius:10)).foregroundStyle(MovTokens.onBrand)};Button("사진 삭제"){data=nil;item=nil;draft=nil}.font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.line)).foregroundStyle(data==nil ? W.muted:W.ink).disabled(data==nil)}.frame(maxWidth:.infinity);Text("JPG · PNG · WebP, 8MB 이하\n이 브라우저에만 저장돼요. 서버로 전송하지 않아요.").font(W.font(11)).lineSpacing(6).foregroundStyle(W.muted)
         if !message.isEmpty{WNotice(text:message,danger:true)}
         if let draft{WPhotoCrop(image:draft){value in data=value;self.draft=nil} cancel:{self.draft=nil}}
-    }.task(id:item){guard let item else{return};do{guard let loaded=try await item.loadTransferable(type:Data.self),!Task.isCancelled else{return};guard loaded.count<=8*1024*1024,let image=UIImage(data:loaded)else{message="8MB 이하의 지원되는 사진을 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message="사진을 불러오지 못했어요. 다시 선택해 주세요."}}}}
+    }.task(id:item){guard let item else{return};do{guard let loaded=try await item.loadTransferable(type:Data.self),!Task.isCancelled else{return};guard WProfilePhotoPolicy.accepts(item.supportedContentTypes),WProfilePhotoPolicy.accepts(byteCount:loaded.count),let image=UIImage(data:loaded),let dimensions=image.cgImage.map({(width:$0.width,height:$0.height)}),WProfilePhotoPolicy.accepts(width:dimensions.width,height:dimensions.height)else{message="JPG · PNG · WebP 형식의 8MB 이하 사진을 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message="사진을 불러오지 못했어요. 다시 선택해 주세요."}}}}
 }
 struct WPhotoCrop:View {
     var image:UIImage
@@ -106,13 +107,62 @@ struct WPhotoCrop:View {
     @State private var anchor=CGSize.zero
     @State private var diameter:CGFloat=180
     @State private var stageSide:CGFloat=340
+    @State private var errorMessage=""
     var body:some View {VStack(spacing:12){Text("사진에서 사용할 부분을 골라요").font(W.font(15,.semibold));GeometryReader{geo in let side=geo.size.width;let fit=min(side/image.size.width,side/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit)
-            ZStack{Image(uiImage:image).resizable().scaledToFit().frame(width:side,height:side);Circle().stroke(.white,lineWidth:2).background(Circle().fill(.black.opacity(0.05))).frame(width:min(diameter,min(displayed.width,displayed.height)),height:min(diameter,min(displayed.width,displayed.height))).offset(point).gesture(DragGesture().onChanged{v in let half=min(diameter,min(displayed.width,displayed.height))/2;point=CGSize(width:min(displayed.width/2-half,max(-displayed.width/2+half,anchor.width+v.translation.width)),height:min(displayed.height/2-half,max(-displayed.height/2+half,anchor.height+v.translation.height)))}.onEnded{_ in anchor=point})}.frame(width:side,height:side).background(Color.black).clipShape(RoundedRectangle(cornerRadius:14)).onAppear{stageSide=side}
+            ZStack{Image(uiImage:image).resizable().scaledToFit().frame(width:side,height:side);let cropDiameter=min(diameter,min(displayed.width,displayed.height));WPhotoCropShade(diameter:cropDiameter,offset:point).fill(.black.opacity(0.56),style:FillStyle(eoFill:true));Circle().stroke(.white,lineWidth:2).frame(width:cropDiameter,height:cropDiameter).overlay(alignment:.bottom){Text("↔").font(W.font(19)).foregroundStyle(.white).frame(width:32,height:24).background(.black.opacity(0.48),in:Capsule()).offset(y:-10)}.offset(point).gesture(DragGesture().onChanged{v in let half=cropDiameter/2;point=CGSize(width:min(displayed.width/2-half,max(-displayed.width/2+half,anchor.width+v.translation.width)),height:min(displayed.height/2-half,max(-displayed.height/2+half,anchor.height+v.translation.height)))}.onEnded{_ in anchor=point})}.frame(width:side,height:side).background(Color.black).clipShape(RoundedRectangle(cornerRadius:14)).onAppear{stageSide=side}
         }.aspectRatio(1,contentMode:.fit)
         Slider(value:$diameter,in:80...280).accessibilityLabel("사진 선택 영역 크기")
-        HStack{Button("사진 적용"){let renderer=UIGraphicsImageRenderer(size:CGSize(width:512,height:512));let result=renderer.image{_ in let side:CGFloat=stageSide;let fit=min(side/image.size.width,side/image.size.height);let crop=min(diameter,min(image.size.width*fit,image.size.height*fit));let sourceSide=crop/fit;let center=CGPoint(x:image.size.width/2+point.width/fit,y:image.size.height/2+point.height/fit);let factor=512/sourceSide;image.draw(in:CGRect(x:-(center.x-sourceSide/2)*factor,y:-(center.y-sourceSide/2)*factor,width:image.size.width*factor,height:image.size.height*factor))};if let data=result.jpegData(compressionQuality:0.85){commit(data)}}.buttonStyle(WButtonStyle());Button("취소",action:cancel).buttonStyle(WButtonStyle(kind:1))}
+        if !errorMessage.isEmpty{WNotice(text:errorMessage,danger:true)}
+        HStack{Button("사진 적용"){let side:CGFloat=stageSide;let fit=min(side/image.size.width,side/image.size.height);let crop=min(diameter,min(image.size.width*fit,image.size.height*fit));let sourceSide=crop/fit;let center=CGPoint(x:image.size.width/2+point.width/fit,y:image.size.height/2+point.height/fit);let sourceRect=CGRect(x:center.x-sourceSide/2,y:center.y-sourceSide/2,width:sourceSide,height:sourceSide);if let data=WProfilePhotoPolicy.encode(image:image,crop:sourceRect){commit(data)}else{errorMessage="사진 용량을 줄이지 못했어요. 다른 사진을 선택해 주세요."}}.buttonStyle(WButtonStyle());Button("취소",action:cancel).buttonStyle(WButtonStyle(kind:1))}
     }}
 }
+
+enum WProfilePhotoPolicy {
+    static let maximumInputBytes=8*1024*1024
+    static let maximumOutputBytes=200*1024
+    static let maximumPixels=20_000_000
+    static let maximumEdge=8_192
+    static let outputEdge=256
+
+    static func accepts(_ types:[UTType])->Bool {
+        types.contains{ $0.conforms(to:.jpeg) || $0.conforms(to:.png) || $0.conforms(to:.webP) }
+    }
+
+    static func accepts(byteCount:Int)->Bool {
+        byteCount>0 && byteCount<=maximumInputBytes
+    }
+
+    static func accepts(width:Int,height:Int)->Bool {
+        width>0 && height>0 && width<=maximumEdge && height<=maximumEdge && width<=maximumPixels/height
+    }
+
+    static func encode(image:UIImage,crop:CGRect)->Data? {
+        guard crop.width>0,crop.height>0 else{return nil}
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=true
+        let size=CGSize(width:outputEdge,height:outputEdge)
+        let renderer=UIGraphicsImageRenderer(size:size,format:format)
+        let normalized=renderer.image{_ in
+            let scale=CGFloat(outputEdge)/crop.width
+            image.draw(in:CGRect(x:-crop.minX*scale,y:-crop.minY*scale,width:image.size.width*scale,height:image.size.height*scale))
+        }
+        for quality in [0.88,0.76,0.6,0.45] {
+            if let data=normalized.jpegData(compressionQuality:quality),data.count<=maximumOutputBytes,
+               let decoded=UIImage(data:data)?.cgImage,decoded.width==outputEdge,decoded.height==outputEdge{return data}
+        }
+        return nil
+    }
+}
+
+struct WPhotoCropShade:Shape {
+    var diameter:CGFloat
+    var offset:CGSize
+    func path(in rect:CGRect)->Path {
+        var path=Path();path.addRect(rect)
+        path.addEllipse(in:CGRect(x:rect.midX+offset.width-diameter/2,y:rect.midY+offset.height-diameter/2,width:diameter,height:diameter))
+        return path
+    }
+}
+
 struct WRegionPicker:View {
     @Binding var selection:String
     @State private var expanded=false
