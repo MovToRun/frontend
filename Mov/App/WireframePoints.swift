@@ -166,12 +166,13 @@ extension WireframeRoot {
                     }.padding(.horizontal, 16).frame(minHeight: 60)
                         .background(W.soft, in: RoundedRectangle(cornerRadius: 16))
                     VStack(alignment: .leading, spacing: 8) { WHeading(text: "나의 러닝에\n작은 변화를") }
-                    ScrollView(.horizontal, showsIndicators: false) {
+                    GeometryReader { geometry in
                         HStack(spacing: 5) {
                             ForEach(WPointCategory.allCases) { category in
+                                let fraction: CGFloat = category == .image ? 1.5 / 3.45 : category == .frame ? 0.75 / 3.45 : 1.2 / 3.45
                                 Button { selectedPointCategory = category } label: {
                                     Text(category.rawValue).font(W.font(11, .medium)).lineLimit(1).minimumScaleFactor(0.8)
-                                        .padding(.horizontal, 5).frame(maxWidth: .infinity, minHeight: 44)
+                                        .padding(.horizontal, 5).frame(width: (geometry.size.width - 10) * fraction, height: 44)
                                         .foregroundStyle(selectedPointCategory == category ? W.ink : W.muted)
                                         .background(selectedPointCategory == category ? W.lime : W.soft, in: RoundedRectangle(cornerRadius: 9))
                                 }.buttonStyle(.plain).accessibilityIdentifier("shop-category-\(category == .image ? "image" : category == .frame ? "frame" : "face")")
@@ -179,6 +180,7 @@ extension WireframeRoot {
                             }
                         }
                     }
+                    .frame(height: 44)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 26) {
                         ForEach(visiblePointProducts) { product in
                             Button { ui.selectedPointProductID = product.id; go("B06") } label: {
