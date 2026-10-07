@@ -60,6 +60,36 @@ import XCTest
         app.buttons["카드 편집"].tap();let field=app.textFields.firstMatch;field.tap();field.typeText(String(repeating:"가",count:25));app.buttons["저장하기"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].exists);XCTAssertTrue(app.staticTexts["닉네임은 1–20자, 한 줄 소개는 60자 이내로 입력해 주세요."].exists)
         app.buttons["취소"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].exists)
     }
+    func testProfileEditPersistsAndNotificationRecoveryStates() {
+        open("M01");tap("카드 편집");let nickname=app.textFields.firstMatch
+        let existing=nickname.value as? String ?? "";nickname.tap();nickname.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:existing.count)+"테스트러너");tap("저장하기")
+        XCTAssertTrue(app.staticTexts["테스트러너"].waitForExistence(timeout:5))
+        app.terminate();app.launchArguments=["-wire-screen","M01","-wire-fixture"];app.launch()
+        XCTAssertTrue(app.staticTexts["테스트러너"].waitForExistence(timeout:10),"The profile edit persists in the fixture store")
+
+        app.terminate();app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-reset","-wire-empty-notifications","-appearance","light"];app.launch()
+        let bell=app.buttons.matching(identifier:"notificationBell").firstMatch;XCTAssertTrue(bell.waitForExistence(timeout:10));XCTAssertEqual(bell.value as? String,"읽음")
+        tap("notificationBell");XCTAssertTrue(app.descendants(matching:.any)["notificationEmptyState"].waitForExistence(timeout:5))
+
+        app.terminate();app.launchArguments=["-wire-screen","N01","-wire-fixture","-wire-reset","-wire-notification-save-fail-once","-appearance","light"];app.launch()
+        let matchingNotifications=app.buttons.matching(identifier:"notification-0")
+        XCTAssertTrue(matchingNotifications.firstMatch.waitForExistence(timeout:10))
+        let first=matchingNotifications.allElementsBoundByIndex.first(where:{$0.isHittable}) ?? matchingNotifications.firstMatch
+        XCTAssertTrue(first.isHittable,app.debugDescription);first.tap()
+        XCTAssertTrue((first.value as? String ?? "").contains("펼침"),app.debugDescription)
+        XCTAssertTrue(app.buttons["retryNotificationRead"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["읽지 않음"].exists)
+        tap("retryNotificationRead");XCTAssertTrue(app.staticTexts["읽음"].waitForExistence(timeout:5))
+        app.terminate();app.launchArguments=["-wire-screen","N01","-wire-fixture","-appearance","light"];app.launch()
+        XCTAssertTrue(app.staticTexts["읽음"].waitForExistence(timeout:10),"A successful retry persists the read state locally")
+    }
+    func testPrivacyReauthenticationCancelReturnsToPrivacySettings() {
+        open("T01");let privacy=app.buttons.matching(NSPredicate(format:"label CONTAINS %@","개인정보·데이터")).firstMatch
+        XCTAssertTrue(privacy.waitForExistence(timeout:5));for _ in 0..<3 where !privacy.isHittable{app.swipeUp()};XCTAssertTrue(privacy.isHittable);privacy.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-T04"].exists)
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","회원 탈퇴")).firstMatch.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5))
+        tap("취소");XCTAssertTrue(app.descendants(matching:.any)["screen-T04"].waitForExistence(timeout:5))
+        tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+    }
     func testSegmentsAndGoalInputs(){
         open("L05");XCTAssertTrue(app.descendants(matching:.any)["구간 평균 페이스 그래프"].exists);capture("L05")
         app.terminate();open("H03");app.buttons["goal-none"].tap();XCTAssertFalse(app.descendants(matching:.any)["timeGoalPicker"].exists)

@@ -219,6 +219,28 @@ final class ThemeTests:XCTestCase {
 }
 
 extension ThemeTests {
+    func testProfileValidationBoundaries() {
+        XCTAssertFalse(WProfileValidation.isValid(nickname:" \n ",introduction:""))
+        XCTAssertTrue(WProfileValidation.isValid(nickname:"러너",introduction:""))
+        XCTAssertTrue(WProfileValidation.isValid(nickname:String(repeating:"가",count:20),introduction:String(repeating:"나",count:60)))
+        XCTAssertFalse(WProfileValidation.isValid(nickname:String(repeating:"가",count:21),introduction:""))
+        XCTAssertFalse(WProfileValidation.isValid(nickname:"러너",introduction:String(repeating:"나",count:61)))
+    }
+    @MainActor func testReauthenticationCancellationReturnsToOrigin() {
+        let state=WireState();state.screen="T04";state.path=["T01"];state.pending="T11";state.pendingBack="T04"
+        state.go("T15");XCTAssertEqual(state.path,["T01","T04"])
+        state.settingsGrant=true;state.cancelReauthentication()
+        XCTAssertEqual(state.screen,"T04");XCTAssertEqual(state.path,["T01"]);XCTAssertFalse(state.settingsGrant)
+        state.screen="T05";state.path=["T01"];state.pendingBack="T05";state.go("T15");state.cancelReauthentication()
+        XCTAssertEqual(state.screen,"T05");XCTAssertEqual(state.path,["T01"])
+    }
+    func testNotificationReadFailureCanBeRetriedLocally() {
+        var state=WNotificationReadState(failuresRemaining:1),profile=WLocalProfile()
+        XCTAssertFalse(state.open(0,profile:&profile))
+        XCTAssertEqual(state.expandedID,0);XCTAssertEqual(state.failedID,0);XCTAssertTrue(profile.notificationRead.isEmpty)
+        XCTAssertTrue(state.retry(profile:&profile))
+        XCTAssertNil(state.failedID);XCTAssertEqual(profile.notificationRead,[0])
+    }
     func testOfflineAuthBoundaries() {
         for email in ["runner@example.test","fake+review@EXAMPLE.TEST"]{XCTAssertTrue(WAuthValidation.email(email))}
         for email in ["a@@example.test","@example.test","person@gmail.com","a b@example.test",String(repeating:"a",count:250)+"@example.test"]{XCTAssertFalse(WAuthValidation.email(email))}
