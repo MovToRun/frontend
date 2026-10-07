@@ -224,7 +224,7 @@ enum WRootTab: Int, CaseIterable {
     func clearAuthSecrets(){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];code="";otpFocused=false}
     func leaveAuth(for next:String){
         clearAuthSecrets();otpSuccess=false
-        if !Self.otpScreens.contains(next){challengeIssued=nil;codeAttempts=0}
+        if !Self.otpScreens.contains(next){challengeIssued=nil;codeAttempts=0;authEmail=""}
         if !["A16","A17","A18","T15","T06"].contains(next){settingsGrant=false}
     }
     static let providerRoutes:Set<String>=["T06","T07","T08","T09","T15","T17","A16","A17","A18"]

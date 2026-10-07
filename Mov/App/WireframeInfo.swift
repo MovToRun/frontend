@@ -62,7 +62,7 @@ extension WireframeRoot {
         case "T13":return .init(title:"기기 기록 삭제",heading:"이 기기의 기록만\n지울까요?",text:"현재 계정의 이 기기 러닝 기록과 임시 데이터를 삭제하는 흐름이에요.",notice:"회원 계정과 로그인 수단은 유지해요. 실제 동작은 브라우저의 데모 기록에만 적용돼요.",buttons:[("기기 데모 기록 삭제","clear-device",2),("기록 유지","T04",1)])
         case "T14":return .init(title:"진행 중 러닝",heading:"먼저 러닝을\n마쳐 주세요",text:"진행 중이거나 저장하지 않은 기록이 있어요. 저장 또는 삭제 후 계정을 변경할 수 있어요.",buttons:[("러닝으로 돌아가기","R04",0),("설정으로 돌아가기","T01",1)])
         case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 현재 계정을\n확인하는 시뮬레이션이에요.",notice:"실제 인증이나 권한 요청은 하지 않아요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 재확인 · 예시","reauth",0),("취소","T05",1)])
-        case "T16":return .init(title:"탈퇴 요청",heading:"삭제 요청을\n확인하고 있어요",text:"요청됨과 실제 완료 상태를\n구분해 안내해요.",notice:"실제 서버에 보내지 않는 시뮬레이션이에요.",buttons:[("완료 응답 확인 · 예시","delete-account-demo",0),("오류 응답 확인 · 예시","T11",1)])
+        case "T16":return .init(title:"탈퇴 요청",heading:"삭제 요청을\n확인하고 있어요",text:"요청됨과 실제 완료 상태를\n구분해 안내해요.",notice:"실제 서버에 보내지 않는 시뮬레이션이에요.",buttons:[("완료 응답 확인 · 예시","delete-account-demo",0),("오류 응답 확인 · 예시","delete-account-error",1)])
         case "T17":return .init(title:"연결 완료",heading:ui.provider+(ui.provider=="Google" ? "이":"가")+"\n연결됐어요",text:"이 계정으로 들어올 수 있는\n로그인 수단이 추가됐어요.",notice:"프로토타입의 연결 상태만 변경됐어요. 실제 계정은 연결하지 않았어요.",buttons:[("로그인 수단 확인","T05",0)])
         default:return .init(title:"화면 확인",heading:"화면을 확인해 주세요",text:"",buttons:[("홈으로","H00",0)])
         }
@@ -94,6 +94,7 @@ extension WireframeRoot {
     case "unlink":guard ui.screen=="T08" else{return};guard ui.profile.providers.count>1 else{go("T09");return};ui.profile.providers.removeAll{$0==ui.provider};ui.save();go("T05")
     case "reauth":guard ui.screen=="T15" else{return};ui.settingsGrant=true;go(ui.pending)
     case "delete-account-demo":guard store.session==nil else{go("T14");return};ui.profile=WLocalProfile();ui.profile.logged=false;ui.save();go("T12")
+    case "delete-account-error":ui.deleteConsent=false;go("T11")
     default:go(action)
     }}
 }

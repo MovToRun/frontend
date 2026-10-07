@@ -103,6 +103,9 @@ extension ThemeTests {
         XCTAssertEqual(state.screen,"A07");XCTAssertNil(state.challengeIssued);XCTAssertTrue(state.code.isEmpty);XCTAssertTrue(state.authPassword.isEmpty);XCTAssertTrue(state.revealedFields.isEmpty)
         state.screen="T15";state.settingsGrant=true;state.go("A16");XCTAssertTrue(state.settingsGrant)
         state.go("T05");XCTAssertFalse(state.settingsGrant)
+        state.screen="A07";state.authEmail="runner@example.test";state.authPassword="FixtureOnly482619";state.go("A19")
+        XCTAssertEqual(state.authEmail,"runner@example.test","The address is retained only for the active OTP screen")
+        state.go("A02");XCTAssertTrue(state.authEmail.isEmpty,"The address is cleared when the OTP flow ends")
     }
 }
 
