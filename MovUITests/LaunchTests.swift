@@ -22,6 +22,16 @@ import XCTest
         app.buttons["theme-system"].tap();app.terminate();app.launch();XCTAssertTrue(app.buttons["theme-system"].waitForExistence(timeout:10));XCTAssertTrue(app.buttons["theme-system"].isSelected)
         app.buttons["theme-light"].tap()
     }
+    func testHomeTabAlignmentAtAccessibilityTextSize(){
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset","-wire-large"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
+        for frame in frames.dropFirst(){XCTAssertEqual(frame.minY,frames[0].minY,accuracy:0.5);XCTAssertEqual(frame.height,frames[0].height,accuracy:1.0)}
+        XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name at large text sizes")
+        XCTAssertFalse(app.staticTexts["홈"].exists,"The home logo has no visible caption")
+        XCTAssertTrue(app.staticTexts["tab-caption-1"].exists)
+        capture("H00-accessibility3-tab-alignment")
+    }
     func testWeeklyGoalRecordEditingDeletionAndDiscard(){
         open("H04");app.buttons["weeklyTimeToggle"].tap();capture("H04-both")
         app.buttons["saveWeeklyGoal"].tap();tap("tab-1");tap("기록 보기");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","가볍게 달린 아침")).allElementsBoundByIndex.first(where:{$0.isHittable})!.tap()

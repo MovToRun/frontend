@@ -348,7 +348,8 @@ struct WireframeRoot:View {
                                 .foregroundStyle(isRoot && ui.rootIndex==index ? W.ink:W.muted)
                                 .accessibilityIdentifier("tab-caption-\(index)")
                         } else {
-                            Color.clear.frame(height:13).accessibilityHidden(true)
+                            Text("홈").font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                                .hidden().accessibilityHidden(true)
                         }
                     }
                     .padding(.top,3).frame(maxWidth:.infinity,minHeight:64).contentShape(Rectangle())
