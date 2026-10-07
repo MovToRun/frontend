@@ -212,7 +212,7 @@ enum WRootTab: Int, CaseIterable {
     var calendarMonth=Date();var calendarDay:Date?
     var path:[String]=[]
     var selected:UUID?
-    var selectedPointProductID="dawn"
+    var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
     var pendingBack="T05"
@@ -292,7 +292,7 @@ struct WireframeRoot:View {
         _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
     }
     @State var ui=WireState()
-    @State var selectedPointCategory:WPointCategory = .all
+    @State var selectedPointCategory:WPointCategory = .image
     @State var selectedPointKind:WPointKind = .all
     @State var showingPointPurchaseConfirmation=false
     @FocusState var otpInputFocused:Bool
@@ -333,7 +333,7 @@ struct WireframeRoot:View {
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
-                    ui.screen=args[i+1];ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen)
+                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen)
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.challengeIssued=Date().addingTimeInterval(ui.screen=="A21" ? -301:0);ui.challengeCode=ui.screen=="A23" ? "731204":"482619"}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}
@@ -353,7 +353,7 @@ struct WireframeRoot:View {
                 }else{try? await Task.sleep(for:.milliseconds(1040));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
     }
-    func go(_ id:String){if id=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(id) ? 0.3:((ui.screen=="L01" && id=="L04") || (ui.screen=="L04" && id=="L01")) ? 0.32:0.24;prepare(id);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(id)}}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
@@ -375,7 +375,7 @@ struct WireframeRoot:View {
                             }
                         }
                         if tab == .home { BrandMark(size:24) }
-                        else if tab == .points { WPointsIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24) }
+                        else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
                         if let caption=tab.caption {
                             Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
@@ -407,7 +407,7 @@ struct WireframeRoot:View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
         case "E02":WSplash().frame(maxWidth:.infinity,maxHeight:.infinity)
-        case "POINTS":points
+        case "POINTS","B01":points
         case "SHOP","B05":shop
         case "B02","B03","B04","B06","B07","B08","B09","B10":pointDetailRoute
         case "H00":home

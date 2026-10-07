@@ -22,11 +22,16 @@ final class ThemeTests:XCTestCase {
         XCTAssertTrue(store.ownedItemIDs.contains(product.id))
         XCTAssertEqual(store.entries.first?.amount, -product.price)
         XCTAssertFalse(store.canPurchase(product), "An owned sample item cannot be purchased twice")
+        let balanceAfterPurchase = store.balance
+        let entriesAfterPurchase = store.entries
+        XCTAssertFalse(store.purchase(product), "A repeated local purchase must not mutate state")
+        XCTAssertEqual(store.balance, balanceAfterPurchase)
+        XCTAssertEqual(store.entries, entriesAfterPurchase)
 
         let reloaded = WPointsStore(defaults: defaults)
         XCTAssertEqual(reloaded.balance, store.balance)
         XCTAssertTrue(reloaded.ownedItemIDs.contains(product.id))
-        XCTAssertEqual(reloaded.entries.first?.title, "로컬 예시 구매 · \(product.name)")
+        XCTAssertEqual(reloaded.entries.first?.title, product.name)
     }
 
     @MainActor func testPointStoreRejectsInsufficientLocalPurchase() {
