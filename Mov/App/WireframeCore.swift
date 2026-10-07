@@ -174,6 +174,8 @@ enum WRootTab: Int, CaseIterable {
         }
     }
 
+    var caption: String? { self == .home ? nil : title }
+
     var route: String { ["POINTS", "H01", "H00", "C01", "M01"][rawValue] }
     var assetName: String? { [nil, "run", nil, "community", "profile"][rawValue] }
 }
@@ -341,8 +343,13 @@ struct WireframeRoot:View {
                         if tab == .home { BrandMark(size:24) }
                         else if tab == .points { WPointsIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24) }
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
-                        Text(tab.title).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
-                            .foregroundStyle(isRoot && ui.rootIndex==index ? W.ink:W.muted).accessibilityHidden(true)
+                        if let caption=tab.caption {
+                            Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                                .foregroundStyle(isRoot && ui.rootIndex==index ? W.ink:W.muted)
+                                .accessibilityIdentifier("tab-caption-\(index)")
+                        } else {
+                            Color.clear.frame(height:13).accessibilityHidden(true)
+                        }
                     }
                     .padding(.top,3).frame(maxWidth:.infinity,minHeight:64).contentShape(Rectangle())
                 }

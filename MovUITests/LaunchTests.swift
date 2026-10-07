@@ -7,6 +7,12 @@ import XCTest
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
     func testCoreFlowAndAppearancePersistence(){
         open();let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
+        XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name")
+        XCTAssertFalse(app.staticTexts["tab-caption-2"].exists,"Home has no visible caption")
+        XCTAssertFalse(app.staticTexts["홈"].exists,"Home has no visible caption")
+        for title in ["포인트","러닝","커뮤니티","내 정보"] {
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",title)).firstMatch.exists,"Visible tab caption: \(title)")
+        }
         for i in [0,1,2,3,4,3,2,1,0,2]{app.buttons["tab-\(i)"].tap()}
         for i in 0...4{XCTAssertEqual(app.buttons["tab-\(i)"].frame,frames[i])}
         capture("H00")
