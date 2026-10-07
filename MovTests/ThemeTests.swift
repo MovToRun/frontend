@@ -124,6 +124,98 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(noSegments.validityDetails,["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."])
     }
 
+    func testShareElapsedFormatsMinutesAndHoursWithoutDateTimeNoise() {
+        XCTAssertEqual(ShareElapsed.string(570),"9m30s")
+        XCTAssertEqual(ShareElapsed.string(3723),"1h2m3s")
+        XCTAssertEqual(ShareGestureBounds.offset(CGSize(width:900,height:-900),canvas:CGSize(width:360,height:450)),CGSize(width:129.6,height:-144))
+        XCTAssertEqual(ShareGestureBounds.scale(9),1.8)
+        XCTAssertEqual(ShareGestureBounds.scale(0.1,minimum:0.65,maximum:1.7),0.65)
+    }
+
+    @MainActor func testShareImageInputValidationAndWorkspaceIdempotence() async throws {
+        let image=UIGraphicsImageRenderer(size:CGSize(width:12,height:12)).image{context in UIColor.systemGreen.setFill();context.fill(CGRect(x:0,y:0,width:12,height:12))}
+        let bytes=try XCTUnwrap(image.pngData())
+        XCTAssertNotNil(try ShareMediaValidation.image(bytes))
+        do { _ = try ShareMediaValidation.image(Data(repeating:0,count:20*1024*1024+1)); XCTFail("Oversize image must be rejected") }
+        catch ShareMediaError.tooLarge {}
+        do { _ = try ShareMediaValidation.image(Data([0,1,2,3])); XCTFail("Undecodable image must be rejected") }
+        catch ShareMediaError.invalidImage {}
+        let corruptMovie=FileManager.default.temporaryDirectory.appendingPathComponent("mov-corrupt-\(UUID().uuidString).mp4")
+        try Data([0,1,2,3]).write(to:corruptMovie)
+        defer{try? FileManager.default.removeItem(at:corruptMovie)}
+        do { try await ShareMediaValidation.video(corruptMovie); XCTFail("Undecodable video must be rejected") }
+        catch ShareMediaError.invalidVideo {}
+
+        let workspace=ShareWorkspace(),record=UUID()
+        let first=workspace.insertPNG(bytes,for:record)
+        let second=workspace.insertPNG(bytes,for:record)
+        XCTAssertEqual(first?.id,second?.id)
+        XCTAssertEqual(workspace.outputs[record]?.count,1)
+        XCTAssertNil(workspace.insertPNG(Data(repeating:1,count:2*1024*1024+1),for:record))
+        XCTAssertEqual(workspace.outputs[record]?.count,1,"A rejected insertion must leave the previous image available for retry")
+        workspace.clear()
+        XCTAssertEqual(workspace.outputs.count,0)
+    }
+
+    @MainActor func testShareArtifactsAreRecordScopedAndOnlyOwnedTempVideosAreRemoved() throws {
+        let workspace=ShareWorkspace(),recordA=UUID(),recordB=UUID()
+        let bytes=Data([1,2,3]),outputA=try XCTUnwrap(workspace.insertPNG(bytes,for:recordA)),outputB=try XCTUnwrap(workspace.insertPNG(bytes,for:recordB))
+        workspace.selectedOutputID=outputA.id
+        workspace.delete(outputB.id,for:recordA)
+        XCTAssertEqual(workspace.output(outputA.id,for:recordA)?.id,outputA.id,"Deleting by record A must not touch record B's image")
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id)
+        workspace.delete(outputA.id,for:recordA)
+        XCTAssertNil(workspace.output(outputA.id,for:recordA),"Deleting a share image removes exactly the selected record's artifact")
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id,"Deleting record A's image preserves record B's image")
+        let retryOutput=try XCTUnwrap(workspace.insertPNG(bytes,for:recordA));workspace.selectedOutputID=retryOutput.id
+        XCTAssertTrue(workspace.exportFailureMessage(for:retryOutput.id,record:recordA).contains("다시 시도"))
+        XCTAssertEqual(workspace.output(retryOutput.id,for:recordA)?.data,bytes,"An OS file export failure retains the in-memory output for retry")
+
+        let temp=FileManager.default.temporaryDirectory
+        let owned=temp.appendingPathComponent("mov-share-fixture-\(UUID().uuidString).mp4")
+        let source=temp.appendingPathComponent("user-source-fixture-\(UUID().uuidString).mp4")
+        try bytes.write(to:owned);try bytes.write(to:source)
+        defer{try? FileManager.default.removeItem(at:owned);try? FileManager.default.removeItem(at:source)}
+        workspace.registerImportedVideo(owned)
+        workspace.update(recordA){$0.videoURL=owned}
+        workspace.removeArtifacts(for:recordA)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:owned.path),"Deleting the parent record removes its app-owned imported movie copy")
+        XCTAssertNil(workspace.output(outputA.id,for:recordA))
+        XCTAssertNil(workspace.selectedOutputID)
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id,"Deleting record A preserves record B's image")
+        workspace.update(recordA){$0.videoURL=source}
+        workspace.removeArtifacts(for:recordA)
+        XCTAssertTrue(FileManager.default.fileExists(atPath:source.path),"Cleanup never deletes an unregistered source media path")
+    }
+
+    @MainActor func testShareVideoReplacementCancelReleaseAndDismissCleanup() throws {
+        let workspace=ShareWorkspace(),record=UUID(),temp=FileManager.default.temporaryDirectory
+        let old=temp.appendingPathComponent("mov-share-old-\(UUID().uuidString).mp4")
+        let replacement=temp.appendingPathComponent("mov-share-new-\(UUID().uuidString).mp4")
+        let canceled=temp.appendingPathComponent("mov-share-cancel-\(UUID().uuidString).mp4")
+        for url in [old,replacement,canceled]{try Data([1]).write(to:url)}
+        defer{for url in [old,replacement,canceled]{try? FileManager.default.removeItem(at:url)}}
+        for url in [old,replacement,canceled]{workspace.registerImportedVideo(url)}
+        workspace.update(record){$0.videoURL=old}
+        workspace.update(record){$0.videoURL=replacement}
+        XCTAssertFalse(FileManager.default.fileExists(atPath:old.path),"Replacing media deletes only the old imported copy")
+        var baseline=ShareDraft();baseline.videoURL=old
+        workspace.restoreDraft(baseline,for:record)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:replacement.path),"Cancel or dismiss restores the baseline and releases its imported copy")
+        XCTAssertNil(workspace.draft(for:record).videoURL,"A replaced baseline movie is not restored as a stale temp path")
+        workspace.update(record){$0.videoURL=canceled}
+        workspace.releaseVideo(for:record)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:canceled.path),"After successful PNG composition, the unneeded video temp is released")
+        XCTAssertNil(workspace.draft(for:record).videoURL)
+
+        var guardState=ShareMediaLoadGuard()
+        let oldRequest=guardState.begin(),latestRequest=guardState.begin()
+        XCTAssertFalse(guardState.accepts(oldRequest),"A late async media/render result cannot commit after a newer selection")
+        XCTAssertTrue(guardState.accepts(latestRequest))
+        guardState.invalidate()
+        XCTAssertFalse(guardState.accepts(latestRequest),"A late async media/render result cannot commit after screen dismissal")
+    }
+
 }
 
 extension ThemeTests {

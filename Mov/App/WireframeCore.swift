@@ -226,7 +226,7 @@ enum WRootTab: Int, CaseIterable {
     init(){defaults=ProcessInfo.processInfo.arguments.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     struct Account:Codable {var profile:WLocalProfile;var records:[RunRecord];var goal:RunGoal;var weekly:WeeklyGoal}
-    func switchLocalAccount(_ store:RunStore){
+    func switchLocalAccount(_ store:RunStore,clearShare:()->Void = {}){
         guard store.session==nil else{go("T14");return}
         let owner=defaults.string(forKey:"mov.local.owner") ?? "primary"
         var accounts=defaults.data(forKey:"mov.local.accounts").flatMap{try? JSONDecoder().decode([String:Account].self,from:$0)} ?? [:]
@@ -236,7 +236,7 @@ enum WRootTab: Int, CaseIterable {
         let target=accounts[next] ?? Account(profile:fallback,records:[],goal:RunGoal(),weekly:WeeklyGoal())
         guard let encoded=try? JSONEncoder().encode(accounts)else{return}
         defaults.set(encoded,forKey:"mov.local.accounts");defaults.set(next,forKey:"mov.local.owner")
-        profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;store.persist();save();go("H00")
+        profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;store.persist();save();clearShare();go("H00")
     }
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
     func clearAuthSecrets(){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];code="";otpFocused=false}
@@ -264,6 +264,7 @@ struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var body:so
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
+    @State var shareWorkspace=ShareWorkspace()
     init(){
         let args=ProcessInfo.processInfo.arguments
         let defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard
@@ -320,6 +321,7 @@ struct WireframeRoot:View {
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     ui.screen=args[i+1];ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen)
+                    if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.challengeIssued=Date().addingTimeInterval(ui.screen=="A21" ? -301:0);ui.challengeCode=ui.screen=="A23" ? "731204":"482619"}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}
                     if ui.screen.hasPrefix("R") || ["H05","H06","S03"].contains(ui.screen){
@@ -338,10 +340,11 @@ struct WireframeRoot:View {
                 }else{try? await Task.sleep(for:.milliseconds(1040));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
     }
-    func go(_ id:String){let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(id) ? 0.3:((ui.screen=="L01" && id=="L04") || (ui.screen=="L04" && id=="L01")) ? 0.32:0.24;prepare(id);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(id)}}
+    func go(_ id:String){if id=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(id) ? 0.3:((ui.screen=="L01" && id=="L04") || (ui.screen=="L04" && id=="L01")) ? 0.32:0.24;prepare(id);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(id)}}
     func back(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
+        if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
         if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=ui.profile.photo}
         if id=="T02"{ui.weight=ui.profile.weight}
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
@@ -407,6 +410,9 @@ struct WireframeRoot:View {
         case "L04":recordDetail
         case "L05":splits
         case "L06":recordEdit
+        case "Q01":ShareImageEditor(record:current,workspace:shareWorkspace,back:{back()},openOutput:{go("Q02")})
+        case "Q02":ShareOutputView(record:current,workspace:shareWorkspace,back:{back()},gallery:{go("Q03")})
+        case "Q03":ShareGallery(record:current,workspace:shareWorkspace,back:{back()},create:{go("Q01")},open:{id in shareWorkspace.selectedOutputID=id;go("Q02")})
         case "S01","S02","S03","S04","S05":completion
         case "T01":settings
         case "T18":theme
