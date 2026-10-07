@@ -212,6 +212,7 @@ enum WRootTab: Int, CaseIterable {
     var calendarMonth=Date();var calendarDay:Date?
     var path:[String]=[]
     var selected:UUID?
+    var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
     var pendingBack="T05"
@@ -274,21 +275,26 @@ struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
     @State var shareWorkspace=ShareWorkspace()
+    @State var pointsStore:WPointsStore
     init(){
         let args=ProcessInfo.processInfo.arguments
         let defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
         if resetFixture{Self.didPrepareFixture=true;defaults.removePersistentDomain(forName:"mov.wireframe.review")}
         let model=RunStore(defaults:defaults)
+        let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
             model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-10-01T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)])]
             model.persist()
         }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
-        _ui=State(initialValue:state);_store=State(initialValue:model)
+        _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
     }
     @State var ui=WireState()
+    @State var selectedPointCategory:WPointCategory = .image
+    @State var selectedPointKind:WPointKind = .all
+    @State var showingPointPurchaseConfirmation=false
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -298,8 +304,6 @@ struct WireframeRoot:View {
     @Namespace var indicator
     @Environment(\.scenePhase) var scenePhase
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
-    var points:some View {VStack(spacing:0){WHeader(title:"포인트",root:true,trailing:AnyView(Button{go("SHOP")}label:{WShopIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("상점").accessibilityIdentifier("openShop")));W.paper.accessibilityIdentifier("emptyPoints")}}
-    var shop:some View {VStack(spacing:0){WHeader(title:"상점",back:{if ui.path.isEmpty{go("POINTS")}else{back()}});W.paper.accessibilityIdentifier("emptyShop")}}
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
@@ -329,7 +333,7 @@ struct WireframeRoot:View {
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
-                    ui.screen=args[i+1];ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen)
+                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.challengeIssued=Date().addingTimeInterval(ui.screen=="A21" ? -301:0);ui.challengeCode=ui.screen=="A23" ? "731204":"482619"}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}
@@ -349,7 +353,7 @@ struct WireframeRoot:View {
                 }else{try? await Task.sleep(for:.milliseconds(1040));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
     }
-    func go(_ id:String){if id=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(id) ? 0.3:((ui.screen=="L01" && id=="L04") || (ui.screen=="L04" && id=="L01")) ? 0.32:0.24;prepare(id);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(id)}}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
@@ -371,7 +375,7 @@ struct WireframeRoot:View {
                             }
                         }
                         if tab == .home { BrandMark(size:24) }
-                        else if tab == .points { WPointsIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24) }
+                        else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
                         if let caption=tab.caption {
                             Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
@@ -403,8 +407,9 @@ struct WireframeRoot:View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
         case "E02":WSplash().frame(maxWidth:.infinity,maxHeight:.infinity)
-        case "POINTS":points
-        case "SHOP":shop
+        case "POINTS","B01":points
+        case "SHOP","B05":shop
+        case "B02","B03","B04","B06","B07","B08","B09","B10":pointDetailRoute
         case "H00":home
         case "H01","H02","H05":ready
         case "H03":sessionGoal

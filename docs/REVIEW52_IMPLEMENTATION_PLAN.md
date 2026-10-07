@@ -142,16 +142,18 @@
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `B01` | 내 포인트 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B02` | 포인트 내역 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B03` | 포인트 내역 없음 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B04` | 포인트 안내 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B05` | 포인트 상점 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B06` | 꾸미기 아이템 상세 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B07` | 구매 완료 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B08` | 포인트 부족 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B09` | 포인트 받는 방법 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `B10` | 러닝 카드 미리보기 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `B01` | 내 포인트 | `WireframePoints.swift` — 로컬 잔액, 거래 미리보기, 상점/내역/안내 이동 |
+| [x] | `B02` | 포인트 내역 | `WireframePoints.swift` — 기기 내 로컬 거래 목록 |
+| [x] | `B03` | 포인트 내역 없음 | `WireframePoints.swift` — 빈 내역 상태 |
+| [x] | `B04` | 포인트 안내 | `WireframePoints.swift` — 로컬 포인트 안내 |
+| [x] | `B05` | 포인트 상점 | `WireframePoints.swift` — 예시 상품 카탈로그 및 분류 |
+| [x] | `B06` | 꾸미기 아이템 상세 | `WireframePoints.swift` — 상품 상세, 미리보기, 구매 확인 |
+| [x] | `B07` | 구매 완료 예시 | `WireframePoints.swift` — 로컬 구매 결과 |
+| [x] | `B08` | 포인트 부족 예시 | `WireframePoints.swift` — 구매 제한 및 적립 안내 이동 |
+| [x] | `B09` | 포인트 받는 방법 | `WireframePoints.swift` — 미연동 적립/광고 영역 안내 |
+| [x] | `B10` | 러닝 카드 미리보기 | `WireframePoints.swift` — 현재 로컬 프로필/러닝 기록을 사용한 미리보기 |
+
+구현 범위는 로컬 화면 이동과 예시 상태까지입니다. 상품/가격/초기 포인트는 UI 검증용 샘플이며 서버, 결제, 광고 재생, 보상 적립은 연결하지 않았습니다. Review52 페이지는 이 세션에서 열리지 않았고 저장소에 원본 프리즘/샤드 아트워크도 없어, 상품 아트는 SwiftUI 도형으로 표시합니다. 제공된 원본 ZIP의 접근 실패를 우회하지 않았습니다.
 
 ### 커뮤니티 · 크루 · `Community / Crew`
 
