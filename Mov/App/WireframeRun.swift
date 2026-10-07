@@ -194,11 +194,7 @@ private struct WRunningViewport<Panel:View>:View {
             let expandedTop=g.size.height-bottomInset-height
             let centerY=(expandedTop+(g.size.height-expandedTop)*progress)/2
             ZStack(alignment:.bottom){
-                WMap(route:screen != "R01",controls:true,centerControl:false,failed:screen=="R07",gpsSearching:screen=="R01",gpsWeak:screen=="R03",focusUser:true,userCenterY:centerY,controlsTopInset:topInset,backgroundTap:{guard !collapsed else{return};withAnimation(motion){drag=0;collapsed=true}})
-                    .accessibilityIdentifier("runningMap")
-                Button{}label:{AssetIcon(name:"location",size:24).frame(width:44,height:44).background(W.paper,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line))}
-                    .accessibilityLabel("지도 중심").frame(maxWidth:.infinity,alignment:.trailing).padding(.trailing,16)
-                    .padding(.bottom,bottomInset+16+height*(1-progress)+68*progress)
+                WMap(route:screen != "R01",controls:true,centerControl:true,failed:screen=="R07",gpsSearching:screen=="R01",gpsWeak:screen=="R03",focusUser:true,userCenterY:centerY,centerControlBottomInset:bottomInset+height*(1-progress)+68*progress,controlsTopInset:topInset,backgroundTap:{guard !collapsed else{return};withAnimation(motion){drag=0;collapsed=true}})
                 panel(AnyView(handle(compact:false,travel:travel))).frame(height:height)
                     .background(W.paper,in:UnevenRoundedRectangle(topLeadingRadius:24,topTrailingRadius:24))
                     .padding(.bottom,bottomInset).background(alignment:.bottom){W.paper.frame(height:bottomInset)}

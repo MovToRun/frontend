@@ -153,15 +153,25 @@ struct WMap:View {
     var gpsWeak=false
     var focusUser=false
     var userCenterY:CGFloat=0
+    var centerControlBottomInset:CGFloat=0
     var controlsTopInset:CGFloat=0
     var backgroundTap:(()->Void)?=nil
     @State private var info=false
     @State private var mapRecovered=false
+    @State private var panOffset=CGSize.zero
+    @GestureState private var panDrag=CGSize.zero
+    private var isCentered:Bool{abs(panOffset.width)<1 && abs(panOffset.height)<1}
+    private var displayedPanOffset:CGSize{CGSize(width:panOffset.width+panDrag.width,height:panOffset.height+panDrag.height)}
     var body:some View {
-        ZStack(alignment:.topLeading){if failed && !mapRecovered{W.soft.overlay{VStack(spacing:14){WText(text:"지도를 불러오지 못했어요");Button("다시 시도"){mapRecovered=true}.font(W.font(13));WText(text:"GPS 수치와 기록 제어는 유지돼요",small:true)}.padding(20)}}else{if let backgroundTap{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY).gesture(DragGesture(minimumDistance:0).onEnded{v in if hypot(v.translation.width,v.translation.height)<8{backgroundTap()}})}else{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY)}}
+        ZStack(alignment:.topLeading){if failed && !mapRecovered{W.soft.overlay{VStack(spacing:14){WText(text:"지도를 불러오지 못했어요");Button("다시 시도"){mapRecovered=true}.font(W.font(13));WText(text:"GPS 수치와 기록 제어는 유지돼요",small:true)}.padding(20)}}else{if let backgroundTap{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface").gesture(DragGesture(minimumDistance:0).updating($panDrag){v,state,_ in
+                    if hypot(v.translation.width,v.translation.height)>=8{state=v.translation}
+                }.onEnded{v in
+                    if hypot(v.translation.width,v.translation.height)<8{backgroundTap()}
+                    else{panOffset=CGSize(width:panOffset.width+v.translation.width,height:panOffset.height+v.translation.height)}
+                })}else{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface")}}
             if !controls && WReviewMode.tools{GeometryReader{g in if g.size.height>100{VStack(alignment:.leading){Text("가상 코스").font(W.font(11)).padding(.vertical,6).padding(.horizontal,9).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:5)).overlay(RoundedRectangle(cornerRadius:5).stroke(W.line));Spacer();Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.vertical,4).padding(.horizontal,6).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:3))}.foregroundStyle(W.muted).padding(.horizontal,18).padding(.vertical,16)}}}
             if controls {VStack(alignment:.leading,spacing:8){Button{info.toggle()}label:{WGPSSignal(searching:gpsSearching,weak:gpsWeak)}.accessibilityLabel("위치 상태 안내");if WReviewMode.tools && (!failed || mapRecovered){Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.horizontal,6).padding(.vertical,4).background(W.paper).padding(.leading,6)};if info{WNotice(text:"위치와 신호 상태를 확인해 주세요.").frame(maxWidth:280)}}.padding(.horizontal,12).padding(.top,controlsTopInset+10)}
-        }.clipped().overlay(alignment:.bottomTrailing){if controls && centerControl{Button{info.toggle()}label:{AssetIcon(name:"location",size:24).frame(width:44,height:44).background(W.paper,in:RoundedRectangle(cornerRadius:12))}.accessibilityLabel("지도 중심").padding(16)}}
+        }.clipped().overlay(alignment:.bottomTrailing){if controls && centerControl{Button{withAnimation(.easeOut(duration:0.22)){panOffset = .zero}}label:{AssetIcon(name:"location",size:24).frame(width:44,height:44).background(W.paper,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line))}.accessibilityLabel("지도 중심").accessibilityIdentifier("mapRecenter").accessibilityValue(isCentered ? "중심":"이동됨").padding(16).padding(.bottom,centerControlBottomInset)}}
     }
 }
 struct WLocalProfile:Codable {

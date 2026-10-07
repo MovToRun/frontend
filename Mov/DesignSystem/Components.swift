@@ -49,12 +49,16 @@ nonisolated struct SampleMap: View, Animatable {
     var route=false
     var focusUser=false
     var userCenterY:CGFloat=0
-    var animatableData:CGFloat {get{userCenterY}set{userCenterY=newValue}}
+    var panOffset:CGSize = .zero
+    var animatableData:AnimatablePair<CGFloat,AnimatablePair<CGFloat,CGFloat>> {
+        get{AnimatablePair(userCenterY,AnimatablePair(panOffset.width,panOffset.height))}
+        set{userCenterY=newValue.first;panOffset=CGSize(width:newValue.second.first,height:newValue.second.second)}
+    }
     @MainActor var body:some View {let scheme=scheme;return Canvas{context,size in
         var c=context
         let scale=max(size.width/390,size.height/480)
         context.fill(Path(CGRect(origin:.zero,size:size)),with:.color(scheme == .dark ? Color(red:32/255,green:32/255,blue:32/255):Color(red:251/255,green:251/255,blue:251/255)))
-        c.translateBy(x:focusUser ? size.width/2-217*scale:(size.width-390*scale)/2,y:focusUser ? userCenterY-269*scale:(size.height-480*scale)/2)
+        c.translateBy(x:(focusUser ? size.width/2-217*scale:(size.width-390*scale)/2)+panOffset.width,y:(focusUser ? userCenterY-269*scale:(size.height-480*scale)/2)+panOffset.height)
         c.scaleBy(x:scale,y:scale)
         let dark=scheme == .dark
         func color(_ light:UInt32,_ night:UInt32)->Color{let n=dark ? night:light;return Color(red:Double((n>>16)&255)/255,green:Double((n>>8)&255)/255,blue:Double(n&255)/255)}
@@ -68,7 +72,7 @@ nonisolated struct SampleMap: View, Animatable {
         var track=Path();track.move(to:CGPoint(x:36,y:343));track.addQuadCurve(to:CGPoint(x:226,y:161),control:CGPoint(x:145,y:276));track.addQuadCurve(to:CGPoint(x:343,y:32),control:CGPoint(x:307,y:46));track.move(to:CGPoint(x:51,y:361));track.addQuadCurve(to:CGPoint(x:244,y:179),control:CGPoint(x:163,y:295));track.addQuadCurve(to:CGPoint(x:361,y:50),control:CGPoint(x:325,y:63));stroke(track,color(0xF0F0F0,0x4B4B4B),2)
         if route{var p=Path();p.move(to:CGPoint(x:75,y:348));for v in [(120,334),(156,307),(190,295),(217,269)]{p.addLine(to:CGPoint(x:v.0,y:v.1))};c.stroke(p,with:.color(W.lime),style:StrokeStyle(lineWidth:7,lineCap:.round))};if route && !focusUser{let point=Path(ellipseIn:CGRect(x:207,y:259,width:20,height:20));c.fill(point,with:.color(W.lime));stroke(point,.white,3)}
         for (text,x,y) in [("주거 구역",34.0,130.0),("하천",245.0,332.0),("산책로",116.0,357.0)]{c.draw(Text(text).font(.custom("Arial",size:12)).foregroundStyle(color(0x707070,0xBDBDBD)),at:CGPoint(x:x,y:y),anchor:.bottomLeading)}
-    }.accessibilityLabel("실제 장소가 아닌 도식 지도").accessibilityHidden(focusUser).overlay{if focusUser{GeometryReader{g in Circle().fill(W.lime).overlay(Circle().stroke(.white,lineWidth:3)).frame(width:20,height:20).position(x:g.size.width/2,y:userCenterY).accessibilityElement().accessibilityLabel("사용자 위치").accessibilityIdentifier("runUserPosition")}}}.accessibilityElement(children:.contain)}
+    }.accessibilityLabel("실제 장소가 아닌 도식 지도").accessibilityHidden(focusUser).overlay{if focusUser{GeometryReader{g in Circle().fill(W.lime).overlay(Circle().stroke(.white,lineWidth:3)).frame(width:20,height:20).position(x:g.size.width/2+panOffset.width,y:userCenterY+panOffset.height).accessibilityElement().accessibilityLabel("사용자 위치").accessibilityIdentifier("runUserPosition")}}}.accessibilityElement(children:.contain)}
 }
 struct GPSBadge: View {
     var body: some View {

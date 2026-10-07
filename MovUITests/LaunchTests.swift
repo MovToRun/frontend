@@ -539,6 +539,43 @@ extension LaunchTests {
 
 }
 
+extension LaunchTests {
+    func visibleMapRecenter() -> XCUIElement? {
+        app.buttons.matching(identifier:"mapRecenter").allElementsBoundByIndex.first(where:{$0.isHittable})
+    }
+
+    func testRunMapPanAndRecenterTracksVisibleViewport() {
+        for collapsed in [false,true] {
+            app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","R02","-appearance","light"]
+            if collapsed { app.launchArguments.append("-wire-collapsed") }
+            app.launch()
+            let map=app.descendants(matching:.any)["runningMap"].firstMatch
+            let marker=app.descendants(matching:.any)["runUserPosition"].firstMatch
+            let handle=app.buttons["panelHandle"]
+            XCTAssertTrue(map.waitForExistence(timeout:10))
+            XCTAssertEqual(visibleMapRecenter()?.value as? String,"중심")
+            let targetY=collapsed ? map.frame.midY:(map.frame.minY+handle.frame.minY)/2
+            XCTAssertEqual(marker.frame.midX,map.frame.midX,accuracy:2)
+            XCTAssertEqual(marker.frame.midY,targetY,accuracy:3)
+
+            let startX=map.frame.minX+map.frame.width*0.28,startY=targetY+30
+            let origin=app.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:startX,dy:startY))
+            let destination=app.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:startX+72,dy:startY+48))
+            origin.press(forDuration:0.1,thenDragTo:destination,withVelocity:.slow,thenHoldForDuration:0.1)
+            XCTAssertTrue(waitForLayout({self.visibleMapRecenter()?.value as? String == "이동됨"},timeout:3),app.debugDescription)
+            XCTAssertGreaterThan(abs(marker.frame.midX-map.frame.midX),20)
+            XCTAssertGreaterThan(abs(marker.frame.midY-targetY),20)
+
+            tap("mapRecenter")
+            let recentered=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in
+                self.visibleMapRecenter()?.value as? String == "중심" && abs(marker.frame.midX-map.frame.midX)<2 && abs(marker.frame.midY-targetY)<3
+            },object:nil)
+            XCTAssertEqual(XCTWaiter.wait(for:[recentered],timeout:3),.completed,app.debugDescription)
+            capture(collapsed ? "Map-recenter-collapsed":"Map-recenter-expanded")
+        }
+    }
+}
+
 
 extension LaunchTests {
     func visible(_ label:String)->Bool {app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).allElementsBoundByIndex.contains{$0.isHittable}}
