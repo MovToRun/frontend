@@ -423,11 +423,16 @@ extension LaunchTests {
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-appearance",theme];app.launch()
             let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
             XCTAssertTrue(week.waitForExistence(timeout:10));let frame=week.frame
-            month.tap();XCTAssertTrue(month.isSelected);XCTAssertEqual(week.frame,frame)
-            tap("이전 달");let calendar=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2026년 9월")).firstMatch
-            XCTAssertTrue(calendar.exists);capture("H07-month-"+theme)
+            month.tap();XCTAssertTrue(waitForLayout({month.isSelected}));XCTAssertEqual(week.frame,frame)
+            XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists)
+            let calendarMonth=app.staticTexts["calendarMonthTitle"]
+            XCTAssertTrue(calendarMonth.waitForExistence(timeout:5));let selectedMonth=calendarMonth.label
+            tap("이전 달")
+            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label != selectedMonth}))
+            let priorMonth=calendarMonth.label
+            XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists);capture("H07-month-"+theme)
             week.tap();XCTAssertTrue(week.isSelected);month.tap()
-            XCTAssertTrue(calendar.exists);XCTAssertEqual(week.frame,frame)
+            XCTAssertEqual(calendarMonth.label,priorMonth);XCTAssertEqual(week.frame,frame)
             week.tap();month.tap();week.tap();XCTAssertTrue(week.isSelected);capture("H07-week-"+theme)
             app.terminate()
         }

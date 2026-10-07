@@ -47,7 +47,8 @@ struct RunRecord: Identifiable, Codable, Equatable {
         let labels = ["gps-gap":"GPS 누락", "pause":"일시정지", "vehicle":"차량 이동", "transit":"대중교통", "gps-spike":"GPS 튐", "long-idle":"오랜 정지", "unknown":"판별 정보 없음"]
         let details = segments.compactMap { segment -> String? in
             guard segment.type != "include" || segment.distance <= 0 || segment.seconds <= 0 else { return nil }
-            return segment.reason ?? labels[segment.type] ?? "유효 거리로 확인할 수 없는 구간"
+            let reason = segment.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return reason.flatMap { $0.isEmpty ? nil : $0 } ?? labels[segment.type] ?? "유효 거리로 확인할 수 없는 구간"
         }
         return details.isEmpty ? ["저장된 구간에서 제외 항목이 없습니다."] : details
     }

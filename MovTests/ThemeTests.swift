@@ -117,6 +117,9 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(reasoned.validityDetails,["센서 원본의 제외 사유"])
         let unlabelled=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:60,type:"gps-gap")])
         XCTAssertEqual(unlabelled.validityDetails,["GPS 누락"])
+        let whitespaceReasons=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:30,type:"gps-gap",reason:""),RunSegment(distance:0,seconds:30,type:"custom",reason:" \n ")])
+        XCTAssertEqual(whitespaceReasons.validityDetails,["GPS 누락","유효 거리로 확인할 수 없는 구간"])
+        XCTAssertTrue(whitespaceReasons.validityDetails.allSatisfy{!$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty})
         let noSegments=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0)
         XCTAssertEqual(noSegments.validityDetails,["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."])
     }
