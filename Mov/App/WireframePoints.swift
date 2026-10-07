@@ -39,22 +39,64 @@ struct WPointProduct: Identifiable, Equatable {
 @MainActor @Observable final class WPointsStore {
     private let defaults: UserDefaults
     private let key = "mov.points.local.v2"
+    private let legacyKey = "mov.points.local.v1"
     private struct Saved: Codable {
         var balance: Int
         var entries: [WPointEntry]
         var owned: Set<String>
     }
+    private struct LegacyEntry: Decodable {
+        var id: UUID?
+        var title: String
+        var amount: Int
+        var date: Date
+    }
+    private struct LegacySaved: Decodable {
+        var balance: Int
+        var entries: [LegacyEntry]
+        var owned: Set<String>
+
+        private enum CodingKeys: String, CodingKey { case balance, entries, owned }
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            balance = try values.decode(Int.self, forKey: .balance)
+            entries = try values.decode([LegacyEntry].self, forKey: .entries)
+            owned = try values.decodeIfPresent(Set<String>.self, forKey: .owned) ?? []
+        }
+    }
 
     var balance: Int
     var entries: [WPointEntry]
     var ownedItemIDs: Set<String>
+    private(set) var dataUnavailable = false
 
     init(defaults: UserDefaults = .standard, insufficientFixture: Bool = false, emptyFixture: Bool = false) {
         self.defaults = defaults
-        if let data = defaults.data(forKey: key), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
-            balance = saved.balance
-            entries = saved.entries
-            ownedItemIDs = saved.owned
+        balance = 0
+        entries = []
+        ownedItemIDs = []
+
+        if defaults.object(forKey: key) != nil {
+            if let data = defaults.data(forKey: key), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
+                balance = saved.balance
+                entries = saved.entries
+                ownedItemIDs = saved.owned
+            } else {
+                dataUnavailable = true
+            }
+        } else if defaults.object(forKey: legacyKey) != nil {
+            if let data = defaults.data(forKey: legacyKey), let saved = try? JSONDecoder().decode(LegacySaved.self, from: data) {
+                balance = saved.balance
+                entries = saved.entries.map {
+                    WPointEntry(id: $0.id ?? UUID(), title: $0.title, detail: $0.amount < 0 ? "사용 내역" : "적립 내역", amount: $0.amount, date: $0.date)
+                }
+                // v1 catalog IDs do not identify the different v2 products. Keep them namespaced
+                // so legacy ownership survives without accidentally marking a new item as owned.
+                ownedItemIDs = Set(saved.owned.map { "legacy.v1.\($0)" })
+                if !persist() { dataUnavailable = true }
+            } else {
+                dataUnavailable = true
+            }
         } else {
             let calendar = Calendar(identifier: .gregorian)
             let base = ISO8601DateFormatter().date(from: "2026-10-01T09:00:00+09:00") ?? Date()
@@ -65,14 +107,25 @@ struct WPointProduct: Identifiable, Equatable {
                 WPointEntry(title: "포인트 적립", detail: "적립 내역 예시", amount: 1_000, date: calendar.date(byAdding: .day, value: -2, to: base) ?? base)
             ]
             ownedItemIDs = []
-            persist()
+            if !persist() {
+                dataUnavailable = true
+                balance = 0
+                entries = []
+                ownedItemIDs = []
+            }
+        }
+        if dataUnavailable {
+            // A present but unreadable value must never be replaced with the sample state.
+            balance = 0
+            entries = []
+            ownedItemIDs = []
         }
         if insufficientFixture { balance = 100 }
         if emptyFixture { balance = 0; entries = []; ownedItemIDs = [] }
     }
 
     func canPurchase(_ product: WPointProduct) -> Bool {
-        balance >= product.price && !ownedItemIDs.contains(product.id)
+        !dataUnavailable && balance >= product.price && !ownedItemIDs.contains(product.id)
     }
 
     @discardableResult func purchase(_ product: WPointProduct, at date: Date = Date()) -> Bool {
@@ -80,7 +133,13 @@ struct WPointProduct: Identifiable, Equatable {
         balance -= product.price
         ownedItemIDs.insert(product.id)
         entries.insert(WPointEntry(title: product.name, detail: "로컬 구매 예시", amount: -product.price, date: date), at: 0)
-        persist()
+        guard persist() else {
+            balance += product.price
+            ownedItemIDs.remove(product.id)
+            entries.removeFirst()
+            dataUnavailable = true
+            return false
+        }
         return true
     }
 
@@ -88,14 +147,24 @@ struct WPointProduct: Identifiable, Equatable {
         kind == .all ? entries : entries.filter { $0.kind == kind }
     }
 
-    private func persist() {
+    @discardableResult private func persist() -> Bool {
+        guard !dataUnavailable else { return false }
         let saved = Saved(balance: balance, entries: entries, owned: ownedItemIDs)
-        guard let data = try? JSONEncoder().encode(saved) else { return }
+        guard let data = try? JSONEncoder().encode(saved) else { return false }
         defaults.set(data, forKey: key)
+        return true
     }
 }
 
 extension WireframeRoot {
+    private var pointsBalanceDisplay: String {
+        pointsStore.dataUnavailable ? "—" : pointsStore.balance.formatted()
+    }
+
+    private var pointDataUnavailableNotice: some View {
+        WNotice(text: "저장된 포인트 데이터를 읽지 못해 표시하거나 변경할 수 없어요. 원본을 보존하고 예시 데이터로 덮어쓰지 않았어요.", danger: true)
+    }
+
     func returnToPointShop() {
         ui.path.removeAll()
         ui.screen = "POINTS"
@@ -112,11 +181,12 @@ extension WireframeRoot {
             ))
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    if pointsStore.dataUnavailable { pointDataUnavailableNotice }
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 7) { WPointsMark(size: 18); Text("보유 포인트").font(W.font(15, .medium)).foregroundStyle(W.muted) }
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                                Text(pointsStore.balance.formatted()).font(W.font(44, .bold)).monospacedDigit().accessibilityIdentifier("pointBalance")
+                                Text(pointsBalanceDisplay).font(W.font(44, .bold)).monospacedDigit().accessibilityIdentifier("pointBalance")
                                 Text("포인트").font(W.font(17, .semibold)).foregroundStyle(W.muted)
                             }
                             Button { go("B04") } label: { Text("포인트 안내  ›").font(W.font(13, .medium)).foregroundStyle(W.ink) }
@@ -152,6 +222,7 @@ extension WireframeRoot {
             WHeader(title: "포인트 상점", back: { if ui.path.isEmpty { go("POINTS") } else { back() } })
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    if pointsStore.dataUnavailable { pointDataUnavailableNotice }
                     ZStack {
                         W.soft
                         Text("입점 상품 광고 영역").font(W.font(12, .medium)).foregroundStyle(W.muted)
@@ -162,7 +233,7 @@ extension WireframeRoot {
                         Text("보유 포인트").font(W.font(15, .medium))
                         Spacer()
                         WPointsMark(size: 22)
-                        Text(pointsStore.balance.formatted()).font(W.font(25, .semibold)).monospacedDigit()
+                        Text(pointsBalanceDisplay).font(W.font(25, .semibold)).monospacedDigit()
                     }.padding(.horizontal, 16).frame(minHeight: 60)
                         .background(W.soft, in: RoundedRectangle(cornerRadius: 16))
                     VStack(alignment: .leading, spacing: 8) { WHeading(text: "나의 러닝에\n작은 변화를") }
@@ -248,7 +319,9 @@ extension WireframeRoot {
     private func pointHistory(empty: Bool) -> some View {
         VStack(spacing: 0) {
             WHeader(title: "포인트 내역", back: back)
-            if empty || pointsStore.entries.isEmpty {
+            if pointsStore.dataUnavailable {
+                ScrollView { VStack(spacing: 14) { pointDataUnavailableNotice }.padding(.horizontal, 24).accessibilityIdentifier("unavailablePointHistoryScreen") }
+            } else if empty || pointsStore.entries.isEmpty {
                 ScrollView { VStack(spacing: 14) { emptyPointHistory }.padding(.horizontal, 24).accessibilityIdentifier("emptyPointHistoryScreen") }
             } else {
                 VStack(spacing: 0) {
@@ -300,25 +373,26 @@ extension WireframeRoot {
         let owned = pointsStore.ownedItemIDs.contains(product.id)
         let enough = pointsStore.canPurchase(product)
         return WPage(title: "아이템", back: back) {
+            if pointsStore.dataUnavailable { pointDataUnavailableNotice }
             WPointProductArtwork(product: product).aspectRatio(1.35, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
                 .accessibilityIdentifier("pointProductArtwork")
             Text(product.name).font(W.font(22, .semibold))
             WText(text: product.kind, small: true)
             HStack(alignment: .firstTextBaseline, spacing: 5) { Text("\(product.price.formatted())").font(W.font(23, .semibold)); Text("포인트").font(W.font(13)) }
             WText(text: product.description)
-            HStack { Text("보유 포인트"); Spacer(); Text(pointsStore.balance.formatted()) }
+            HStack { Text("보유 포인트"); Spacer(); Text(pointsBalanceDisplay) }
                 .font(W.font(13)).frame(minHeight:64).frame(maxWidth:.infinity,alignment:.leading)
                 .accessibilityElement(children:.ignore).accessibilityLabel("보유 포인트")
-                .accessibilityValue("balance:\(pointsStore.balance)|entries:\(pointsStore.entries.count)")
+                .accessibilityValue(pointsStore.dataUnavailable ? "unavailable" : "balance:\(pointsStore.balance)|entries:\(pointsStore.entries.count)")
                 .accessibilityIdentifier("detailPointBalance")
         } actions: {
             HStack(spacing: 10) {
                 Button("미리보기") { go("B10") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("pointPreview")
-                Button(owned ? "보유 중" : enough ? "구매하기" : "포인트 부족") {
+                Button(pointsStore.dataUnavailable ? "저장 데이터 확인 불가" : owned ? "보유 중" : enough ? "구매하기" : "포인트 부족") {
                     showingPointPurchaseConfirmation = true
                 }.buttonStyle(WButtonStyle()).disabled(owned || !enough).accessibilityIdentifier("purchaseShopItem")
             }
-            if !owned && !enough {
+            if !pointsStore.dataUnavailable && !owned && !enough {
                 Button("포인트 부족 안내") { go("B08") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("pointShortageHelp")
             }
         }.confirmationDialog("가상 포인트를 사용할까요?", isPresented: $showingPointPurchaseConfirmation, titleVisibility: .visible) {
@@ -334,6 +408,9 @@ extension WireframeRoot {
 
     private var pointPurchaseComplete: some View {
         WPage(title: "구매 결과", back: back) {
+            if pointsStore.dataUnavailable {
+                pointDataUnavailableNotice
+            } else {
             VStack(spacing: 14) {
                 Text("구매 완료 예시").font(W.font(20, .semibold)).multilineTextAlignment(.center)
                 Text(selectedPointProduct.name).font(W.font(16, .medium))
@@ -342,6 +419,7 @@ extension WireframeRoot {
             WRow(title: "필요 포인트 · 예시", value: "\(selectedPointProduct.price.formatted())")
             WRow(title: "사용 후 잔액 · 예시", value: "\(pointsStore.balance.formatted())", separator: false)
             WText(text: "샘플 구매 결과예요. 실제 서버 결제나 상품 지급은 없어요.", small: true)
+            }
         } actions: {
             Button("확인") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
         }
@@ -349,12 +427,16 @@ extension WireframeRoot {
 
     private var pointShortage: some View {
         WPage(title: "포인트 부족", back: back) {
-            WHeading(text: "포인트가 부족해요")
-            WText(text: "\(selectedPointProduct.name)을 구매하려면 포인트가 더 필요해요.")
-            WRow(title: "보유 포인트", value: "\(pointsStore.balance.formatted())P", separator: false)
-            WRow(title: "필요 포인트", value: "\(selectedPointProduct.price.formatted())P", separator: false)
-            WRow(title: "부족한 포인트", value: "\(max(0, selectedPointProduct.price - pointsStore.balance).formatted())P", separator: false)
-                .accessibilityIdentifier("pointShortageAmount")
+            if pointsStore.dataUnavailable {
+                pointDataUnavailableNotice
+            } else {
+                WHeading(text: "포인트가 부족해요")
+                WText(text: "\(selectedPointProduct.name)을 구매하려면 포인트가 더 필요해요.")
+                WRow(title: "보유 포인트", value: "\(pointsStore.balance.formatted())P", separator: false)
+                WRow(title: "필요 포인트", value: "\(selectedPointProduct.price.formatted())P", separator: false)
+                WRow(title: "부족한 포인트", value: "\(max(0, selectedPointProduct.price - pointsStore.balance).formatted())P", separator: false)
+                    .accessibilityIdentifier("pointShortageAmount")
+            }
         } actions: {
             Button("확인") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
         }

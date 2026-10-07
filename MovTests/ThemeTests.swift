@@ -2,6 +2,19 @@ import XCTest
 import UIKit
 @testable import Mov
 
+private struct V1PointEntryFixture: Codable {
+    var id: UUID
+    var title: String
+    var amount: Int
+    var date: Date
+}
+
+private struct V1PointsFixture: Codable {
+    var balance: Int
+    var entries: [V1PointEntryFixture]
+    var owned: Set<String>
+}
+
 final class ThemeTests:XCTestCase {
     func testRootTabRoutesAndLabelsMatchReview52Navigation() {
         XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
@@ -47,6 +60,93 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(store.entries, originalEntries)
         XCTAssertFalse(store.ownedItemIDs.contains(product.id))
     }
+
+    @MainActor func testPointStoreMigratesV1WithoutLosingBalanceHistoryOrLegacyOwnership() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let entryID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldState = V1PointsFixture(
+            balance: 3_275,
+            entries: [
+                V1PointEntryFixture(id: entryID, title: "로컬 예시 구매 · 새벽빛 샤드", amount: -500, date: date),
+                V1PointEntryFixture(id: UUID(), title: "예시 적립", amount: 1_000, date: date.addingTimeInterval(-86_400))
+            ],
+            owned: ["dawn", "forest"]
+        )
+        let v1Data = try JSONEncoder().encode(oldState)
+        defaults.set(v1Data, forKey: "mov.points.local.v1")
+
+        let migrated = WPointsStore(defaults: defaults)
+        XCTAssertFalse(migrated.dataUnavailable)
+        XCTAssertEqual(migrated.balance, oldState.balance)
+        XCTAssertEqual(migrated.entries.map(\.id), oldState.entries.map(\.id))
+        XCTAssertEqual(migrated.entries.map(\.title), oldState.entries.map(\.title))
+        XCTAssertEqual(migrated.entries.map(\.amount), oldState.entries.map(\.amount))
+        XCTAssertEqual(migrated.entries.map(\.date), oldState.entries.map(\.date))
+        XCTAssertEqual(migrated.entries.map(\.detail), ["사용 내역", "적립 내역"])
+        XCTAssertEqual(migrated.ownedItemIDs, ["legacy.v1.dawn", "legacy.v1.forest"])
+        XCTAssertFalse(migrated.ownedItemIDs.contains("dawn"), "A v1 product ID must not mark a different v2 product as owned")
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), v1Data, "Migration keeps the old value as a recoverable source")
+        XCTAssertNotNil(defaults.data(forKey: "mov.points.local.v2"))
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.balance, oldState.balance)
+        XCTAssertEqual(reloaded.entries.map(\.id), oldState.entries.map(\.id))
+        XCTAssertEqual(reloaded.ownedItemIDs, migrated.ownedItemIDs)
+    }
+
+    @MainActor func testPointStorePrefersExistingV2OverStaleV1() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let current = WPointsStore(defaults: defaults)
+        let v2Data = try XCTUnwrap(defaults.data(forKey: "mov.points.local.v2"))
+        let staleV1 = try JSONEncoder().encode(V1PointsFixture(balance: 9_999, entries: [], owned: ["forest"]))
+        defaults.set(staleV1, forKey: "mov.points.local.v1")
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertFalse(reloaded.dataUnavailable)
+        XCTAssertEqual(reloaded.balance, current.balance)
+        XCTAssertEqual(reloaded.entries, current.entries)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v2"), v2Data)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), staleV1)
+    }
+
+    @MainActor func testPointStorePreservesCorruptDataAndDisablesMutation() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let corruptV2 = Data([0x00, 0xFF, 0x7B, 0x01])
+        let validV1 = try JSONEncoder().encode(V1PointsFixture(balance: 2_222, entries: [], owned: ["dawn"]))
+        defaults.set(corruptV2, forKey: "mov.points.local.v2")
+        defaults.set(validV1, forKey: "mov.points.local.v1")
+
+        let store = WPointsStore(defaults: defaults)
+        XCTAssertTrue(store.dataUnavailable)
+        XCTAssertEqual(store.balance, 0)
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertTrue(store.ownedItemIDs.isEmpty)
+        let product = WPointProduct.catalog[0]
+        XCTAssertFalse(store.canPurchase(product))
+        XCTAssertFalse(store.purchase(product))
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v2"), corruptV2)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), validV1)
+
+        let secondSuite = "MovTests." + UUID().uuidString
+        let secondDefaults = UserDefaults(suiteName: secondSuite)!
+        defer { secondDefaults.removePersistentDomain(forName: secondSuite) }
+        let corruptV1 = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        secondDefaults.set(corruptV1, forKey: "mov.points.local.v1")
+        let legacyStore = WPointsStore(defaults: secondDefaults)
+        XCTAssertTrue(legacyStore.dataUnavailable)
+        XCTAssertEqual(legacyStore.balance, 0)
+        XCTAssertTrue(legacyStore.entries.isEmpty)
+        XCTAssertEqual(secondDefaults.data(forKey: "mov.points.local.v1"), corruptV1)
+        XCTAssertNil(secondDefaults.data(forKey: "mov.points.local.v2"))
+    }
+
     func testThemeMappingAndBrand() {
         XCTAssertNil(ThemePreference.system.colorScheme)
         XCTAssertEqual(ThemePreference.light.colorScheme,.light)
