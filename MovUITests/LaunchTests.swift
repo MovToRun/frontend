@@ -706,7 +706,15 @@ extension LaunchTests {
         tap("shop-category-image");tap("shop-item-line");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));capture("Shop-item-detail")
         tap("pointPreview");XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5));tap("뒤로")
         let balanceSnapshot=app.descendants(matching:.any)["detailPointBalance"];XCTAssertTrue(balanceSnapshot.waitForExistence(timeout:5));let beforeCancel=balanceSnapshot.value as? String
-        tap("purchaseShopItem");let confirm=app.buttons.matching(identifier:"confirmPointPurchase").firstMatch;XCTAssertTrue(confirm.waitForExistence(timeout:5));app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.25)).tap();XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].exists);XCTAssertTrue(app.buttons["purchaseShopItem"].isEnabled);XCTAssertEqual(balanceSnapshot.value as? String,beforeCancel,"Cancel must leave the balance and ledger count unchanged");tap("purchaseShopItem");XCTAssertTrue(confirm.waitForExistence(timeout:5));tap("confirmPointPurchase");XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-local-purchase")
+        let confirm=app.buttons.matching(identifier:"confirmPointPurchase").firstMatch
+        tap("purchaseShopItem");XCTAssertTrue(confirm.waitForExistence(timeout:5))
+        app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.25)).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].exists);XCTAssertTrue(app.buttons["purchaseShopItem"].isEnabled)
+        XCTAssertEqual(balanceSnapshot.value as? String,beforeCancel,"Cancel must leave the balance and ledger count unchanged")
+        let dialogDismissed=XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:confirm)
+        XCTAssertEqual(XCTWaiter.wait(for:[dialogDismissed],timeout:5),.completed,"Cancel should fully dismiss the purchase dialog before reopening it")
+        tap("purchaseShopItem");XCTAssertTrue(waitHittable(confirm,timeout:5));confirm.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-local-purchase")
         tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));XCTAssertFalse(app.buttons["purchaseShopItem"].isEnabled);XCTAssertEqual(app.buttons["purchaseShopItem"].label,"보유 중")
         tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));tap("openPointHistory");XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts["모브 라인"].exists)
         app.terminate();app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-appearance","light"];app.launch();XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:10));XCTAssertEqual(app.staticTexts["pointBalance"].label,"850","Purchase state persists only in the fixture device store")
@@ -760,5 +768,6 @@ extension LaunchTests {
     func testB01LaunchAliasOpensPointsTab(){
         app.launchArguments=["-wire-screen","B01","-wire-fixture","-wire-reset","-appearance","light"];app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:10));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertTrue(app.staticTexts["pointBalance"].exists)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","포인트 안내")).count,1,"B01 follows the source with a single guide link");XCTAssertTrue(app.buttons["pointGuideOverview"].exists)
     }
 }

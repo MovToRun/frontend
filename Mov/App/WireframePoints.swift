@@ -189,8 +189,6 @@ extension WireframeRoot {
                                 Text(pointsBalanceDisplay).font(W.font(44, .bold)).monospacedDigit().accessibilityIdentifier("pointBalance")
                                 Text("포인트").font(W.font(17, .semibold)).foregroundStyle(W.muted)
                             }
-                            Button { go("B04") } label: { Text("포인트 안내  ›").font(W.font(13, .medium)).foregroundStyle(W.ink) }
-                                .accessibilityIdentifier("pointGuideOverview")
                         }
                         Spacer(minLength: 0)
                         Image("PrismArt").resizable().scaledToFit().frame(width: 96, height: 96).accessibilityHidden(true)
@@ -204,7 +202,7 @@ extension WireframeRoot {
                             HStack { Text("포인트 안내").font(W.font(16, .semibold)); Spacer(); Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(W.muted) }
                                 .foregroundStyle(W.ink).padding(.horizontal, 16).frame(minHeight: 54)
                                 .background(W.soft, in: RoundedRectangle(cornerRadius: 12))
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plain).accessibilityIdentifier("pointGuideOverview")
                         ZStack {
                             W.soft
                             Text("입점 상품 광고 영역").font(W.font(13, .medium)).foregroundStyle(W.muted)
