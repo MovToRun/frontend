@@ -86,7 +86,7 @@ extension WireframeRoot {
     case "delete-week":store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
     case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
-    case "delete-record":store.delete(current.id);ui.selected=nil;go("L01")
+    case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
     case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();go("L02")
     case "logout":guard store.session==nil else{go("T14");return};ui.profile.logged=false;ui.save();ui.authFilled=false;go("A01")
     case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.profile.logged=true;ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}

@@ -35,9 +35,20 @@ struct ShareImageOutput:Identifiable,Equatable {
     private(set) var outputs:[UUID:[ShareImageOutput]]=[:]
     var errorMessage:String?
     var selectedOutputID:UUID?
+    private var ownedVideoURLs=Set<URL>()
+    func registerImportedVideo(_ url:URL){let candidate=url.standardizedFileURL;guard candidate.deletingLastPathComponent()==FileManager.default.temporaryDirectory.standardizedFileURL,candidate.lastPathComponent.hasPrefix("mov-share-") else{return};ownedVideoURLs.insert(candidate)}
+    private func removeOwnedVideo(_ url:URL?){
+        guard let url else{return}
+        let temporary=FileManager.default.temporaryDirectory.standardizedFileURL
+        let candidate=url.standardizedFileURL
+        guard candidate.deletingLastPathComponent()==temporary,candidate.lastPathComponent.hasPrefix("mov-share-"),ownedVideoURLs.remove(candidate) != nil else{return}
+        try? FileManager.default.removeItem(at:candidate)
+    }
     func draft(for record:UUID)->ShareDraft { drafts[record] ?? ShareDraft() }
-    func update(_ record:UUID,_ change:(inout ShareDraft)->Void){let previous=drafts[record]?.videoURL;var draft=draft(for:record);change(&draft);drafts[record]=draft;if let previous,previous != draft.videoURL{try? FileManager.default.removeItem(at:previous)}}
-    func restoreDraft(_ draft:ShareDraft,for record:UUID){if let previous=drafts[record]?.videoURL,previous != draft.videoURL{try? FileManager.default.removeItem(at:previous)};drafts[record]=draft}
+    func update(_ record:UUID,_ change:(inout ShareDraft)->Void){let previous=drafts[record]?.videoURL;var draft=draft(for:record);change(&draft);drafts[record]=draft;if previous != draft.videoURL{removeOwnedVideo(previous)}}
+    func restoreDraft(_ draft:ShareDraft,for record:UUID){if let previous=drafts[record]?.videoURL,previous != draft.videoURL{removeOwnedVideo(previous)};var restored=draft;if let url=restored.videoURL,!FileManager.default.fileExists(atPath:url.path){restored.videoURL=nil};drafts[record]=restored}
+    func releaseVideo(for record:UUID){guard let url=drafts[record]?.videoURL else{return};removeOwnedVideo(url);drafts[record]?.videoURL=nil}
+    func discardImportedVideo(_ url:URL?){removeOwnedVideo(url)}
     func insertPNG(_ data:Data,for record:UUID)->ShareImageOutput? {
         guard data.count<=2*1024*1024 else{errorMessage="PNG가 2MB를 넘어요. 캔버스를 줄이거나 사진을 바꿔 주세요.";return nil}
         if let existing=outputs[record]?.first(where:{$0.data==data}){return existing}
@@ -45,12 +56,22 @@ struct ShareImageOutput:Identifiable,Equatable {
         guard used+data.count<=64*1024*1024 else{errorMessage="이 기록의 임시 공유 이미지가 64MB에 도달했어요. 기존 이미지를 지운 뒤 다시 저장해 주세요.";return nil}
         let output=ShareImageOutput(recordID:record,data:data);outputs[record,default:[]].insert(output,at:0);errorMessage=nil;return output
     }
-    func delete(_ output:UUID,for record:UUID){outputs[record,default:[]].removeAll{$0.id==output}}
+    func delete(_ output:UUID,for record:UUID){outputs[record,default:[]].removeAll{$0.id==output};if selectedOutputID==output{selectedOutputID=nil}}
+    func removeArtifacts(for record:UUID){
+        removeOwnedVideo(drafts[record]?.videoURL)
+        drafts[record]=nil
+        let removed=Set((outputs.removeValue(forKey:record) ?? []).map(\.id))
+        if let selectedOutputID,removed.contains(selectedOutputID){self.selectedOutputID=nil}
+    }
     func output(_ id:UUID?,for record:UUID)->ShareImageOutput? {
         guard let values=outputs[record] else{return nil}
         return id.flatMap{id in values.first{$0.id==id}} ?? values.first
     }
-    func clear(){for url in drafts.values.compactMap(\.videoURL){try? FileManager.default.removeItem(at:url)};drafts=[:];outputs=[:];selectedOutputID=nil;errorMessage=nil}
+    func exportFailureMessage(for id:UUID?,record:UUID)->String{
+        guard output(id,for:record) != nil else{return "저장할 이미지가 없어요. 공유 갤러리에서 다시 만들어 주세요."}
+        return "저장하지 못했어요. 이미지가 임시 갤러리에 남아 있으니 다시 시도해 주세요."
+    }
+    func clear(){for url in Array(ownedVideoURLs){removeOwnedVideo(url)};drafts=[:];outputs=[:];selectedOutputID=nil;errorMessage=nil}
 }
 
 enum ShareMediaError:LocalizedError {
@@ -86,6 +107,12 @@ enum ShareElapsed {
 enum ShareGestureBounds {
     static func offset(_ offset:CGSize,canvas:CGSize)->CGSize {CGSize(width:min(canvas.width*0.36,max(-canvas.width*0.36,offset.width)),height:min(canvas.height*0.32,max(-canvas.height*0.32,offset.height)))}
     static func scale(_ value:CGFloat,minimum:CGFloat=0.6,maximum:CGFloat=1.8)->CGFloat{min(maximum,max(minimum,value))}
+}
+struct ShareMediaLoadGuard {
+    private(set) var current:UUID?
+    mutating func begin()->UUID{let request=UUID();current=request;return request}
+    mutating func invalidate(){current=nil}
+    func accepts(_ request:UUID)->Bool{current==request}
 }
 
 private struct ImportedShareMovie:Transferable {
@@ -135,7 +162,7 @@ private extension Color {init(hex:Int){self.init(.sRGB,red:Double((hex>>16)&255)
 
 struct ShareImageEditor:View {
     var record:RunRecord;@Bindable var workspace:ShareWorkspace;var back:()->Void;var openOutput:()->Void
-    @State private var item:PhotosPickerItem?;@State private var message="";@State private var showDescription=false;@State private var descriptionDraft="";@State private var baseline=ShareDraft();@State private var routeStart=CGSize.zero;@State private var metricsStart=CGSize.zero;@State private var scaleStart:CGFloat=1
+    @State private var item:PhotosPickerItem?;@State private var message="";@State private var showDescription=false;@State private var descriptionDraft="";@State private var baseline=ShareDraft();@State private var routeStart=CGSize.zero;@State private var metricsStart=CGSize.zero;@State private var scaleStart:CGFloat=1;@State private var mediaLoadGuard=ShareMediaLoadGuard();@State private var didFinish=false
     private var draft:ShareDraft{workspace.draft(for:record.id)}
     private var previewImage:UIImage?{draft.imageData.flatMap(UIImage.init(data:))}
     var body:some View {
@@ -192,7 +219,8 @@ struct ShareImageEditor:View {
         }
         .onAppear{baseline=draft}
         .onChange(of:draft.overlay){_,overlay in scaleStart=overlay == .route ? draft.routeScale:draft.metricsScale}
-        .task(id:item){await load(item)}
+        .task(id:item){let request=mediaLoadGuard.begin();await load(item,request:request)}
+        .onDisappear{mediaLoadGuard.invalidate();if !didFinish{workspace.restoreDraft(baseline,for:record.id)}}
         .sheet(isPresented:$showDescription) {
             NavigationStack {
                 VStack {
@@ -214,25 +242,32 @@ struct ShareImageEditor:View {
         }.aspectRatio(draft.format.aspect,contentMode:.fit).frame(maxWidth:.infinity).accessibilityIdentifier("shareCanvasGestures")
     }
     private func cancelAndBack(){workspace.restoreDraft(baseline,for:record.id);back()}
-    private func load(_ selected:PhotosPickerItem?)async {
-        guard let selected else{return};message=""
+    private func load(_ selected:PhotosPickerItem?,request:UUID)async {
+        guard let selected,isCurrent(request) else{return};message=""
         var temporaryMovie:URL?
         do {
             if selected.supportedContentTypes.contains(where:{$0.conforms(to:.image)}) {
                 guard let data=try await selected.loadTransferable(type:Data.self)else{throw ShareMediaError.invalidImage}
+                guard isCurrent(request) else{return}
                 let image=try ShareMediaValidation.image(data)
+                guard isCurrent(request) else{return}
                 workspace.update(record.id){$0.imageData=image.jpegData(compressionQuality:0.92) ?? data;$0.videoURL=nil};return
             }
             guard selected.supportedContentTypes.contains(where:{$0.conforms(to:.movie)}),let movie=try await selected.loadTransferable(type:ImportedShareMovie.self)else{throw ShareMediaError.invalidVideo}
             temporaryMovie=movie.url
+            workspace.registerImportedVideo(movie.url)
+            guard isCurrent(request) else{workspace.discardImportedVideo(temporaryMovie);return}
             try await ShareMediaValidation.video(movie.url)
+            guard isCurrent(request) else{workspace.discardImportedVideo(temporaryMovie);return}
             let asset=AVURLAsset(url:movie.url),generator=AVAssetImageGenerator(asset:asset);generator.appliesPreferredTrackTransform=true
             let frame=try await generator.image(at:.zero).image,bitmap=UIImage(cgImage:frame)
+            guard isCurrent(request) else{workspace.discardImportedVideo(temporaryMovie);return}
             let bytes=bitmap.jpegData(compressionQuality:0.88) ?? Data()
             guard !bytes.isEmpty else{throw ShareMediaError.invalidImage}
             workspace.update(record.id){$0.imageData=bytes;$0.videoURL=movie.url};temporaryMovie=nil;return
-        } catch {if let temporaryMovie{try? FileManager.default.removeItem(at:temporaryMovie)};message=(error as? LocalizedError)?.errorDescription ?? "선택한 미디어를 열 수 없어요. 지원되는 파일을 다시 선택해 주세요."}
+        } catch {workspace.discardImportedVideo(temporaryMovie);if isCurrent(request){message=(error as? LocalizedError)?.errorDescription ?? "선택한 미디어를 열 수 없어요. 지원되는 파일을 다시 선택해 주세요."}}
     }
+    private func isCurrent(_ request:UUID)->Bool{!Task.isCancelled && mediaLoadGuard.accepts(request)}
     @MainActor private func makeImage(){
         let width:CGFloat=360,height=width/draft.format.aspect
         var png:Data?
@@ -242,7 +277,7 @@ struct ShareImageEditor:View {
             if let candidate=renderer.uiImage?.pngData(),candidate.count<=2*1024*1024 {png=candidate;break}
         }
         guard let png,let output=workspace.insertPNG(png,for:record.id)else{message=workspace.errorMessage ?? "이미지를 2MB 이하로 줄이지 못했어요. 더 작은 사진을 선택해 주세요.";return}
-        workspace.errorMessage=nil;workspace.selectedOutputID=output.id;openOutput()
+        workspace.releaseVideo(for:record.id);workspace.errorMessage=nil;workspace.selectedOutputID=output.id;didFinish=true;openOutput()
     }
 }
 
@@ -296,5 +331,5 @@ struct ShareOutputView:View {
     var record:RunRecord;@Bindable var workspace:ShareWorkspace;var back:()->Void;var gallery:()->Void
     @State private var exporting=false;@State private var saveMessage:String?
     private var output:ShareImageOutput?{workspace.output(workspace.selectedOutputID,for:record.id)}
-    var body:some View {VStack(spacing:0){WHeader(title:"러닝 공유 저장",back:back);ScrollView{VStack(alignment:.leading,spacing:16){if let output,let image=UIImage(data:output.data){Image(uiImage:image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius:18)).accessibilityIdentifier("shareOutputPreview");Text("PNG · \(output.data.count) bytes · \(image.cgImage?.width ?? Int(image.size.width)) × \(image.cgImage?.height ?? Int(image.size.height)) px").font(W.font(12)).foregroundStyle(W.muted);WText(text:"파일 앱에서 저장 위치를 선택해요. SNS에 게시하거나 서버로 전송하지 않습니다.",small:true)}else{WNotice(text:"이미지를 찾을 수 없어요. 공유 갤러리에서 다시 선택해 주세요.",danger:true)};if let saveMessage{WNotice(text:saveMessage,danger:true).accessibilityIdentifier("shareSaveFailure")};if let error=workspace.errorMessage{WNotice(text:error,danger:true)};Button("이 기록의 이미지 목록",action:gallery).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("shareOpenGallery")}.padding(20)};Button("파일 앱에 PNG 저장"){exporting=true}.buttonStyle(WButtonStyle()).disabled(output==nil).accessibilityIdentifier("shareSavePNG")}.fileExporter(isPresented:$exporting,document:SharePNGDocument(data:output?.data ?? Data()),contentType:.png,defaultFilename:"mov-run-share") {result in switch result{case .success:saveMessage="PNG 파일을 저장했어요.";case .failure:saveMessage="저장하지 못했어요. 이미지가 임시 갤러리에 남아 있으니 다시 시도해 주세요."}}}
+    var body:some View {VStack(spacing:0){WHeader(title:"러닝 공유 저장",back:back);ScrollView{VStack(alignment:.leading,spacing:16){if let output,let image=UIImage(data:output.data){Image(uiImage:image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius:18)).accessibilityIdentifier("shareOutputPreview");Text("PNG · \(output.data.count) bytes · \(image.cgImage?.width ?? Int(image.size.width)) × \(image.cgImage?.height ?? Int(image.size.height)) px").font(W.font(12)).foregroundStyle(W.muted);WText(text:"파일 앱에서 저장 위치를 선택해요. SNS에 게시하거나 서버로 전송하지 않습니다.",small:true)}else{WNotice(text:"이미지를 찾을 수 없어요. 공유 갤러리에서 다시 선택해 주세요.",danger:true)};if let saveMessage{WNotice(text:saveMessage,danger:true).accessibilityIdentifier("shareSaveFailure")};if let error=workspace.errorMessage{WNotice(text:error,danger:true)};Button("이 기록의 이미지 목록",action:gallery).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("shareOpenGallery")}.padding(20)};Button("파일 앱에 PNG 저장"){exporting=true}.buttonStyle(WButtonStyle()).disabled(output==nil).accessibilityIdentifier("shareSavePNG")}.fileExporter(isPresented:$exporting,document:SharePNGDocument(data:output?.data ?? Data()),contentType:.png,defaultFilename:"mov-run-share") {result in switch result{case .success:saveMessage="PNG 파일을 저장했어요.";case .failure:saveMessage=workspace.exportFailureMessage(for:workspace.selectedOutputID,record:record.id)}}}
 }

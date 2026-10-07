@@ -463,6 +463,19 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["shareGalleryEmpty"].exists)
     }
 
+    func testDeletingParentRecordRemovesItsShareArtifacts() {
+        open("L04")
+        app.swipeUp();app.swipeUp();tap("openShareGallery");XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:5))
+        tap("shareNewImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:5))
+        tap("shareCreateImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q02"].waitForExistence(timeout:10))
+        tap("shareOpenGallery");XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:5))
+        tap("뒤로");tap("뒤로");tap("뒤로");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5))
+        app.swipeUp();tap("deleteRecord");tap("이 기록 삭제")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].exists)
+    }
+
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-appearance",theme];app.launch()
