@@ -91,10 +91,11 @@ extension WireframeRoot {
         return store.weeklyRecords
     }
     var statistics:some View {
-        WPage(title:"나의 러닝",back:back){WPeriodControl(month:$ui.month)
+        let summary=RunPeriodSummary(records:periodRecords)
+        return WPage(title:"나의 러닝",back:back){WPeriodControl(month:$ui.month)
             WText(text:ui.month ? "이번 달 유효 거리":"이번 주 유효 거리",small:true)
-            (Text(MovNumber.display(periodRecords.reduce(0){$0+$1.kilometers})).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold)))
-            HStack{VStack(alignment:.leading){WText(text:"유효 러닝 횟수",small:true);Text("\(periodRecords.count) 회").font(W.font(24,.semibold))};Spacer();VStack(alignment:.leading){WText(text:"유효 러닝 시간",small:true);Text(RunRecord.clock(periodRecords.reduce(0){$0+$1.seconds})).font(W.font(24,.semibold))}}
+            (Text(MovNumber.display(summary.kilometers)).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold)))
+            HStack(spacing:0){VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 횟수",small:true);Text("\(summary.recordCount) 회").font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading);W.line.frame(width:1,height:48).padding(.horizontal,18).accessibilityHidden(true);VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 시간",small:true);Text(RunRecord.clock(summary.seconds)).font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading)}.accessibilityElement(children:.contain).accessibilityIdentifier("periodValidSummary")
             W.line.frame(height:1).padding(.vertical,10)
             if ui.month{WCalendar(month:$ui.calendarMonth,selected:$ui.calendarDay,records:store.records)
                 if let day=ui.calendarDay{Text(day.formatted(.dateTime.month().day())).font(W.font(16,.semibold));let rows=store.records.filter{Calendar.current.isDate($0.date,inSameDayAs:day)};if rows.isEmpty{WText(text:"이 날의 러닝 기록이 없어요",small:true)}else{ForEach(rows){recordRow($0)}}}
