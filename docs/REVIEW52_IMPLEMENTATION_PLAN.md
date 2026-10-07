@@ -112,29 +112,31 @@
 
 ### 프로필 · 설정 · 알림 · `Profile / Settings / Notifications`
 
+이 상태 묶음은 기기 로컬 프로필·테마·알림 상태와 계정/개인정보 전이로 구현했습니다. 알림 빈 상태와 읽음 저장 재시도, 개인정보 화면에서 재확인 취소 후 원래 화면으로 복귀하는 흐름을 포함합니다. 제공자 인증, 푸시, 백엔드 동기화는 시뮬레이션 범위입니다.
+
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `M01` | 내 정보 · 러닝 카드 | `profile` — WireframeProfile.swift |
-| [ ] | `M02` | 러닝 카드 편집 | `profileEdit` — WireframeProfile.swift |
-| [ ] | `N01` | 알림 · 예시 | `notifications` — WireframeInfo.swift |
-| [ ] | `T01` | 설정 | `settings` — WireframeProfile.swift |
-| [ ] | `T02` | 프로필·체중 | `weightProfile` — WireframeProfile.swift |
-| [ ] | `T03` | 단위 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T04` | 개인정보·데이터 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T05` | 로그인 수단 관리 | `providers` — WireframeAuth.swift |
-| [ ] | `T06` | 로그인 수단 연결 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T07` | 기존 로그인 안내 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T08` | 로그인 연결 해제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T09` | 마지막 수단 해제 차단 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T10` | 로그아웃 확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T11` | 계정 삭제 확인 | `deleteAccount` — WireframeAuth.swift |
-| [ ] | `T12` | 삭제 완료 시뮬레이션 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T13` | 기기 데이터 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T14` | 진행 중 러닝 보호 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T15` | 현재 계정 재확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T16` | 탈퇴 요청 처리 중 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T17` | 로그인 수단 연결 완료 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `T18` | 화면 테마 | `theme` — WireframeProfile.swift |
+| [x] | `M01` | 내 정보 · 러닝 카드 | `profile` — WireframeProfile.swift |
+| [x] | `M02` | 러닝 카드 편집 | `profileEdit` — WireframeProfile.swift |
+| [x] | `N01` | 알림 · 예시 | `notifications` — WireframeProfile.swift |
+| [x] | `T01` | 설정 | `settings` — WireframeProfile.swift |
+| [x] | `T02` | 프로필·체중 | `weightProfile` — WireframeProfile.swift |
+| [x] | `T03` | 단위 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T04` | 개인정보·데이터 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T05` | 로그인 수단 관리 | `providers` — WireframeAuth.swift |
+| [x] | `T06` | 로그인 수단 연결 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T07` | 기존 로그인 안내 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T08` | 로그인 연결 해제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T09` | 마지막 수단 해제 차단 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T10` | 로그아웃 확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T11` | 계정 삭제 확인 | `deleteAccount` — WireframeAuth.swift |
+| [x] | `T12` | 삭제 완료 시뮬레이션 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T13` | 기기 데이터 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T14` | 진행 중 러닝 보호 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T15` | 현재 계정 재확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T16` | 탈퇴 요청 처리 중 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T17` | 로그인 수단 연결 완료 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `T18` | 화면 테마 | `theme` — WireframeProfile.swift |
 
 ### 포인트 · 상점 · `Points / Shop`
 

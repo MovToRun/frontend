@@ -24,7 +24,7 @@ extension WireframeRoot {
         case "T10":var page=reviewInfo;page.notice="이 기기에 저장한 기록은 유지돼요.";return page
         case "T12":return .init(title:"탈퇴 완료",heading:"프로필을 초기화했어요",text:"로그인 화면에서 다시 시작할 수 있어요.",buttons:[("로그인으로","A01",0)])
         case "T13":var page=reviewInfo;page.notice="이 기기에 저장된 모든 러닝 기록을 삭제해요. 프로필과 로그인 수단은 유지돼요. 삭제한 기록은 복구할 수 없어요.";page.buttons=[("기기 기록 삭제","clear-device",2),("기록 유지","T04",1)];return page
-        case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 계속해 주세요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 계속","reauth",0),("취소","T05",1)])
+        case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 계속해 주세요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 계속","reauth",0),("취소","cancel-reauth",1)])
         case "T16":return .init(title:"탈퇴 확인",heading:"탈퇴를\n마칠까요?",text:"현재 프로필과 로그인 수단을 초기화해요.",buttons:[("탈퇴하기","delete-account-demo",0),("취소","T01",1)])
         case "T17":var page=reviewInfo;page.notice="";return page
         default:return reviewInfo
@@ -61,7 +61,7 @@ extension WireframeRoot {
         case "T12":return .init(title:"시뮬레이션 완료",heading:"삭제 완료 화면이에요",text:"실제 계정은 바뀌지 않았어요.\n현재 브라우저의 예시 상태만\n처음으로 돌렸어요.",buttons:[("로그인 화면 보기","A01",0),("홈 검토로 돌아가기","H00",1)])
         case "T13":return .init(title:"기기 기록 삭제",heading:"이 기기의 기록만\n지울까요?",text:"현재 계정의 이 기기 러닝 기록과 임시 데이터를 삭제하는 흐름이에요.",notice:"회원 계정과 로그인 수단은 유지해요. 실제 동작은 브라우저의 데모 기록에만 적용돼요.",buttons:[("기기 데모 기록 삭제","clear-device",2),("기록 유지","T04",1)])
         case "T14":return .init(title:"진행 중 러닝",heading:"먼저 러닝을\n마쳐 주세요",text:"진행 중이거나 저장하지 않은 기록이 있어요. 저장 또는 삭제 후 계정을 변경할 수 있어요.",buttons:[("러닝으로 돌아가기","R04",0),("설정으로 돌아가기","T01",1)])
-        case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 현재 계정을\n확인하는 시뮬레이션이에요.",notice:"실제 인증이나 권한 요청은 하지 않아요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 재확인 · 예시","reauth",0),("취소","T05",1)])
+        case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 현재 계정을\n확인하는 시뮬레이션이에요.",notice:"실제 인증이나 권한 요청은 하지 않아요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 재확인 · 예시","reauth",0),("취소","cancel-reauth",1)])
         case "T16":return .init(title:"탈퇴 요청",heading:"삭제 요청을\n확인하고 있어요",text:"요청됨과 실제 완료 상태를\n구분해 안내해요.",notice:"실제 서버에 보내지 않는 시뮬레이션이에요.",buttons:[("완료 응답 확인 · 예시","delete-account-demo",0),("오류 응답 확인 · 예시","delete-account-error",1)])
         case "T17":return .init(title:"연결 완료",heading:ui.provider+(ui.provider=="Google" ? "이":"가")+"\n연결됐어요",text:"이 계정으로 들어올 수 있는\n로그인 수단이 추가됐어요.",notice:"프로토타입의 연결 상태만 변경됐어요. 실제 계정은 연결하지 않았어요.",buttons:[("로그인 수단 확인","T05",0)])
         default:return .init(title:"화면 확인",heading:"화면을 확인해 주세요",text:"",buttons:[("홈으로","H00",0)])
@@ -74,7 +74,7 @@ extension WireframeRoot {
         if ui.screen=="P04"{VStack(spacing:0){ForEach(["1. 기기 설정에서 이 앱 열기","2. 위치 접근 허용","3. 정확한 위치 켜기"],id:\.self){WRow(title:$0)}}}
         if ui.screen=="T03"{VStack(spacing:0){WRow(title:"거리",value:"km");WRow(title:"페이스",value:"분/km");WRow(title:"추정 칼로리",value:"kcal");WRow(title:"체중",value:"kg")}}
         if !data.notice.isEmpty{if ui.screen=="L07"{WRecordDeletionParagraph(text:data.notice).offset(y:-3).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4)}else if ui.screen.hasPrefix("A") || ["T06","T07","T08","T10","T13","T15","T16","T17"].contains(ui.screen){WAuthNotice(text:data.notice,danger:ui.screen=="T13",sourceWrapping:["A04","T10","T17"].contains(ui.screen))}else{WNotice(text:data.notice,danger:["P05","R11","T13"].contains(ui.screen))}}
-        if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
+        if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A13","A14","A15","A18"].contains(ui.screen){authDemoNote}
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty)}}}}
     func infoAction(_ action:String){switch action {
@@ -87,13 +87,14 @@ extension WireframeRoot {
     case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
     case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
-    case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();go("L02")
+    case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();shareWorkspace.clear();go("L02")
     case "logout":guard store.session==nil else{go("T14");return};ui.profile.logged=false;ui.save();ui.authFilled=false;go("A01")
     case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.profile.logged=true;ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
     case "link":guard ui.screen=="T06",ui.settingsGrant else{return};if !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider);ui.save()};go("T17")
     case "unlink":guard ui.screen=="T08" else{return};guard ui.profile.providers.count>1 else{go("T09");return};ui.profile.providers.removeAll{$0==ui.provider};ui.save();go("T05")
     case "reauth":guard ui.screen=="T15" else{return};ui.settingsGrant=true;go(ui.pending)
-    case "delete-account-demo":guard store.session==nil else{go("T14");return};ui.profile=WLocalProfile();ui.profile.logged=false;ui.save();go("T12")
+    case "cancel-reauth":ui.cancelReauthentication()
+    case "delete-account-demo":guard store.session==nil else{go("T14");return};ui.profile=WLocalProfile();ui.profile.logged=false;ui.save();shareWorkspace.clear();go("T12")
     case "delete-account-error":ui.deleteConsent=false;go("T11")
     default:go(action)
     }}

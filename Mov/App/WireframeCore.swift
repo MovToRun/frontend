@@ -179,6 +179,12 @@ struct WLocalProfile:Codable {
     var photo:Data? = nil
     var providers=["카카오"];var logged=true;var notificationRead:[Int]=[]
 }
+enum WProfileValidation {
+    static func isValid(nickname:String,introduction:String)->Bool {
+        let normalized=nickname.trimmingCharacters(in:.whitespacesAndNewlines)
+        return !normalized.isEmpty && normalized.count<=20 && introduction.count<=60
+    }
+}
 enum WRootTab: Int, CaseIterable {
     case points, run, home, community, profile
 
@@ -208,11 +214,11 @@ enum WRootTab: Int, CaseIterable {
     var selected:UUID?
     var provider="Google"
     var pending="T05"
+    var pendingBack="T05"
     var error=""
     var completionFeedbackSeen:Set<UUID>=[]
     var collapsed=false
     var month=false
-    var expandedNotification:Int?
     var gradeExpanded=false;var validityExpanded=false;var consentBusy=false
     var consentTerms=false;var consentPrivacy=false;var deleteConsent=false
     var consentTopic="이용약관"
@@ -223,8 +229,11 @@ enum WRootTab: Int, CaseIterable {
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
-    init(){defaults=ProcessInfo.processInfo.arguments.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
+    init(){let args=ProcessInfo.processInfo.arguments;defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
+    var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
+    var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
+    func cancelReauthentication(){guard screen=="T15" else{return};settingsGrant=false;let destination=pendingBack;if path.last==destination{path.removeLast()};leaveAuth(for:destination);forward=false;screen=destination;error=""}
     struct Account:Codable {var profile:WLocalProfile;var records:[RunRecord];var goal:RunGoal;var weekly:WeeklyGoal}
     func switchLocalAccount(_ store:RunStore,clearShare:()->Void = {}){
         guard store.session==nil else{go("T14");return}
@@ -389,7 +398,7 @@ struct WireframeRoot:View {
         .allowsHitTesting(isRoot && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false)->some View {WHeader(title:title,root:true,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && ui.profile.notificationRead.count<2{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정")}}))}
+    func rootHeader(_ title:String,run:Bool=false)->some View {let unread = ui.hasUnreadNotifications;return WHeader(title:title,root:true,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
