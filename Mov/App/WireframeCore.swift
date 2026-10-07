@@ -161,6 +161,25 @@ struct WLocalProfile:Codable {
     var photo:Data? = nil
     var providers=["카카오"];var logged=true;var notificationRead:[Int]=[]
 }
+enum WRootTab: Int, CaseIterable {
+    case points, run, home, community, profile
+
+    var title: String {
+        switch self {
+        case .points: "포인트"
+        case .run: "러닝"
+        case .home: "홈"
+        case .community: "커뮤니티"
+        case .profile: "내 정보"
+        }
+    }
+
+    var caption: String? { self == .home ? nil : title }
+
+    var route: String { ["POINTS", "H01", "H00", "C01", "M01"][rawValue] }
+    var assetName: String? { [nil, "run", nil, "community", "profile"][rawValue] }
+}
+
 @MainActor @Observable final class WireState {
     private let defaults:UserDefaults
     var profile:WLocalProfile
@@ -253,7 +272,7 @@ struct WireframeRoot:View {
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
     var points:some View {VStack(spacing:0){WHeader(title:"포인트",root:true,trailing:AnyView(Button{go("SHOP")}label:{WShopIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("상점").accessibilityIdentifier("openShop")));W.paper.accessibilityIdentifier("emptyPoints")}}
     var shop:some View {VStack(spacing:0){WHeader(title:"상점",back:{if ui.path.isEmpty{go("POINTS")}else{back()}});W.paper.accessibilityIdentifier("emptyShop")}}
-    var roots:[String]{["POINTS","H01","H00","C01","M01"]}
+    var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05"].contains(ui.screen)}
@@ -310,8 +329,38 @@ struct WireframeRoot:View {
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
     }
     var nav:some View {
-        HStack(spacing:0){ForEach(Array(roots.enumerated()),id:\.offset){i,id in Button{ui.path=[];go(id)}label:{VStack(spacing:12){ZStack{Color.clear.frame(height:3);if ui.screen==id || (i==1 && ["H02","H05"].contains(ui.screen)){Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)}};if i==2{BrandMark(size:26)}else if i==0{WPointsIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24)}else{AssetIcon(name:["records","run","","community","profile"][i],size:24)}}.padding(.top,3).frame(maxWidth:.infinity).frame(height:64,alignment:.top).contentShape(Rectangle())}.accessibilityLabel(["포인트","러닝","홈","커뮤니티","내 정보"][i]) .accessibilityIdentifier("tab-\(i)").accessibilityAddTraits(isRoot && ui.rootIndex==i ? .isSelected:[])}}
-            .padding(.horizontal,8).background(W.paper).overlay(alignment:.top){W.line.frame(height:1)}
+        HStack(spacing:0){
+            ForEach(WRootTab.allCases,id:\.rawValue){tab in
+                let index=tab.rawValue
+                Button{ui.path=[];go(tab.route)}label:{
+                    VStack(spacing:3){
+                        ZStack{
+                            Color.clear.frame(height:3)
+                            if ui.screen==tab.route || (tab == .run && ["H02","H05"].contains(ui.screen)){
+                                Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)
+                            }
+                        }
+                        if tab == .home { BrandMark(size:24) }
+                        else if tab == .points { WPointsIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24) }
+                        else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
+                        if let caption=tab.caption {
+                            Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                                .foregroundStyle(isRoot && ui.rootIndex==index ? W.ink:W.muted)
+                                .accessibilityIdentifier("tab-caption-\(index)")
+                        } else {
+                            Text("홈").font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                                .hidden().accessibilityHidden(true)
+                        }
+                    }
+                    .padding(.top,3).frame(maxWidth:.infinity,minHeight:64).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityIdentifier("tab-\(index)")
+                .accessibilityAddTraits(isRoot && ui.rootIndex==index ? .isSelected:[])
+            }
+        }
+        .padding(.horizontal,8).background(W.paper).overlay(alignment:.top){W.line.frame(height:1)}
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
     func rootHeader(_ title:String,run:Bool=false)->some View {WHeader(title:title,root:true,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && ui.profile.notificationRead.count<2{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정")}}))}

@@ -3,6 +3,11 @@ import UIKit
 @testable import Mov
 
 final class ThemeTests:XCTestCase {
+    func testRootTabRoutesAndLabelsMatchReview52Navigation() {
+        XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
+        XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
+        XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
+    }
     func testThemeMappingAndBrand() {
         XCTAssertNil(ThemePreference.system.colorScheme)
         XCTAssertEqual(ThemePreference.light.colorScheme,.light)

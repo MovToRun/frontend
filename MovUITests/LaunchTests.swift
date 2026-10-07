@@ -7,6 +7,12 @@ import XCTest
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
     func testCoreFlowAndAppearancePersistence(){
         open();let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
+        XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name")
+        XCTAssertFalse(app.staticTexts["tab-caption-2"].exists,"Home has no visible caption")
+        XCTAssertFalse(app.staticTexts["홈"].exists,"Home has no visible caption")
+        for title in ["포인트","러닝","커뮤니티","내 정보"] {
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",title)).firstMatch.exists,"Visible tab caption: \(title)")
+        }
         for i in [0,1,2,3,4,3,2,1,0,2]{app.buttons["tab-\(i)"].tap()}
         for i in 0...4{XCTAssertEqual(app.buttons["tab-\(i)"].frame,frames[i])}
         capture("H00")
@@ -15,6 +21,16 @@ import XCTest
         app.terminate();app.launchArguments=["-wire-screen","T18","-wire-fixture"];app.launch();XCTAssertTrue(app.buttons["theme-dark"].waitForExistence(timeout:10));XCTAssertTrue(app.buttons["theme-dark"].isSelected)
         app.buttons["theme-system"].tap();app.terminate();app.launch();XCTAssertTrue(app.buttons["theme-system"].waitForExistence(timeout:10));XCTAssertTrue(app.buttons["theme-system"].isSelected)
         app.buttons["theme-light"].tap()
+    }
+    func testHomeTabAlignmentAtAccessibilityTextSize(){
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset","-wire-large"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
+        for frame in frames.dropFirst(){XCTAssertEqual(frame.minY,frames[0].minY,accuracy:0.5);XCTAssertEqual(frame.height,frames[0].height,accuracy:1.0)}
+        XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name at large text sizes")
+        XCTAssertFalse(app.staticTexts["홈"].exists,"The home logo has no visible caption")
+        XCTAssertTrue(app.staticTexts["tab-caption-1"].exists)
+        capture("H00-accessibility3-tab-alignment")
     }
     func testWeeklyGoalRecordEditingDeletionAndDiscard(){
         open("H04");app.buttons["weeklyTimeToggle"].tap();capture("H04-both")
