@@ -1,0 +1,27 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.p8
+*.key
+*.mobileprovision
+
+# Per-user Xcode state
+**/xcuserdata/
+*.xcuserstate
+
+# Build products and local tooling
+DerivedData/
+**/DerivedData/
+build/
+**/build/
+*.xcresult/
+*.ipa
+*.app
+*.dSYM/
+.DS_Store
+
+# Local audit captures and test artifacts (source assets live under Mov/)
+Evidence/
