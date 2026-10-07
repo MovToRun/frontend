@@ -114,12 +114,20 @@ struct WMetric:View {
     var saved=false
     var reservePauseSpace=false
     var clockOverride:Double?=nil
-    var metricPace:String {record.kilometers>0 && record.pace.count==4 ? "0"+record.pace:record.pace}
+    var metricPace:String {
+        guard record.kilometers>0 else{return saved ? record.pace:"—"}
+        return record.pace.count==4 ? "0"+record.pace:record.pace
+    }
+    var metricDistance:Text {
+        record.kilometers>0 || saved
+            ? Text(record.kilometers,format:.number.precision(.fractionLength(2)))
+            : Text("—")
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:0){
             metricLabel("유효 거리")
-            (Text(record.kilometers,format:.number.precision(.fractionLength(2))).font(W.font(52,.bold)).kerning(-2.34)+Text(" km").font(W.font(22,.semibold)).kerning(-0.44))
-                .monospacedDigit().frame(height:57.2,alignment:.leading).padding(.top,5).padding(.bottom,22)
+            (metricDistance.font(W.font(52,.bold)).kerning(-2.34)+Text(" km").font(W.font(22,.semibold)).kerning(-0.44))
+                .monospacedDigit().frame(height:57.2,alignment:.leading).padding(.top,5).padding(.bottom,22).accessibilityIdentifier("runDistanceMetric")
             HStack(alignment:.top,spacing:20){
                 VStack(alignment:.leading,spacing:0){
                     metricLabel(saved && !record.isValid ? "기록 상태":saved ? "유효 러닝 시간":"러닝 시간")
@@ -128,7 +136,7 @@ struct WMetric:View {
                 }.frame(maxWidth:.infinity,alignment:.leading)
                 VStack(alignment:.leading,spacing:0){
                     metricLabel("평균 페이스")
-                    (Text(metricPace).font(W.font(28,.semibold)).kerning(-0.98)+Text(" /km").font(W.font(14,.medium)).kerning(-0.14)).monospacedDigit().frame(height:39.2,alignment:.leading)
+                    (Text(metricPace).font(W.font(28,.semibold)).kerning(-0.98)+Text(" /km").font(W.font(14,.medium)).kerning(-0.14)).monospacedDigit().frame(height:39.2,alignment:.leading).accessibilityIdentifier("runPaceMetric")
                     if paused || reservePauseSpace{Color.clear.frame(height:22)}
                 }.padding(.leading,20).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.leading){Color.wire(0xE1E1E1,0xE1E1E1).frame(width:1)}
             }
@@ -361,6 +369,11 @@ struct WireframeRoot:View {
             }
         }
         .padding(.horizontal,8).background(W.paper).overlay(alignment:.top){W.line.frame(height:1)}
+        // The run map takes over the full viewport. Keep the hidden tab bar out
+        // of VoiceOver and hit testing while a run is active; otherwise its
+        // invisible bottom hit region can cover the compact run controls.
+        .accessibilityHidden(!isRoot || splash)
+        .allowsHitTesting(isRoot && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
     func rootHeader(_ title:String,run:Bool=false)->some View {WHeader(title:title,root:true,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && ui.profile.notificationRead.count<2{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정")}}))}
