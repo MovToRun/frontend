@@ -333,7 +333,7 @@ struct WireframeRoot:View {
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
-                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen)
+                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.challengeIssued=Date().addingTimeInterval(ui.screen=="A21" ? -301:0);ui.challengeCode=ui.screen=="A23" ? "731204":"482619"}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}

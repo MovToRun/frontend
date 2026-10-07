@@ -2,18 +2,26 @@ import SwiftUI
 import PhotosUI
 extension WireframeRoot {
     var profile:some View {VStack(spacing:0){rootHeader("내 정보");ScrollView{VStack(alignment:.leading,spacing:14){HStack{Text("나의 러닝 카드").font(W.font(17,.semibold));Spacer();Button("카드 편집"){go("M02")}.font(W.font(12)).frame(minHeight:44)}
-        VStack(alignment:.leading,spacing:0){HStack{Text("러닝 프로필").font(W.font(11)).kerning(0.275).foregroundStyle(W.muted);Spacer();BrandMark(size:28)}.frame(height:28)
-            HStack(spacing:14){Group{if let data=ui.profile.photo,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}else{Text(String(ui.profile.nickname.prefix(1))).font(W.font(20,.semibold))}}.frame(width:56,height:56).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line));VStack(alignment:.leading,spacing:0){
+        runnerIdentityCard()
+        gradeProgress.padding(.top,-8)
+        WDisclosure(title:"등급 기준",expanded:$ui.gradeExpanded){VStack(alignment:.leading,spacing:12){WText(text:"첫 유효 기록을 완료하면 시작러너가 돼요. 새싹러너부터는 누적 거리와 활동일 수를 함께 확인해요. 하루 유효 구간 합계가 4분 이상이면서 1 km 이상이면 활동일 1일로 계산해요. 같은 날 여러 번 달려도 1일이에요.",small:true);ForEach(Array(zip(["start","sprout","passion","challenge","distance"],["시작러너|첫 유효 기록 완료","새싹러너|누적 10 km + 서로 다른 7일","열정러너|누적 30 km + 서로 다른 10일","도전러너|누적 100 km + 서로 다른 20일","러닝마스터|누적 300 km + 서로 다른 50일"])),id:\.0){key,copy in let parts=copy.components(separatedBy:"|");HStack{Image("Tier-"+key).resizable().scaledToFit().frame(width:24,height:24);Text(parts[0]).font(W.font(13,.medium));Spacer();WText(text:parts[1],small:true)}};WText(text:"저장된 유효 구간의 거리와 활동일을 기준으로 계산해요. 제외된 구간은 합계에 포함하지 않아요.",small:true)}.padding(.top,12)}.font(W.font(13)).padding(.top,-10)
+        Text("개인 설정").font(W.font(12)).foregroundStyle(W.muted).padding(.top,18);WRow(title:"체중 정보",subtitle:"선택 입력 · 러닝 카드에 표시되지 않아요",action:{go("T02")},arrow:true);WText(text:"활동 지역과 소개는 카드 편집에서 변경할 수 있어요.",small:true)
+    }.padding(.horizontal,24).padding(.top,20).padding(.bottom,24)}}}
+    @ViewBuilder func runnerIdentityCard(decorationID:String? = nil)->some View {
+        let card = VStack(alignment:.leading,spacing:0){HStack{Text("러닝 프로필").font(W.font(11)).kerning(0.275).foregroundStyle(W.muted);Spacer();BrandMark(size:28)}.frame(height:28)
+            HStack(spacing:14){Group{if let data=ui.profile.photo,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}else{Text(String(ui.profile.nickname.prefix(1))).font(W.font(20,.semibold))}}.frame(width:56,height:56).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line)).overlay{if decorationID == "frame"{Circle().stroke(W.lime,lineWidth:3).padding(-5)}};VStack(alignment:.leading,spacing:0){
                 HStack(spacing:5){if store.totalDistance>0{Image("Tier-"+currentTierKey).resizable().scaledToFit().frame(width:28,height:28)};Text(store.totalDistance==0 ? "등급 없음":tierName).font(W.font(12,.medium)).foregroundStyle(W.muted)}.frame(height:28).padding(.bottom,6)
                 Text(ui.profile.nickname).font(W.font(31,.semibold)).kerning(-1.86).frame(minHeight:38.13,alignment:.leading).fixedSize(horizontal:false,vertical:true)
                 Text(ui.profile.introduction).font(W.font(13)).kerning(-0.195).foregroundStyle(W.muted).frame(minHeight:22.1,alignment:.leading).padding(.top,12)
             }}.padding(.top,35).padding(.bottom,28)
             W.line.frame(height:1);HStack(alignment:.top,spacing:16){VStack(alignment:.leading,spacing:7){Text("활동 지역").font(W.font(10)).foregroundStyle(W.muted).frame(height:15);Text(ui.profile.region).font(W.font(13,.medium)).frame(minHeight:17.55).padding(.top,5)}.frame(maxWidth:.infinity,alignment:.leading);VStack(alignment:.leading,spacing:7){Text("최근 1달 평균 러닝당 거리").font(W.font(10)).foregroundStyle(W.muted).frame(height:15);(Text(MovNumber.display(store.averageDistance)).font(W.font(24,.semibold)).kerning(-0.96)+Text(" km").font(W.font(11,.medium))).frame(height:32.4)}.frame(maxWidth:.infinity,alignment:.leading)}.padding(.top,18)
         }.padding(.horizontal,23).padding(.top,23).padding(.bottom,20).frame(minHeight:315,alignment:.top).background(W.paper,in:RoundedRectangle(cornerRadius:18)).overlay(RoundedRectangle(cornerRadius:18).stroke(W.line)).shadow(color:.black.opacity(0.025),radius:10,y:5)
-        gradeProgress.padding(.top,-8)
-        WDisclosure(title:"등급 기준",expanded:$ui.gradeExpanded){VStack(alignment:.leading,spacing:12){WText(text:"첫 유효 기록을 완료하면 시작러너가 돼요. 새싹러너부터는 누적 거리와 활동일 수를 함께 확인해요. 하루 유효 구간 합계가 4분 이상이면서 1 km 이상이면 활동일 1일로 계산해요. 같은 날 여러 번 달려도 1일이에요.",small:true);ForEach(Array(zip(["start","sprout","passion","challenge","distance"],["시작러너|첫 유효 기록 완료","새싹러너|누적 10 km + 서로 다른 7일","열정러너|누적 30 km + 서로 다른 10일","도전러너|누적 100 km + 서로 다른 20일","러닝마스터|누적 300 km + 서로 다른 50일"])),id:\.0){key,copy in let parts=copy.components(separatedBy:"|");HStack{Image("Tier-"+key).resizable().scaledToFit().frame(width:24,height:24);Text(parts[0]).font(W.font(13,.medium));Spacer();WText(text:parts[1],small:true)}};WText(text:"저장된 유효 구간의 거리와 활동일을 기준으로 계산해요. 제외된 구간은 합계에 포함하지 않아요.",small:true)}.padding(.top,12)}.font(W.font(13)).padding(.top,-10)
-        Text("개인 설정").font(W.font(12)).foregroundStyle(W.muted).padding(.top,18);WRow(title:"체중 정보",subtitle:"선택 입력 · 러닝 카드에 표시되지 않아요",action:{go("T02")},arrow:true);WText(text:"활동 지역과 소개는 카드 편집에서 변경할 수 있어요.",small:true)
-    }.padding(.horizontal,24).padding(.top,20).padding(.bottom,24)}}}
+        if let decorationID {
+            card.overlay(alignment:.topTrailing){if decorationID == "line"{Ellipse().stroke(W.lime.opacity(0.24),lineWidth:22).frame(width:260,height:230).rotationEffect(.degrees(-25)).offset(x:155,y:-60)}else if decorationID == "dawn"{Ellipse().stroke(W.lime.opacity(0.24),lineWidth:40).frame(width:260,height:230).rotationEffect(.degrees(-25)).offset(x:70,y:160)}else if decorationID == "card-frame"{RoundedRectangle(cornerRadius:18).stroke(W.lime,lineWidth:3).padding(4)}}.clipShape(RoundedRectangle(cornerRadius:18))
+        } else {
+            card
+        }
+    }
     var nextTier:(String,String,Double,Int)? {switch store.tier{case "마스터":nil;case "도전":("러닝마스터","distance",300,50);case "열정":("도전러너","challenge",100,20);case "새싹":("열정러너","passion",30,10);default:("새싹러너","sprout",10,7)}}
     @ViewBuilder var gradeProgress:some View {
         if store.totalDistance==0{HStack{Image("Tier-start").resizable().scaledToFit().frame(width:20,height:20);WText(text:"첫 유효 기록을 완료하면 시작러너가 돼요",small:true)}}

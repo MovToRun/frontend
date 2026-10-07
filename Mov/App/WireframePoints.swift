@@ -130,17 +130,17 @@ extension WireframeRoot {
                             .background(W.lime, in: RoundedRectangle(cornerRadius: 12))
                     }.buttonStyle(.plain).accessibilityIdentifier("browsePointShop")
                     VStack(alignment: .leading, spacing: 12) {
+                        Button { go("B04") } label: {
+                            HStack { Text("포인트 안내").font(W.font(16, .semibold)); Spacer(); Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(W.muted) }
+                                .foregroundStyle(W.ink).padding(.horizontal, 16).frame(minHeight: 54)
+                                .background(W.soft, in: RoundedRectangle(cornerRadius: 12))
+                        }.buttonStyle(.plain)
                         ZStack {
                             W.soft
                             Text("입점 상품 광고 영역").font(W.font(13, .medium)).foregroundStyle(W.muted)
                             Text("광고").font(W.font(9)).foregroundStyle(W.muted).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(10)
                         }.frame(maxWidth: .infinity, minHeight: 156)
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(W.line, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
-                        Button { go("B04") } label: {
-                            HStack { Text("포인트 안내").font(W.font(16, .semibold)); Spacer(); Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(W.muted) }
-                                .foregroundStyle(W.ink).padding(.horizontal, 16).frame(minHeight: 54)
-                                .background(W.soft, in: RoundedRectangle(cornerRadius: 12))
-                        }.buttonStyle(.plain)
                     }
                 }.padding(.horizontal, 20).padding(.bottom, 20).frame(maxWidth: 560).frame(maxWidth: .infinity, alignment: .top)
             }.accessibilityIdentifier("pointsOverviewScroll")
@@ -306,7 +306,11 @@ extension WireframeRoot {
             WText(text: product.kind, small: true)
             HStack(alignment: .firstTextBaseline, spacing: 5) { Text("\(product.price.formatted())").font(W.font(23, .semibold)); Text("포인트").font(W.font(13)) }
             WText(text: product.description)
-            WRow(title: "보유 포인트", value: pointsStore.balance.formatted(), separator: false)
+            HStack { Text("보유 포인트"); Spacer(); Text(pointsStore.balance.formatted()) }
+                .font(W.font(13)).frame(minHeight:64).frame(maxWidth:.infinity,alignment:.leading)
+                .accessibilityElement(children:.ignore).accessibilityLabel("보유 포인트")
+                .accessibilityValue("balance:\(pointsStore.balance)|entries:\(pointsStore.entries.count)")
+                .accessibilityIdentifier("detailPointBalance")
         } actions: {
             HStack(spacing: 10) {
                 Button("미리보기") { go("B10") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("pointPreview")
@@ -350,6 +354,7 @@ extension WireframeRoot {
             WRow(title: "보유 포인트", value: "\(pointsStore.balance.formatted())P", separator: false)
             WRow(title: "필요 포인트", value: "\(selectedPointProduct.price.formatted())P", separator: false)
             WRow(title: "부족한 포인트", value: "\(max(0, selectedPointProduct.price - pointsStore.balance).formatted())P", separator: false)
+                .accessibilityIdentifier("pointShortageAmount")
         } actions: {
             Button("확인") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
         }
@@ -376,46 +381,13 @@ extension WireframeRoot {
     private var pointCardPreview: some View {
         return WPage(title: "미리보기", back: back) {
             Text("\(selectedPointProduct.name) 적용 예시").font(W.font(14)).foregroundStyle(W.muted)
-            VStack(alignment: .leading, spacing: 0) {
-                HStack { Text("러닝 프로필").font(W.font(11)).foregroundStyle(W.muted); Spacer(); BrandMark(size: 28) }
-                HStack(spacing: 14) {
-                    Group {
-                        if let data = ui.profile.photo, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill() }
-                        else { Text(String(ui.profile.nickname.prefix(1))).font(W.font(20, .semibold)) }
-                    }.frame(width: 56, height: 56).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line))
-                        .overlay { if selectedPointProduct.id == "frame" { Circle().stroke(W.lime, lineWidth: 3).padding(-5) } }
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(store.totalDistance == 0 ? "등급 없음" : tierName).font(W.font(12, .medium)).foregroundStyle(W.muted).padding(.bottom, 6)
-                        Text(ui.profile.nickname).font(W.font(24, .semibold)).fixedSize(horizontal: false, vertical: true)
-                        Text(ui.profile.introduction).font(W.font(13)).foregroundStyle(W.muted).padding(.top, 10)
-                    }
-                }.padding(.top, 34).padding(.bottom, 26)
-                W.line.frame(height: 1)
-                HStack(alignment: .top, spacing: 16) {
-                    previewMetric("활동 지역", ui.profile.region)
-                    previewMetric("최근 1달 평균 러닝당 거리", "\(MovNumber.display(store.averageDistance)) km")
-                }.padding(.top, 18)
-            }.padding(23).frame(minHeight: 315, alignment: .top).background(W.paper, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(W.line))
-                .overlay(alignment: .topTrailing) {
-                    if selectedPointProduct.id == "line" {
-                        Ellipse().stroke(W.lime.opacity(0.24), lineWidth: 22).frame(width: 260, height: 230).rotationEffect(.degrees(-25)).offset(x: 155, y: -60)
-                    } else if selectedPointProduct.id == "dawn" {
-                        Ellipse().stroke(W.lime.opacity(0.24), lineWidth: 40).frame(width: 260, height: 230).rotationEffect(.degrees(-25)).offset(x: 70, y: 160)
-                    } else if selectedPointProduct.id == "card-frame" {
-                        RoundedRectangle(cornerRadius: 18).stroke(W.lime, lineWidth: 3).padding(4)
-                    }
-                }.clipShape(RoundedRectangle(cornerRadius: 18))
+            runnerIdentityCard(decorationID:selectedPointProduct.id)
             WText(text: "현재 러닝 카드는 바뀌지 않아요", small: true)
         } actions: {
             Button("아이템으로 돌아가기") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("previewBackToShop")
         }
     }
 
-    private func previewMetric(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 7) { Text(title).font(W.font(10)).foregroundStyle(W.muted).lineLimit(1); Text(value).font(W.font(13, .semibold)).lineLimit(2).minimumScaleFactor(0.75) }
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
 
 private struct WPointsMark: View {
