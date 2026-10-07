@@ -393,16 +393,46 @@ extension LaunchTests {
         drag(time,true,.slow);XCTAssertEqual(time.value as? String,"6시간")
         tap("goal-distance");XCTAssertEqual(wheel.value as? String,"1 km")
     }
+    func testEmptyRecordListAndLookupFailureAreDistinct() {
+        for screen in ["L02","L03"] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-wire-review-size","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+            if screen=="L02" {
+                XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].waitForExistence(timeout:5))
+                XCTAssertFalse(app.otherElements["recordLookupFailure"].exists)
+            } else {
+                XCTAssertTrue(app.descendants(matching:.any)["recordLookupFailure"].waitForExistence(timeout:5))
+                XCTAssertFalse(app.staticTexts["아직 러닝 기록이 없어요"].exists)
+                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","0건이라고 단정하지 않아요")).firstMatch.exists)
+            }
+        }
+    }
+
+    func testInvalidRecordDetailsShowOnlyRecordedExclusionReason() {
+        open("S05")
+        tap("기록 보기")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5))
+        tap("유효 구간과 원본 기록")
+        XCTAssertTrue(app.staticTexts["GPS 수신 실패 예시"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","임의로 분류하지 않아요")).firstMatch.exists)
+    }
+
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-appearance",theme];app.launch()
             let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
             XCTAssertTrue(week.waitForExistence(timeout:10));let frame=week.frame
-            month.tap();XCTAssertTrue(month.isSelected);XCTAssertEqual(week.frame,frame)
-            tap("이전 달");let calendar=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2026년 9월")).firstMatch
-            XCTAssertTrue(calendar.exists);capture("H07-month-"+theme)
+            month.tap();XCTAssertTrue(waitForLayout({month.isSelected}));XCTAssertEqual(week.frame,frame)
+            XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists)
+            let calendarMonth=app.staticTexts["calendarMonthTitle"]
+            XCTAssertTrue(calendarMonth.waitForExistence(timeout:5));let selectedMonth=calendarMonth.label
+            tap("이전 달")
+            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label != selectedMonth}))
+            let priorMonth=calendarMonth.label
+            XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists);capture("H07-month-"+theme)
             week.tap();XCTAssertTrue(week.isSelected);month.tap()
-            XCTAssertTrue(calendar.exists);XCTAssertEqual(week.frame,frame)
+            XCTAssertEqual(calendarMonth.label,priorMonth);XCTAssertEqual(week.frame,frame)
             week.tap();month.tap();week.tap();XCTAssertTrue(week.isSelected);capture("H07-week-"+theme)
             app.terminate()
         }
@@ -601,6 +631,7 @@ extension LaunchTests {
         replaceInput(memo,"첫 줄\n둘째 줄 메모");XCTAssertTrue(app.buttons["finishMemo"].isHittable);XCTAssertTrue(app.staticTexts["inlineMemoCount"].isHittable);capture("Memo-inline-keyboard");tap("finishMemo")
         XCTAssertEqual(app.staticTexts["recordMemo"].label,"첫 줄\n둘째 줄 메모")
         app.swipeDown();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정");capture("Title-inline-saved")
+        for _ in 0..<3 where !app.buttons["editTitle"].isHittable { app.swipeDown() }
         tap("editTitle");replaceInput(title,"저장하지 않을 제목");tap("뒤로")
         tap("전체 보기");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","제목만 수정")).firstMatch.tap();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정")
         app.swipeUp();tap("editMemo");replaceInput(memo,String(repeating:"나",count:301));XCTAssertFalse(app.buttons["finishMemo"].isEnabled);XCTAssertEqual(app.staticTexts["inlineMemoCount"].label,"301/300")

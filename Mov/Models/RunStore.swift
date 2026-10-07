@@ -42,6 +42,16 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var caloriesText:String {guard isValid else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
     var isValid: Bool { kilometers > 0 }
     var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }
+    var validityDetails: [String] {
+        guard let segments, !segments.isEmpty else { return ["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."] }
+        let labels = ["gps-gap":"GPS 누락", "pause":"일시정지", "vehicle":"차량 이동", "transit":"대중교통", "gps-spike":"GPS 튐", "long-idle":"오랜 정지", "unknown":"판별 정보 없음"]
+        let details = segments.compactMap { segment -> String? in
+            guard segment.type != "include" || segment.distance <= 0 || segment.seconds <= 0 else { return nil }
+            let reason = segment.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return reason.flatMap { $0.isEmpty ? nil : $0 } ?? labels[segment.type] ?? "유효 거리로 확인할 수 없는 구간"
+        }
+        return details.isEmpty ? ["저장된 구간에서 제외 항목이 없습니다."] : details
+    }
     static func clock(_ seconds: Double) -> String {
         let s = max(0, Int(seconds))
         return String(format: "%02d:%02d", s / 60, s % 60)
@@ -50,6 +60,17 @@ struct RunRecord: Identifiable, Codable, Equatable {
         let hour = Calendar.current.component(.hour, from: date)
         let part = hour < 6 ? "새벽" : hour < 12 ? "아침" : hour < 18 ? "오후" : "저녁"
         return date.formatted(.dateTime.month(.twoDigits).day(.twoDigits)) + " \(part) 러닝"
+    }
+}
+struct RunPeriodSummary: Equatable {
+    var recordCount: Int
+    var kilometers: Double
+    var seconds: Double
+    init(records: [RunRecord]) {
+        let valid = records.filter(\.isValid)
+        recordCount = valid.count
+        kilometers = valid.reduce(0) { $0 + $1.kilometers }
+        seconds = valid.reduce(0) { $0 + $1.seconds }
     }
 }
 struct DemoSession: Codable {
@@ -110,11 +131,12 @@ struct DemoSession: Codable {
         let groups=Dictionary(grouping: records.filter(\.isValid)) { Calendar.current.startOfDay(for:$0.date) }
         return groups.values.filter { $0.reduce(0){$0+$1.seconds} >= 240 && $0.reduce(0){$0+$1.kilometers} >= 1 }.count
     }
-    var averageDistance: Double {
-        let start=Calendar.current.date(byAdding:.month,value:-1,to:Date())!
-        let recent=records.filter{$0.isValid && $0.date >= start && $0.date <= Date()}
+    func averageDistance(asOf now: Date) -> Double {
+        let start=Calendar.current.date(byAdding:.month,value:-1,to:now) ?? now
+        let recent=records.filter{$0.isValid && $0.date >= start && $0.date <= now}
         return recent.isEmpty ? 0 : recent.reduce(0){$0+$1.kilometers}/Double(recent.count)
     }
+    var averageDistance: Double { averageDistance(asOf: Date()) }
     var tier: String {
         if totalDistance >= 300 && activityDays >= 50 { return "마스터" }
         if totalDistance >= 100 && activityDays >= 20 { return "도전" }

@@ -87,6 +87,43 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(separated.last!.end,2)
     }
 
+    func testStatisticsSeparateValidRunCountAndTimeAndKeepZeroVisible() {
+        let valid=RunRecord(date:Date(),title:"valid",seconds:1808,kilometers:4.82)
+        let invalid=RunRecord(date:Date(),title:"invalid",seconds:312,kilometers:0,segments:[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")])
+        let summary=RunPeriodSummary(records:[valid,invalid])
+        XCTAssertEqual(summary.recordCount,1)
+        XCTAssertEqual(summary.kilometers,4.82,accuracy:0.00001)
+        XCTAssertEqual(summary.seconds,1808)
+        XCTAssertEqual(RunPeriodSummary(records:[invalid]).recordCount,0)
+        XCTAssertEqual(MovNumber.display(RunPeriodSummary(records:[invalid]).kilometers),"0")
+        XCTAssertEqual(RunRecord.clock(RunPeriodSummary(records:[invalid]).seconds),"00:00")
+        XCTAssertEqual(invalid.caloriesText,"0 kcal")
+    }
+
+    @MainActor func testRecentMonthlyAverageUsesValidRecordsAndShowsZero() {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let store=RunStore(defaults:defaults),now=Date(),start=Calendar.current.date(byAdding:.month,value:-1,to:now)!
+        store.records=[RunRecord(date:start,title:"at boundary",seconds:600,kilometers:2),RunRecord(date:now.addingTimeInterval(-3600),title:"recent",seconds:1200,kilometers:4),RunRecord(date:now.addingTimeInterval(-3600),title:"invalid",seconds:900,kilometers:0),RunRecord(date:now.addingTimeInterval(60),title:"future",seconds:900,kilometers:20)]
+        XCTAssertEqual(store.averageDistance(asOf:now),3,accuracy:0.00001)
+        store.records=[store.records[2]]
+        XCTAssertEqual(store.averageDistance(asOf:now),0)
+        XCTAssertEqual(MovNumber.display(store.averageDistance(asOf:now)),"0")
+    }
+
+    func testRecordValidityDetailsUseStoredReasonsWithoutGuessing() {
+        let date=Date()
+        let reasoned=RunRecord(date:date,title:"invalid",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:60,type:"gps-gap",reason:"센서 원본의 제외 사유")])
+        XCTAssertEqual(reasoned.validityDetails,["센서 원본의 제외 사유"])
+        let unlabelled=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:60,type:"gps-gap")])
+        XCTAssertEqual(unlabelled.validityDetails,["GPS 누락"])
+        let whitespaceReasons=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:30,type:"gps-gap",reason:""),RunSegment(distance:0,seconds:30,type:"custom",reason:" \n ")])
+        XCTAssertEqual(whitespaceReasons.validityDetails,["GPS 누락","유효 거리로 확인할 수 없는 구간"])
+        XCTAssertTrue(whitespaceReasons.validityDetails.allSatisfy{!$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty})
+        let noSegments=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0)
+        XCTAssertEqual(noSegments.validityDetails,["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."])
+    }
+
 }
 
 extension ThemeTests {
