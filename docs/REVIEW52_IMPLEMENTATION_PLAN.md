@@ -24,7 +24,7 @@
 | 7 | `feature/community-crew` | C01–C43 | 앱 별도 5탭 구조, 피드/FAB/게시글/댓글/검색/크루 흐름, 가상 데이터·서버 미연동 표시 |
 | 8 | `feature/review52-visual-qa` | 전체 140 상태 × 라이트/다크 | 전체 구현 뒤 통합 시각 검수 1회. 차이는 수정 후 해당 상태만 재검수 |
 
-각 기능 브랜치는 기준점 `main`에서 분기해 해당 상태만 수정합니다. 기능 단위 빌드/자동 테스트와 diff 검토 후 커밋·푸시하고 draft PR을 만든 뒤 exact head/diff/검증 결과를 부모 검토에 넘깁니다. 부모 검토를 통과한 PR만 머지하고 다음 브랜치로 진행합니다. 포인트/구매·인증·소셜·위치·동기화는 백엔드/API 연결 없이 교체 가능한 로컬 상태로만 표현하며 서버 성공으로 오인시키지 않습니다.
+현재 `feature/home-running-goals-ui` 구현은 31개 대상 상태를 로컬 시뮬레이션 범위에서 완료했습니다. 완료 표시는 화면·전이·기기 로컬 상태 구현을 뜻하며 실제 GPS 센서/위치 권한 요청, 백엔드 저장·동기화는 포함하지 않습니다. 러닝 지도는 가상 사용자 위치와 화면 이동(pan)·재중심화를 지원하며, 재중심화와 패널 열림/닫힘 시 사용자가 보이는 지도 영역의 가운데를 유지합니다. 각 기능 브랜치는 기준점 `main`에서 분기해 해당 상태만 수정합니다. 기능 단위 빌드/자동 테스트와 diff 검토 후 커밋·푸시하고 draft PR을 만든 뒤 exact head/diff/검증 결과를 부모 검토에 넘깁니다. 부모 검토를 통과한 PR만 머지하고 다음 브랜치로 진행합니다. 포인트/구매·인증·소셜·위치·동기화는 백엔드/API 연결 없이 교체 가능한 로컬 상태로만 표현하며 서버 성공으로 오인시키지 않습니다.
 
 반응형 기준은 320pt 안팎부터 큰 iPhone 폭, 세로 공간, safe area, 키보드, 긴 문구/줄바꿈, Dynamic Type을 포함합니다. 고정 좌표로 전체 화면을 늘리지 않고 디자인 계층을 유지합니다. 러닝 지도/접이식 패널, 커뮤니티 피드/하단바/FAB, 공유 이미지 편집기는 전용 적응형 점검을 둡니다.
 
@@ -60,40 +60,40 @@
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `H00` | 메인 홈 | `home` — WireframeHome.swift |
-| [ ] | `H01` | 지도 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
-| [ ] | `H02` | 첫 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
-| [ ] | `H03` | 이번 러닝 목표 | `sessionGoal` — WireframeHome.swift |
-| [ ] | `H04` | 주간 목표 | `weeklyGoal` — WireframeHome.swift |
-| [ ] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
-| [ ] | `H06` | 임시 기록 복구 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `H00` | 메인 홈 | `home` — WireframeHome.swift |
+| [x] | `H01` | 지도 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
+| [x] | `H02` | 첫 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
+| [x] | `H03` | 이번 러닝 목표 | `sessionGoal` — WireframeHome.swift |
+| [x] | `H04` | 주간 목표 | `weeklyGoal` — WireframeHome.swift |
+| [x] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
+| [x] | `H06` | 임시 기록 복구 | `informationPage` — WireframeInfo.swift |
 | [ ] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift |
 | [ ] | `H08` | 통계 데이터 없음 | `statistics` — WireframeHome.swift |
 | [ ] | `H09` | 목표 초과 달성 | `statistics` — WireframeHome.swift |
-| [ ] | `H10` | 주간 목표 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `H11` | 시간대 변경 안내 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `P01` | 위치 권한 설명 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `P02` | 위치 권한 거부 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `P03` | 정확한 위치 꺼짐 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `P04` | 설정 변경 안내 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `P05` | 시작 전 저장공간 부족 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `R01` | 위치 확인 중 | `runPanel` — WireframeRun.swift |
-| [ ] | `R02` | 러닝 중 | `runPanel` — WireframeRun.swift |
-| [ ] | `R03` | GPS 신호 약함 | `runPanel` — WireframeRun.swift |
-| [ ] | `R04` | 일시정지 | `runPanel` — WireframeRun.swift |
-| [ ] | `R05` | 종료 확인 | `runPanel` — WireframeRun.swift |
-| [ ] | `R06` | 러닝 상세 지표 | `runDetails` — WireframeRun.swift |
-| [ ] | `R07` | 지도 표시 실패 | `runPanel` — WireframeRun.swift |
-| [ ] | `R08` | 네트워크 연결 없음 | `runPanel` — WireframeRun.swift |
-| [ ] | `R09` | 재개 전 권한 확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `R10` | 러닝 중 저장 오류 | `runPanel` — WireframeRun.swift |
-| [ ] | `R11` | 기록 삭제 확인 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `R12` | 빈 러닝 종료 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `S01` | 러닝 완료 | `completion` — WireframeRun.swift |
-| [ ] | `S02` | 저장 중 | `completion` — WireframeRun.swift |
-| [ ] | `S03` | 저장 실패 | `completion` — WireframeRun.swift |
-| [ ] | `S04` | 동기화 대기 · 후속 | `completion` — WireframeRun.swift |
-| [ ] | `S05` | 유효 구간 없는 기록 | `completion` — WireframeRun.swift |
+| [x] | `H10` | 주간 목표 삭제 | `informationPage` — WireframeInfo.swift |
+| [x] | `H11` | 시간대 변경 안내 | `informationPage` — WireframeInfo.swift |
+| [x] | `P01` | 위치 권한 설명 | `informationPage` — WireframeInfo.swift |
+| [x] | `P02` | 위치 권한 거부 | `informationPage` — WireframeInfo.swift |
+| [x] | `P03` | 정확한 위치 꺼짐 | `informationPage` — WireframeInfo.swift |
+| [x] | `P04` | 설정 변경 안내 | `informationPage` — WireframeInfo.swift |
+| [x] | `P05` | 시작 전 저장공간 부족 | `informationPage` — WireframeInfo.swift |
+| [x] | `R01` | 위치 확인 중 | `runPanel` — WireframeRun.swift |
+| [x] | `R02` | 러닝 중 | `runPanel` — WireframeRun.swift |
+| [x] | `R03` | GPS 신호 약함 | `runPanel` — WireframeRun.swift |
+| [x] | `R04` | 일시정지 | `runPanel` — WireframeRun.swift |
+| [x] | `R05` | 종료 확인 | `runPanel` — WireframeRun.swift |
+| [x] | `R06` | 러닝 상세 지표 | `runDetails` — WireframeRun.swift |
+| [x] | `R07` | 지도 표시 실패 | `runPanel` — WireframeRun.swift |
+| [x] | `R08` | 네트워크 연결 없음 | `runPanel` — WireframeRun.swift |
+| [x] | `R09` | 재개 전 권한 확인 | `informationPage` — WireframeInfo.swift |
+| [x] | `R10` | 러닝 중 저장 오류 | `runPanel` — WireframeRun.swift |
+| [x] | `R11` | 기록 삭제 확인 | `informationPage` — WireframeInfo.swift |
+| [x] | `R12` | 빈 러닝 종료 | `informationPage` — WireframeInfo.swift |
+| [x] | `S01` | 러닝 완료 | `completion` — WireframeRun.swift |
+| [x] | `S02` | 저장 중 | `completion` — WireframeRun.swift |
+| [x] | `S03` | 저장 실패 | `completion` — WireframeRun.swift |
+| [x] | `S04` | 동기화 대기 · 후속 | `completion` — WireframeRun.swift |
+| [x] | `S05` | 유효 구간 없는 기록 | `completion` — WireframeRun.swift |
 
 ### 기록 · 통계 · 공유 · `Records / Statistics / Sharing`
 

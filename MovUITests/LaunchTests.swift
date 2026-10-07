@@ -4,6 +4,8 @@ import XCTest
     override func setUp(){continueAfterFailure=false}
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
+    func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
+    func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
     func testCoreFlowAndAppearancePersistence(){
         open();let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
@@ -43,9 +45,9 @@ import XCTest
     }
     func testRunningCollapsedDetailFinishAndDuplicateSave(){
         open("H01");app.buttons["startRun"].tap();XCTAssertTrue(app.buttons["pauseRun"].waitForExistence(timeout:5));app.buttons["panelHandle"].tap();capture("R02-collapsed")
-        app.buttons["pauseRun"].tap();XCTAssertTrue(app.buttons["resumeRun"].exists);app.buttons["resumeRun"].tap();app.buttons["panelHandle"].tap();app.buttons["상세 기록 보기"].tap();capture("R06")
-        app.buttons["러닝 화면으로 돌아가기"].tap();app.buttons["pauseRun"].tap();app.buttons["finishRun"].tap();capture("R05")
-        for _ in 0..<3 {app.buttons["아직 쉴게요"].tap();XCTAssertTrue(app.buttons["resumeRun"].isHittable);app.buttons["panelHandle"].tap();XCTAssertTrue(app.buttons["resumeRun"].isHittable);app.buttons["panelHandle"].tap();app.buttons["finishRun"].tap();XCTAssertTrue(app.buttons["saveRun"].isHittable)};app.buttons["saveRun"].doubleTap();XCTAssertTrue(app.buttons["기록 보기"].waitForExistence(timeout:5));tap("기록 보기");XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].exists)
+        app.buttons["pauseRun"].tap();XCTAssertTrue(app.buttons["resumeRun"].exists);app.buttons["resumeRun"].tap();app.buttons["panelHandle"].tap();tap("상세 기록 보기");capture("R06")
+        XCTAssertTrue(app.buttons["러닝 화면으로 돌아가기"].waitForExistence(timeout:5),app.debugDescription);tap("러닝 화면으로 돌아가기");XCTAssertTrue(waitHittable(app.buttons["pauseRun"]));app.buttons["pauseRun"].tap();app.buttons["finishRun"].tap();capture("R05")
+        for _ in 0..<3 {app.buttons["아직 쉴게요"].tap();XCTAssertTrue(waitHittable(app.buttons["resumeRun"]));tap("panelHandle");XCTAssertTrue(waitHittable(app.buttons["resumeRun"]));tap("panelHandle");tap("finishRun");XCTAssertTrue(waitForLayout({self.app.buttons["saveRun"].exists && self.app.buttons["saveRun"].isHittable},timeout:5),app.debugDescription)};app.buttons["saveRun"].doubleTap();XCTAssertTrue(app.buttons["기록 보기"].waitForExistence(timeout:5));tap("기록 보기");XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].exists)
     }
     func testAuthenticationConsentAndProviderProtection(){
         open("A01");app.buttons["회원가입"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5));app.buttons["가상 예시값 채우기"].tap();capture("A07-filled");app.buttons["authPrimary"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
@@ -106,6 +108,16 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testRunMetricsStayUnavailableUntilDistanceIsValid() {
+        open("R01")
+        XCTAssertEqual(app.staticTexts["runDistanceMetric"].label,"— km")
+        XCTAssertEqual(app.staticTexts["runPaceMetric"].label,"— /km")
+        app.terminate()
+        open("S05")
+        XCTAssertEqual(app.staticTexts["runDistanceMetric"].label,"0.00 km")
+        XCTAssertEqual(app.staticTexts["runPaceMetric"].label,"0:00 /km")
+    }
+
     func testReducedMotionRunningFlow() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-reduced","-appearance","light"]
         app.launch()
@@ -405,11 +417,13 @@ extension LaunchTests {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-appearance",theme];app.launch()
             let handle=app.buttons["panelHandle"]
-            XCTAssertTrue(handle.waitForExistence(timeout:10));handle.tap()
-            XCTAssertEqual(handle.label,"러닝 정보 펼치기");XCTAssertGreaterThanOrEqual(handle.frame.height,44)
-            XCTAssertLessThan(handle.frame.maxY,app.frame.maxY-20);capture("R02-collapsed-"+theme)
+            XCTAssertTrue(handle.waitForExistence(timeout:10));tap("panelHandle")
+            XCTAssertTrue(waitForLayout({let current=self.app.buttons.matching(identifier:"panelHandle").firstMatch;return current.exists && current.frame.minY>self.app.frame.midY}),app.debugDescription)
+            let collapsedHandle=app.buttons.matching(identifier:"panelHandle").firstMatch
+            XCTAssertGreaterThanOrEqual(collapsedHandle.frame.height,44)
+            XCTAssertLessThan(collapsedHandle.frame.maxY,app.frame.maxY-20);capture("R02-collapsed-"+theme)
             tap("pauseRun");XCTAssertTrue(app.buttons["resumeRun"].exists);tap("resumeRun")
-            handle.tap();XCTAssertEqual(handle.label,"러닝 정보 접기");XCTAssertTrue(app.buttons["상세 기록 보기"].exists)
+            tap("panelHandle");XCTAssertTrue(waitForLayout({let current=self.app.buttons.matching(identifier:"panelHandle").firstMatch;return current.exists && current.frame.minY<self.app.frame.midY}),app.debugDescription);XCTAssertTrue(app.buttons["상세 기록 보기"].exists)
             capture("R02-expanded-"+theme)
         }
     }
@@ -445,7 +459,7 @@ extension LaunchTests {
             let top=handle.frame,first=primary.frame,second=secondary.frame
             XCTAssertTrue(primary.isHittable);XCTAssertTrue(secondary.isHittable)
             for i in 0..<3{
-                tap("pauseRun");assertRunFrame(app.buttons["resumeRun"].frame,first);assertRunFrame(app.buttons["finishRun"].frame,second);assertRunFrame(handle.frame,top)
+                tap("pauseRun");XCTAssertTrue(waitHittable(app.buttons["resumeRun"]),app.debugDescription);XCTAssertTrue(waitHittable(app.buttons["finishRun"]),app.debugDescription);assertRunFrame(app.buttons["resumeRun"].frame,first);assertRunFrame(app.buttons["finishRun"].frame,second);assertRunFrame(handle.frame,top)
                 tap("finishRun");assertRunFrame(app.buttons["cancelFinish"].frame,first);assertRunFrame(app.buttons["saveRun"].frame,second);assertRunFrame(handle.frame,top)
                 XCTAssertTrue(app.buttons["saveRun"].isHittable);if i==0{capture(compact ? "Run-finish-320x568":"Run-finish")}
                 tap("cancelFinish");tap("resumeRun");assertRunFrame(primary.frame,first)
@@ -523,6 +537,43 @@ extension LaunchTests {
         }}
     }
 
+}
+
+extension LaunchTests {
+    func visibleMapRecenter() -> XCUIElement? {
+        app.buttons.matching(identifier:"mapRecenter").allElementsBoundByIndex.first(where:{$0.isHittable})
+    }
+
+    func testRunMapPanAndRecenterTracksVisibleViewport() {
+        for collapsed in [false,true] {
+            app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","R02","-appearance","light"]
+            if collapsed { app.launchArguments.append("-wire-collapsed") }
+            app.launch()
+            let map=app.descendants(matching:.any)["runningMap"].firstMatch
+            let marker=app.descendants(matching:.any)["runUserPosition"].firstMatch
+            let handle=app.buttons["panelHandle"]
+            XCTAssertTrue(map.waitForExistence(timeout:10))
+            XCTAssertEqual(visibleMapRecenter()?.value as? String,"중심")
+            let targetY=collapsed ? map.frame.midY:(map.frame.minY+handle.frame.minY)/2
+            XCTAssertEqual(marker.frame.midX,map.frame.midX,accuracy:2)
+            XCTAssertEqual(marker.frame.midY,targetY,accuracy:3)
+
+            let startX=map.frame.minX+map.frame.width*0.28,startY=targetY+30
+            let origin=app.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:startX,dy:startY))
+            let destination=app.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:startX+72,dy:startY+48))
+            origin.press(forDuration:0.1,thenDragTo:destination,withVelocity:.slow,thenHoldForDuration:0.1)
+            XCTAssertTrue(waitForLayout({self.visibleMapRecenter()?.value as? String == "이동됨"},timeout:3),app.debugDescription)
+            XCTAssertGreaterThan(abs(marker.frame.midX-map.frame.midX),20)
+            XCTAssertGreaterThan(abs(marker.frame.midY-targetY),20)
+
+            tap("mapRecenter")
+            let recentered=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in
+                self.visibleMapRecenter()?.value as? String == "중심" && abs(marker.frame.midX-map.frame.midX)<2 && abs(marker.frame.midY-targetY)<3
+            },object:nil)
+            XCTAssertEqual(XCTWaiter.wait(for:[recentered],timeout:3),.completed,app.debugDescription)
+            capture(collapsed ? "Map-recenter-collapsed":"Map-recenter-expanded")
+        }
+    }
 }
 
 
