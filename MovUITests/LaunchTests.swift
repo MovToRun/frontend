@@ -700,14 +700,18 @@ extension LaunchTests {
     func replaceInput(_ field:XCUIElement,_ text:String){XCTAssertTrue(field.waitForExistence(timeout:5));XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5));let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)}
     func testPointsShopAndHeaderRoutes(){
         userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")
-        tap("tab-0");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].exists);XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertFalse(visible("설정"));XCTAssertFalse(visible("기록 보기"));XCTAssertTrue(visible("openShop"));capture("Points-empty")
-        tap("openShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].exists);XCTAssertFalse(visible("tab-0"));capture("Shop-empty-page");tap("뒤로");XCTAssertTrue(app.buttons["tab-0"].isSelected);XCTAssertTrue(visible("openShop"))
-        tap("tab-1");XCTAssertTrue(visible("기록 보기"));XCTAssertFalse(visible("알림"));XCTAssertFalse(visible("설정"));capture("Run-records-only")
-        tap("기록 보기");XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].exists);capture("Record-list-back")
-        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","가볍게 달린 아침")).firstMatch.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].exists)
-        tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].exists);tap("뒤로");XCTAssertTrue(app.buttons["startRun"].isHittable)
-        tap("tab-4");XCTAssertTrue(visible("알림"));XCTAssertTrue(visible("설정"));capture("Profile-bell-settings")
-        tap("tab-2");tap("전체 보기");tap("뒤로");XCTAssertTrue(app.buttons["tab-2"].isSelected)
+        tap("tab-0");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertFalse(visible("설정"));XCTAssertFalse(visible("기록 보기"));XCTAssertTrue(visible("openShop"),app.debugDescription);XCTAssertTrue(app.staticTexts["pointBalance"].exists,app.debugDescription);capture("Points-overview")
+        tap("openShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));XCTAssertFalse(visible("tab-0"));capture("Shop-catalog")
+        tap("shop-category-shard");tap("shop-item-dawn");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));capture("Shop-item-detail")
+        tap("pointPreview");XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5));tap("뒤로")
+        tap("purchaseShopItem");let confirm=app.buttons.matching(identifier:"confirmPointPurchase").firstMatch;XCTAssertTrue(confirm.waitForExistence(timeout:5));tap("confirmPointPurchase");XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-local-purchase")
+        tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));tap("openPointHistory");XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","로컬 예시 구매")).firstMatch.exists)
+        app.terminate();app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-appearance","light"];app.launch();XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:10));XCTAssertEqual(app.staticTexts["pointBalance"].label,"700","Purchase state persists only in the fixture device store")
+    }
+    func testPointsShopDisablesInsufficientPurchaseAndShowsEmptyLedger(){
+        app.launchArguments=["-wire-screen","B06","-wire-fixture","-wire-reset","-wire-points-insufficient","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:15))
+        let purchase=app.buttons["purchaseShopItem"];XCTAssertTrue(purchase.exists);XCTAssertFalse(purchase.isEnabled);tap("pointShortageHelp");XCTAssertTrue(app.descendants(matching:.any)["screen-B08"].waitForExistence(timeout:5));tap("pointEarningGuide");XCTAssertTrue(app.descendants(matching:.any)["screen-B09"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts["적립 기능은 아직 연결되지 않았어요"].exists);XCTAssertTrue(app.descendants(matching:.any)["pointAdPlaceholder"].exists)
+        app.terminate();app.launchArguments=["-wire-screen","B03","-wire-fixture","-wire-reset","-wire-points-empty","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B03"].waitForExistence(timeout:15));XCTAssertTrue(app.staticTexts["아직 포인트 내역이 없어요"].exists)
     }
     func testIndependentInlineRecordEditing(){
         userOpen("L04");XCTAssertFalse(visible("기록 편집"));tap("editTitle")

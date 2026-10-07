@@ -212,6 +212,7 @@ enum WRootTab: Int, CaseIterable {
     var calendarMonth=Date();var calendarDay:Date?
     var path:[String]=[]
     var selected:UUID?
+    var selectedPointProductID="dawn"
     var provider="Google"
     var pending="T05"
     var pendingBack="T05"
@@ -274,21 +275,26 @@ struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
     @State var shareWorkspace=ShareWorkspace()
+    @State var pointsStore:WPointsStore
     init(){
         let args=ProcessInfo.processInfo.arguments
         let defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
         if resetFixture{Self.didPrepareFixture=true;defaults.removePersistentDomain(forName:"mov.wireframe.review")}
         let model=RunStore(defaults:defaults)
+        let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
             model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-10-01T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)])]
             model.persist()
         }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
-        _ui=State(initialValue:state);_store=State(initialValue:model)
+        _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
     }
     @State var ui=WireState()
+    @State var selectedPointCategory:WPointCategory = .all
+    @State var selectedPointKind:WPointKind = .all
+    @State var showingPointPurchaseConfirmation=false
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -298,8 +304,6 @@ struct WireframeRoot:View {
     @Namespace var indicator
     @Environment(\.scenePhase) var scenePhase
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
-    var points:some View {VStack(spacing:0){WHeader(title:"포인트",root:true,trailing:AnyView(Button{go("SHOP")}label:{WShopIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:24,height:24).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("상점").accessibilityIdentifier("openShop")));W.paper.accessibilityIdentifier("emptyPoints")}}
-    var shop:some View {VStack(spacing:0){WHeader(title:"상점",back:{if ui.path.isEmpty{go("POINTS")}else{back()}});W.paper.accessibilityIdentifier("emptyShop")}}
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
@@ -404,7 +408,8 @@ struct WireframeRoot:View {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
         case "E02":WSplash().frame(maxWidth:.infinity,maxHeight:.infinity)
         case "POINTS":points
-        case "SHOP":shop
+        case "SHOP","B05":shop
+        case "B02","B03","B04","B06","B07","B08","B09","B10":pointDetailRoute
         case "H00":home
         case "H01","H02","H05":ready
         case "H03":sessionGoal

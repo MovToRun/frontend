@@ -8,6 +8,40 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
     }
+
+    @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = WPointsStore(defaults: defaults)
+        let product = WPointProduct.catalog[0]
+        let startingBalance = store.balance
+        XCTAssertTrue(store.canPurchase(product))
+        XCTAssertTrue(store.purchase(product, at: Date(timeIntervalSince1970: 1_800_000_000)))
+        XCTAssertEqual(store.balance, startingBalance - product.price)
+        XCTAssertTrue(store.ownedItemIDs.contains(product.id))
+        XCTAssertEqual(store.entries.first?.amount, -product.price)
+        XCTAssertFalse(store.canPurchase(product), "An owned sample item cannot be purchased twice")
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.balance, store.balance)
+        XCTAssertTrue(reloaded.ownedItemIDs.contains(product.id))
+        XCTAssertEqual(reloaded.entries.first?.title, "로컬 예시 구매 · \(product.name)")
+    }
+
+    @MainActor func testPointStoreRejectsInsufficientLocalPurchase() {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = WPointsStore(defaults: defaults, insufficientFixture: true)
+        let product = WPointProduct.catalog[0]
+        let originalEntries = store.entries
+        XCTAssertFalse(store.canPurchase(product))
+        XCTAssertFalse(store.purchase(product))
+        XCTAssertEqual(store.balance, 100)
+        XCTAssertEqual(store.entries, originalEntries)
+        XCTAssertFalse(store.ownedItemIDs.contains(product.id))
+    }
     func testThemeMappingAndBrand() {
         XCTAssertNil(ThemePreference.system.colorScheme)
         XCTAssertEqual(ThemePreference.light.colorScheme,.light)
