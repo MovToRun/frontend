@@ -418,6 +418,51 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","임의로 분류하지 않아요")).firstMatch.exists)
     }
 
+    func testShareImageCreationGalleryAndDelete() {
+        app.launchArguments=["-wire-screen","Q01","-wire-fixture","-wire-reset","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.buttons["shareCreateImage"].exists);XCTAssertTrue(waitHittable(app.buttons["shareFormatStory"],timeout:10),app.debugDescription);app.buttons["shareFormatStory"].tap();app.swipeUp();tap("shareSelect-route")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","코스 색")).firstMatch.exists)
+        tap("shareSelect-metrics");XCTAssertTrue(app.buttons["shareCreateImage"].exists)
+        tap("shareCreateImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["shareOutputPreview"].waitForExistence(timeout:5))
+        let outputDetails=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","PNG ·")).firstMatch
+        XCTAssertTrue(outputDetails.waitForExistence(timeout:5),app.debugDescription)
+        let dimensions=outputDetails.label.components(separatedBy:" · ").last?.components(separatedBy:" px").first?.components(separatedBy:" × ") ?? []
+        XCTAssertEqual(dimensions.count,2,outputDetails.label)
+        if dimensions.count==2,let width=Double(dimensions[0]),let height=Double(dimensions[1]) {
+            XCTAssertEqual(width/height,9.0/16.0,accuracy:0.002,outputDetails.label)
+            XCTAssertLessThanOrEqual(width,1080,outputDetails.label)
+            XCTAssertLessThanOrEqual(height,1920,outputDetails.label)
+        }
+        if let bytes=outputDetails.label.components(separatedBy:" · ").dropFirst().first.flatMap(Int.init){XCTAssertLessThanOrEqual(bytes,2*1024*1024)}
+        app.swipeUp();tap("shareOpenGallery");XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:5))
+        let remove=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","deleteShare-")).firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout:5));remove.tap();app.alerts.buttons["삭제"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["shareGalleryEmpty"].waitForExistence(timeout:5))
+        capture("Q03-empty-after-delete")
+    }
+
+    func testShareEditorCancelAndDynamicType() {
+        app.launchArguments=["-wire-screen","Q03","-wire-fixture","-wire-reset","-wire-compact-review","-wire-large","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:10))
+        tap("shareNewImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:5))
+        tap("shareFormatStory");app.swipeUp();tap("shareDescription")
+        XCTAssertTrue(app.textViews["shareDescriptionInput"].waitForExistence(timeout:5));app.buttons["완료"].tap()
+        app.swipeUp();tap("shareCreateImage")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-Q02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["shareOutputPreview"].waitForExistence(timeout:5))
+    }
+
+    func testShareEditorCancelReturnsToGallery() {
+        app.launchArguments=["-wire-screen","Q03","-wire-fixture","-wire-reset","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:10))
+        tap("shareNewImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:5))
+        tap("shareFormatStory");app.swipeUp();tap("취소")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["shareGalleryEmpty"].exists)
+    }
+
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-appearance",theme];app.launch()

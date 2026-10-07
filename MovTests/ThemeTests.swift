@@ -124,6 +124,39 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(noSegments.validityDetails,["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."])
     }
 
+    func testShareElapsedFormatsMinutesAndHoursWithoutDateTimeNoise() {
+        XCTAssertEqual(ShareElapsed.string(570),"9m30s")
+        XCTAssertEqual(ShareElapsed.string(3723),"1h2m3s")
+        XCTAssertEqual(ShareGestureBounds.offset(CGSize(width:900,height:-900),canvas:CGSize(width:360,height:450)),CGSize(width:129.6,height:-144))
+        XCTAssertEqual(ShareGestureBounds.scale(9),1.8)
+        XCTAssertEqual(ShareGestureBounds.scale(0.1,minimum:0.65,maximum:1.7),0.65)
+    }
+
+    @MainActor func testShareImageInputValidationAndWorkspaceIdempotence() async throws {
+        let image=UIGraphicsImageRenderer(size:CGSize(width:12,height:12)).image{context in UIColor.systemGreen.setFill();context.fill(CGRect(x:0,y:0,width:12,height:12))}
+        let bytes=try XCTUnwrap(image.pngData())
+        XCTAssertNotNil(try ShareMediaValidation.image(bytes))
+        do { _ = try ShareMediaValidation.image(Data(repeating:0,count:20*1024*1024+1)); XCTFail("Oversize image must be rejected") }
+        catch ShareMediaError.tooLarge {}
+        do { _ = try ShareMediaValidation.image(Data([0,1,2,3])); XCTFail("Undecodable image must be rejected") }
+        catch ShareMediaError.invalidImage {}
+        let corruptMovie=FileManager.default.temporaryDirectory.appendingPathComponent("mov-corrupt-\(UUID().uuidString).mp4")
+        try Data([0,1,2,3]).write(to:corruptMovie)
+        defer{try? FileManager.default.removeItem(at:corruptMovie)}
+        do { try await ShareMediaValidation.video(corruptMovie); XCTFail("Undecodable video must be rejected") }
+        catch ShareMediaError.invalidVideo {}
+
+        let workspace=ShareWorkspace(),record=UUID()
+        let first=workspace.insertPNG(bytes,for:record)
+        let second=workspace.insertPNG(bytes,for:record)
+        XCTAssertEqual(first?.id,second?.id)
+        XCTAssertEqual(workspace.outputs[record]?.count,1)
+        XCTAssertNil(workspace.insertPNG(Data(repeating:1,count:2*1024*1024+1),for:record))
+        XCTAssertEqual(workspace.outputs[record]?.count,1,"A rejected insertion must leave the previous image available for retry")
+        workspace.clear()
+        XCTAssertEqual(workspace.outputs.count,0)
+    }
+
 }
 
 extension ThemeTests {

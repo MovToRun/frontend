@@ -106,9 +106,9 @@
 | [ ] | `L05` | 구간 기록 · 페이스 | `splits` — WireframeRun.swift |
 | [ ] | `L06` | 기록 편집 · 개발 참고 | `recordEdit` — WireframeRun.swift |
 | [ ] | `L07` | 러닝 기록 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `Q01` | 러닝 공유 만들기 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `Q02` | 러닝 공유 저장 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `Q03` | 이 기록의 공유 콘텐츠 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `Q01` | 러닝 공유 만들기 | `ShareImageEditor` — `WireframeShare.swift`; 로컬 PNG 작성, 피드·스토리 캔버스와 기록 오버레이 편집. 선택 미디어 입력 검증. 무음 MP4/WebM 출력은 미구현 |
+| [x] | `Q02` | 러닝 공유 저장 | `ShareOutputView` — `WireframeShare.swift`; PNG 크기 확인 및 파일 앱 저장 경로 선택. 실패 시 임시 갤러리에 보존·재시도 안내. Photos 직접 저장 및 동영상 출력은 미구현 |
+| [x] | `Q03` | 이 기록의 공유 콘텐츠 | `ShareGallery`/`ShareWorkspace` — `WireframeShare.swift`; 세션 메모리 갤러리·삭제, 기록당 64MB 임시 저장 한도, 로그아웃·계정 전환 시 비움 |
 
 ### 프로필 · 설정 · 알림 · `Profile / Settings / Notifications`
 

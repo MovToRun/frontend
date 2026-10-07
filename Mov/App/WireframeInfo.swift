@@ -81,7 +81,7 @@ extension WireframeRoot {
     case "reset-cancel":go(ui.resetBack)
     case "consent-reviewed":if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
     case "local-login":ui.profile.logged=true;ui.save();go("H00")
-    case "switch-local-account":if reviewTools{ui.switchLocalAccount(store)}
+    case "switch-local-account":if reviewTools{ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
     case "save":saveRun()
     case "delete-week":store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
     case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
