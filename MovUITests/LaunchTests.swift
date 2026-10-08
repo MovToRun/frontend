@@ -23,6 +23,21 @@ import UIKit
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index+1]>180 && bytes[index]<160 && bytes[index+2]<180 && bytes[index+3]>200}
         }
     }
+    func containsDarkPixel(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
+        }
+    }
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]
@@ -32,15 +47,25 @@ import UIKit
             XCTAssertTrue(headerMarks.first?.waitForExistence(timeout:5) ?? false,"\(screen) keeps its source-defined header logo")
             let screenshot=app.screenshot().image
             let headerMarkRegion=CGRect(x:8,y:40,width:48,height:48)
-            XCTAssertTrue(headerMarks.contains{$0.frame.intersects(headerMarkRegion)},"\(screen) header logo must be in the leading header slot")
+            // The final Review52 cascade overrides the initial dark-tile rule: 30×30, transparent, inset 0.
+            let visibleHeaderMark=headerMarks.first{$0.frame.intersects(headerMarkRegion)}
+            XCTAssertNotNil(visibleHeaderMark,"\(screen) header logo must be in the leading header slot")
+            if let visibleHeaderMark {
+                XCTAssertEqual(visibleHeaderMark.frame.width,30,accuracy:0.5,"The final header mark is 30pt wide")
+                XCTAssertEqual(visibleHeaderMark.frame.height,30,accuracy:0.5,"The final header mark is 30pt high")
+            }
             XCTAssertTrue(containsBrandGreen(in:screenshot,rect:headerMarkRegion),"\(screen) header logo must render from the bundled mask asset")
+            XCTAssertFalse(containsDarkPixel(in:screenshot,rect:headerMarkRegion),"\(screen) header mark must not gain a dark tile")
             if screen == "H00" {
                 let homeTab=app.buttons["tab-2"]
                 XCTAssertEqual(homeTab.label,"홈","The home tab keeps its VoiceOver name")
                 XCTAssertFalse(app.staticTexts["tab-caption-2"].exists,"The home logo has no visible caption")
                 let tabMark=app.images.matching(identifier:"homeTabBrandMark").firstMatch
                 XCTAssertTrue(tabMark.waitForExistence(timeout:5),"The centered home tab uses the source brand mark")
-                XCTAssertTrue(containsBrandGreen(in:app.screenshot().image,rect:tabMark.frame),"The tab asset must visibly render; an empty CSS-mask-like capture is not acceptable")
+                let homeMarkRegion=CGRect(x:homeTab.frame.midX-16,y:homeTab.frame.minY+7,width:32,height:32)
+                let tabScreenshot=app.screenshot().image
+                XCTAssertTrue(containsBrandGreen(in:tabScreenshot,rect:homeMarkRegion),"The 26pt tab asset must visibly render; an empty CSS-mask-like capture is not acceptable")
+                XCTAssertFalse(containsDarkPixel(in:tabScreenshot,rect:homeMarkRegion),"The center mark has no tile background")
             }
             capture(screen+"-brand-mark")
             app.terminate()

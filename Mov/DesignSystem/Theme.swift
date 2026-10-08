@@ -14,7 +14,6 @@ enum ThemePreference: String, CaseIterable, Identifiable {
 enum MovTokens {
     static let brandHex: UInt32 = 0x5EF76D
     static let brand = Color(red: 94 / 255.0, green: 247 / 255.0, blue: 109 / 255.0)
-    static let brandInk = Color(red: 32 / 255.0, green: 41 / 255.0, blue: 37 / 255.0)
     static let onBrand = Color(red: 23 / 255.0, green: 26 / 255.0, blue: 24 / 255.0)
     static let background = Color("Background")
     static let surface = Color("Surface")

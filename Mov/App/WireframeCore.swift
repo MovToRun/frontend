@@ -63,7 +63,7 @@ struct WHeader:View {
     var body:some View {
         HStack {
             if let back { Button(action:back){WBackIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.2,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:44,height:44)}.accessibilityLabel("뒤로") }
-            else if root ? showRootMark : mark {BrandMark(size:root ? 36:28,tile:root).frame(width:root ? 36:28,height:44).accessibilityIdentifier(root ? "rootHeaderBrandMark":"completionBrandMark")}
+            else if root ? showRootMark : mark {BrandMark(size:root ? 30:28).frame(width:root ? 30:28,height:44).accessibilityIdentifier(root ? "rootHeaderBrandMark":"completionBrandMark")}
             else {Color.clear.frame(width:44,height:44)}
             Spacer();trailing
         }.padding(.horizontal,root ? 16:10).frame(height:root ? 64:68)
@@ -189,6 +189,7 @@ enum WProfileValidation {
 }
 enum WRootTab: Int, CaseIterable {
     case points, run, home, community, profile
+    static let homeMarkSize: CGFloat = 26
 
     var title: String {
         switch self {
@@ -376,7 +377,7 @@ struct WireframeRoot:View {
                                 Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)
                             }
                         }
-                        if tab == .home { BrandMark(size:26).accessibilityIdentifier("homeTabBrandMark") }
+                        if tab == .home { BrandMark(size:WRootTab.homeMarkSize).accessibilityIdentifier("homeTabBrandMark") }
                         else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
                         if let caption=tab.caption {

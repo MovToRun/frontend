@@ -31,6 +31,7 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
+        XCTAssertEqual(WRootTab.homeMarkSize, 26, "The source nav-home-symbol is 26×26 with no tile")
     }
 
     func testReview52BrandMarkAssetLoadsAndCanRenderLocally() throws {
