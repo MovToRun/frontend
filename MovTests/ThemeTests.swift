@@ -59,6 +59,34 @@ final class ThemeTests:XCTestCase {
         XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
     }
 
+    func testProfilePhotoTransparentPNGCompositesOnWhiteBeforeCropExport() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=false
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let source=renderer.image{context in
+            UIColor.clear.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+            UIColor(red:1,green:0,blue:0,alpha:1).setFill();context.fill(CGRect(x:64,y:64,width:128,height:128))
+        }
+        let png=try XCTUnwrap(source.pngData())
+        let transparentPNG=try XCTUnwrap(UIImage(data:png))
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:transparentPNG,crop:CGRect(x:0,y:0,width:256,height:256)))
+        let output=try XCTUnwrap(UIImage(data:jpeg)?.cgImage)
+        XCTAssertEqual(output.width,256);XCTAssertEqual(output.height,256)
+
+        var rgba=[UInt8](repeating:0,count:256*256*4)
+        rgba.withUnsafeMutableBytes{bytes in
+            let context=CGContext(data:bytes.baseAddress,width:256,height:256,bitsPerComponent:8,bytesPerRow:256*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(output,in:CGRect(x:0,y:0,width:256,height:256))
+        }
+        let whiteIndex=(12*256+12)*4
+        XCTAssertGreaterThan(rgba[whiteIndex],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+1],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+2],245)
+        let redIndex=(128*256+128)*4
+        XCTAssertGreaterThan(rgba[redIndex],200)
+        XCTAssertLessThan(rgba[redIndex+1],70)
+        XCTAssertLessThan(rgba[redIndex+2],70)
+    }
+
     func testProfilePhotoComplexCropStillFitsReview52StoredPhotoLimit() throws {
         let format=UIGraphicsImageRendererFormat.default();format.scale=1
         let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)

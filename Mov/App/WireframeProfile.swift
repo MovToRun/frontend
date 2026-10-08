@@ -108,9 +108,10 @@ struct WPhotoCrop:View {
     @State private var anchor=CGSize.zero
     @State private var stageSide:CGFloat=340
     @State private var errorMessage=""
-    var body:some View {VStack(spacing:12){Text("원을 직접 움직여 프로필로 사용할 부분을 골라 주세요.\n키보드 방향키로도 움직일 수 있어요. Shift와 함께 누르면 더 크게 이동해요.").font(W.font(15,.semibold));GeometryReader{geo in let side=geo.size.width;let fit=min(side/image.size.width,side/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit);let cropDiameter=WProfilePhotoPolicy.cropDiameter(for:min(displayed.width,displayed.height))
+    var body:some View {VStack(spacing:10){GeometryReader{geo in let side=geo.size.width;let fit=min(side/image.size.width,side/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit);let cropDiameter=WProfilePhotoPolicy.cropDiameter(for:min(displayed.width,displayed.height))
             ZStack{Image(uiImage:image).resizable().scaledToFit().frame(width:side,height:side);WPhotoCropShade(diameter:cropDiameter,offset:point).fill(.black.opacity(0.56),style:FillStyle(eoFill:true));Circle().stroke(.white,lineWidth:2).frame(width:cropDiameter,height:cropDiameter).overlay(alignment:.bottom){Text("↔").font(W.font(19)).foregroundStyle(.white).frame(width:32,height:24).background(.black.opacity(0.48),in:Capsule()).offset(y:-10)}.offset(point).contentShape(Circle()).gesture(DragGesture().onChanged{v in point=WProfilePhotoPolicy.clampedCropCenter(CGSize(width:anchor.width+v.translation.width,height:anchor.height+v.translation.height),displayedSize:displayed,cropDiameter:cropDiameter)}.onEnded{_ in anchor=point;announceCropPosition()}).focusable().onKeyPress(keys:[.leftArrow,.rightArrow,.upArrow,.downArrow]){press in let direction:CGSize;switch press.key{case .leftArrow:direction=CGSize(width:-1,height:0);case .rightArrow:direction=CGSize(width:1,height:0);case .upArrow:direction=CGSize(width:0,height:-1);case .downArrow:direction=CGSize(width:0,height:1);default:return .ignored};moveCrop(direction,step:press.modifiers.contains(.shift) ? 16:4);return .handled}.accessibilityElement().accessibilityLabel("프로필 사진에 사용할 원형 영역").accessibilityHint("드래그하거나 방향키로 이동해요. Shift와 함께 누르면 더 크게 이동해요.").accessibilityValue(cropPositionValue).accessibilityIdentifier("profilePhotoCropCircle").accessibilityAddTraits(.isButton).accessibilityAction(named:Text("왼쪽으로 이동")){moveCrop(CGSize(width:-1,height:0))}.accessibilityAction(named:Text("오른쪽으로 이동")){moveCrop(CGSize(width:1,height:0))}.accessibilityAction(named:Text("위로 이동")){moveCrop(CGSize(width:0,height:-1))}.accessibilityAction(named:Text("아래로 이동")){moveCrop(CGSize(width:0,height:1))}}.frame(width:side,height:side).background(Color(red:32.0/255,green:41.0/255,blue:37.0/255)).clipShape(RoundedRectangle(cornerRadius:14)).onAppear{stageSide=side}
         }.aspectRatio(1,contentMode:.fit).frame(maxWidth:360).frame(maxWidth:.infinity)
+        Text("원을 직접 움직여 프로필로 사용할 부분을 골라 주세요.\n키보드 방향키로도 움직일 수 있어요. Shift와 함께 누르면 더 크게 이동해요.").font(W.font(11)).lineSpacing(6).foregroundStyle(W.muted).multilineTextAlignment(.center).frame(maxWidth:.infinity)
         if !errorMessage.isEmpty{WNotice(text:errorMessage,danger:true)}
         HStack{Button("사진 적용"){let side:CGFloat=stageSide;let fit=min(side/image.size.width,side/image.size.height);let crop=WProfilePhotoPolicy.cropDiameter(for:min(image.size.width*fit,image.size.height*fit));let sourceSide=crop/fit;let center=CGPoint(x:image.size.width/2+point.width/fit,y:image.size.height/2+point.height/fit);let sourceRect=CGRect(x:center.x-sourceSide/2,y:center.y-sourceSide/2,width:sourceSide,height:sourceSide);if let data=WProfilePhotoPolicy.encode(image:image,crop:sourceRect){commit(data)}else{errorMessage="사진 용량을 줄이지 못했어요. 다른 사진을 선택해 주세요."}}.buttonStyle(WButtonStyle());Button("취소",action:cancel).buttonStyle(WButtonStyle(kind:1))}
     }}
@@ -184,7 +185,9 @@ enum WProfilePhotoPolicy {
         let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=true
         let size=CGSize(width:outputEdge,height:outputEdge)
         let renderer=UIGraphicsImageRenderer(size:size,format:format)
-        let normalized=renderer.image{_ in
+        let normalized=renderer.image{context in
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            context.cgContext.fill(CGRect(origin:.zero,size:size))
             let scale=CGFloat(outputEdge)/crop.width
             image.draw(in:CGRect(x:-crop.minX*scale,y:-crop.minY*scale,width:image.size.width*scale,height:image.size.height*scale))
         }

@@ -56,7 +56,7 @@ import XCTest
         app.buttons["홈으로"].tap();tap("tab-4");tap("설정");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap();capture("T05")
     }
     func testNotificationReadAndProfileValidation(){
-        open("M01");tap("알림");let first=app.buttons.matching(NSPredicate(format:"label CONTAINS %@","러닝 목표 안내")).firstMatch;first.tap();capture("N01-read-one");app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].exists)
+        open("M01");tap("알림");let first=app.buttons["notification-0"];XCTAssertTrue(first.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(waitHittable(first,timeout:5),app.debugDescription);XCTAssertTrue(first.label.contains("러닝 목표 안내"),first.debugDescription);first.tap();capture("N01-read-one");app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].exists)
         app.buttons["카드 편집"].tap();let field=app.textFields.firstMatch;field.tap();field.typeText(String(repeating:"가",count:25));app.buttons["저장하기"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].exists);XCTAssertTrue(app.staticTexts["닉네임은 1–20자, 한 줄 소개는 60자 이내로 입력해 주세요."].exists)
         app.buttons["취소"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].exists)
     }
