@@ -17,8 +17,9 @@
 | 대조 완료 | `H04` | 390×790 라이트·다크 HTML/SwiftUI pair 캡처 |
 | 대조 완료 | `R02`, `L01`, `L04`, `B05`, `B06` | PR #11 source/app 캡처 및 독립 Pro Max 검증 |
 | 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
+| 대조 완료 | `H03` | 390×790 원본 화면과 SwiftUI distance/time 캡처 비교. 목표 카드/휠 배치와 행 치수 확인, 휠 테두리·선택 띠·보조 문구 색상 보정 |
 | 남음 | 인증 `E01–E02`, `A02–A23` | `A01` 제외 |
-| 남음 | 홈·목표·러닝 `H02–H03`, `H05–H06`, `H08–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H07 제외. H03은 wheel bounds unit test는 있으나 source/app 시각 대조는 남음 |
+| 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H08–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07 제외 |
 | 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
@@ -82,7 +83,7 @@ PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다
 | [x] | `H00` | 메인 홈 | `home` — WireframeHome.swift |
 | [x] | `H01` | 지도 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
 | [x] | `H02` | 첫 러닝 준비 | `ready` — WireframeHome.swift / WireframeRun.swift |
-| [x] | `H03` | 이번 러닝 목표 | `sessionGoal` — WireframeHome.swift |
+| [x] | `H03` | 이번 러닝 목표 | `sessionGoal` — WireframeHome.swift; Review52 원본 대비 휠 치수·색/보조 문구 보정 및 양 목표 종류/값 보존 검증 |
 | [x] | `H04` | 주간 목표 | `weeklyGoal` — WireframeHome.swift |
 | [x] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
 | [x] | `H06` | 임시 기록 복구 | `informationPage` — WireframeInfo.swift |
