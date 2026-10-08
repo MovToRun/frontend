@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 19527)
-Total output lines: 942
-
 import XCTest
 import UIKit
 @MainActor final class LaunchTests:XCTestCase {
@@ -453,7 +450,92 @@ extension LaunchTests {
             app.terminate()
         }
     }
-    func te…1527 tokens truncated…0))
+    func testAccountRemovalConfirmationAndRetry() {
+        open("T11")
+        let acknowledge=app.buttons["accountDeletionImpactAcknowledgement"]
+        let confirm=app.buttons["confirmAccountDeletion"]
+        XCTAssertTrue(app.descendants(matching:.any)["accountDeletionImpactNotice"].exists)
+        XCTAssertTrue(app.staticTexts["삭제 흐름의 영향 설명을 확인했어요"].exists)
+        XCTAssertFalse(confirm.isEnabled)
+        acknowledge.tap()
+        XCTAssertTrue(acknowledge.isSelected)
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-T16"].waitForExistence(timeout:5))
+        tap("오류 응답 확인 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T11"].waitForExistence(timeout:5))
+        XCTAssertFalse(acknowledge.isSelected);XCTAssertFalse(confirm.isEnabled)
+        tap("계정 유지");XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+    }
+    func testEmailManageCancelReturnsToProviders() {
+        open("T05");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("취소")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5))
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5))
+    }
+}
+
+
+extension LaunchTests {
+    func testSingleGoalWheelBothThemes() {
+        for theme in ["light","dark"]{
+            app.launchArguments=["-wire-screen","H03","-wire-fixture","-wire-reset","-wire-review-size","-appearance",theme];app.launch()
+            XCTAssertTrue(app.buttons["goal-distance"].waitForExistence(timeout:10));app.buttons["goal-distance"].tap()
+            let distance=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
+            XCTAssertTrue(distance.waitForExistence(timeout:5));XCTAssertEqual(distance.value as? String,"5 km");capture("H03-distance-"+theme)
+            distance.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
+            XCTAssertEqual(distance.value as? String,"5.5 km")
+            app.buttons["goal-time"].tap();let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+            XCTAssertTrue(time.waitForExistence(timeout:5));XCTAssertEqual(time.value as? String,"30분")
+            for _ in 0..<3{time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()}
+            XCTAssertEqual(time.value as? String,"1시간");capture("H03-time-"+theme)
+            app.buttons["goal-none"].tap();XCTAssertFalse(time.exists);capture("H03-none-"+theme)
+            app.terminate()
+        }
+    }
+    func testProviderCompletionBackAndEmailEscape() {
+        open("T01");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap()
+        func provider(_ name:String){app.buttons.matching(NSPredicate(format:"label CONTAINS %@",name)).firstMatch.tap()}
+        provider("Google");tap("카카오로 재확인 · 예시");tap("Google 인증 완료 · 예시");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5));tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap()
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("취소")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("가상 예시값 채우기");app.buttons["authPrimary"].tap();tap("로그인 수단 확인")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("뒤로")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("취소")
+        provider("Apple");tap("카카오로 재확인 · 예시");tap("Apple 인증 완료 · 예시");tap("로그인 수단 확인");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5));capture("Provider-flow-returned-to-settings")
+    }
+}
+
+extension LaunchTests {
+    func testGoalWheelDragAndBounds() {
+        open("H03");tap("goal-distance")
+        let wheel=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
+        func drag(_ element:XCUIElement,_ up:Bool,_ speed:XCUIGestureVelocity){
+            let a=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.92:0.08))
+            let b=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.08:0.92))
+            a.press(forDuration:0.05,thenDragTo:b,withVelocity:speed,thenHoldForDuration:0)
+        }
+        drag(wheel,true,.slow);XCTAssertNotEqual(wheel.value as? String,"5 km")
+        drag(wheel,true,.fast);capture("H03-fast-flick")
+        drag(wheel,false,.fast);capture("H03-reverse")
+        for _ in 0..<10{drag(wheel,false,.fast)}
+        XCTAssertEqual(wheel.value as? String,"1 km")
+        drag(wheel,false,.slow);XCTAssertEqual(wheel.value as? String,"1 km")
+        tap("goal-time");let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+        for _ in 0..<3{drag(time,false,.fast)}
+        XCTAssertEqual(time.value as? String,"10분")
+        for _ in 0..<36{drag(time,true,.fast)}
+        XCTAssertEqual(time.value as? String,"6시간");capture("H03-time-upper-bound")
+        drag(time,true,.slow);XCTAssertEqual(time.value as? String,"6시간")
+        tap("goal-distance");XCTAssertEqual(wheel.value as? String,"1 km")
+    }
+    func testEmptyRecordListAndLookupFailureAreDistinct() {
+        for screen in ["L02","L03"] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-wire-review-size","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
             if screen=="L02" {
                 XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].waitForExistence(timeout:5))
                 XCTAssertFalse(app.otherElements["recordLookupFailure"].exists)
@@ -538,7 +620,7 @@ extension LaunchTests {
             let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
             XCTAssertTrue(week.waitForExistence(timeout:10));let frame=week.frame
             XCTAssertEqual(frame.width,165,accuracy:1,"The period selector spans the 342pt source content width with a 4pt gap and 4pt outer inset")
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","4.82")).firstMatch.exists)
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@", "4.82")).firstMatch.exists)
             XCTAssertTrue(app.staticTexts["30:08"].exists)
             month.tap();XCTAssertTrue(waitForLayout({month.isSelected}));XCTAssertEqual(week.frame,frame)
             XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists)
