@@ -358,7 +358,7 @@ struct WireframeRoot:View {
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
         if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
-        if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=ui.profile.photo}
+        if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)}
         if id=="T02"{ui.weight=ui.profile.weight}
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
     }

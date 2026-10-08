@@ -24,10 +24,10 @@ final class ThemeTests:XCTestCase {
     }
 
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
-        XCTAssertTrue(WProfilePhotoPolicy.accepts([.jpeg]))
-        XCTAssertTrue(WProfilePhotoPolicy.accepts([.png]))
-        XCTAssertTrue(WProfilePhotoPolicy.accepts([.webP]))
-        XCTAssertFalse(WProfilePhotoPolicy.accepts([.heic]))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.webP))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(.heic))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes+1))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:0))
@@ -35,6 +35,7 @@ final class ThemeTests:XCTestCase {
         XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 8_193, height: 1))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 5_000, height: 4_001))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 0, height: 1))
+        XCTAssertEqual(WProfilePhotoPolicy.cropDiameter(for:300),300/1.35,accuracy:0.001)
     }
 
     func testProfilePhotoCropExportsSquareJpegWithinReview52Limit() throws {
@@ -50,6 +51,53 @@ final class ThemeTests:XCTestCase {
         XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
         XCTAssertEqual(data.prefix(3),Data([0xFF,0xD8,0xFF]))
         XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
+    }
+
+    func testProfilePhotoComplexCropStillFitsReview52StoredPhotoLimit() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            for y in 0..<128 { for x in 0..<128 {
+                let seed=(x*73+y*151+x*y*17)%251
+                UIColor(red:CGFloat(seed)/250,green:CGFloat((seed*37)%251)/250,blue:CGFloat((seed*97)%251)/250,alpha:1).setFill()
+                context.fill(CGRect(x:x*2,y:y*2,width:2,height:2))
+            }}
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:0,y:0,width:256,height:256)))
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertNotNil(WProfilePhotoPolicy.sanitizeStored(data))
+    }
+
+    func testProfilePhotoInspectsBytesBeforeDecodeAndSanitizesStoredPhotos() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            UIColor.systemIndigo.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+        }
+        let jpeg=try XCTUnwrap(image.jpegData(compressionQuality:0.8))
+        let png=try XCTUnwrap(image.pngData())
+        let jpegInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
+        XCTAssertTrue(jpegInfo.type.conforms(to:.jpeg))
+        XCTAssertEqual(jpegInfo.width,256);XCTAssertEqual(jpegInfo.height,256)
+        let pngInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(png))
+        XCTAssertTrue(pngInfo.type.conforms(to:.png))
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(jpeg),jpeg)
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(png),png)
+        let directory=FileManager.default.temporaryDirectory
+        let validURL=directory.appendingPathComponent(UUID().uuidString)
+        let invalidURL=directory.appendingPathComponent(UUID().uuidString)
+        let oversizedURL=directory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:validURL);try? FileManager.default.removeItem(at:invalidURL);try? FileManager.default.removeItem(at:oversizedURL)}
+        try jpeg.write(to:validURL)
+        try Data([0,1,2,3,4]).write(to:invalidURL)
+        try Data(repeating:0,count:WProfilePhotoPolicy.maximumInputBytes+1).write(to:oversizedURL)
+        XCTAssertEqual(try WProfilePhotoPolicy.validatedBytes(at:validURL),jpeg)
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:invalidURL))
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:oversizedURL))
+        XCTAssertNil(WProfilePhotoPolicy.inspect(Data([0,1,2,3,4])))
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(Data(repeating:0,count:WProfilePhotoPolicy.maximumOutputBytes+1)))
+        let large=UIGraphicsImageRenderer(size:CGSize(width:512,height:512),format:format).image{_ in UIColor.black.setFill();UIRectFill(CGRect(x:0,y:0,width:512,height:512))}
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(large.jpegData(compressionQuality:0.8)))
     }
 
     @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {
