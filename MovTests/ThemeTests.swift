@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import UniformTypeIdentifiers
 @testable import Mov
 
 private struct V1PointEntryFixture: Codable {
@@ -20,6 +21,117 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
+    }
+
+    func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.webP))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(.heic))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes+1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:0))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(width: 8_192, height: 2_000))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 8_193, height: 1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 5_000, height: 4_001))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 0, height: 1))
+        XCTAssertEqual(WProfilePhotoPolicy.cropDiameter(for:300),300/1.35,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(CGSize(width:500,height:-500),displayedSize:CGSize(width:300,height:200),cropDiameter:100),CGSize(width:100,height:-50))
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(.zero,displayedSize:CGSize(width:300,height:200),cropDiameter:100),.zero)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:-50,displayedSide:200,cropDiameter:100),0,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:0,displayedSide:200,cropDiameter:100),50,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:50,displayedSide:200,cropDiameter:100),100,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:0,displayedSide:100,cropDiameter:100),50,accuracy:0.001)
+    }
+
+    func testProfilePhotoCropExportsSquareJpegWithinReview52Limit() throws {
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:600,height:400))
+        let image=renderer.image{context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x:0,y:0,width:600,height:400))
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:100,y:0,width:400,height:400)))
+        let output=try XCTUnwrap(UIImage(data:data)?.cgImage)
+        XCTAssertEqual(output.width,256)
+        XCTAssertEqual(output.height,256)
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertEqual(data.prefix(3),Data([0xFF,0xD8,0xFF]))
+        XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
+    }
+
+    func testProfilePhotoTransparentPNGCompositesOnWhiteBeforeCropExport() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=false
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let source=renderer.image{context in
+            UIColor.clear.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+            UIColor(red:1,green:0,blue:0,alpha:1).setFill();context.fill(CGRect(x:64,y:64,width:128,height:128))
+        }
+        let png=try XCTUnwrap(source.pngData())
+        let transparentPNG=try XCTUnwrap(UIImage(data:png))
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:transparentPNG,crop:CGRect(x:0,y:0,width:256,height:256)))
+        let output=try XCTUnwrap(UIImage(data:jpeg)?.cgImage)
+        XCTAssertEqual(output.width,256);XCTAssertEqual(output.height,256)
+
+        var rgba=[UInt8](repeating:0,count:256*256*4)
+        rgba.withUnsafeMutableBytes{bytes in
+            let context=CGContext(data:bytes.baseAddress,width:256,height:256,bitsPerComponent:8,bytesPerRow:256*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(output,in:CGRect(x:0,y:0,width:256,height:256))
+        }
+        let whiteIndex=(12*256+12)*4
+        XCTAssertGreaterThan(rgba[whiteIndex],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+1],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+2],245)
+        let redIndex=(128*256+128)*4
+        XCTAssertGreaterThan(rgba[redIndex],200)
+        XCTAssertLessThan(rgba[redIndex+1],70)
+        XCTAssertLessThan(rgba[redIndex+2],70)
+    }
+
+    func testProfilePhotoComplexCropStillFitsReview52StoredPhotoLimit() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            for y in 0..<128 { for x in 0..<128 {
+                let seed=(x*73+y*151+x*y*17)%251
+                UIColor(red:CGFloat(seed)/250,green:CGFloat((seed*37)%251)/250,blue:CGFloat((seed*97)%251)/250,alpha:1).setFill()
+                context.fill(CGRect(x:x*2,y:y*2,width:2,height:2))
+            }}
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:0,y:0,width:256,height:256)))
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertNotNil(WProfilePhotoPolicy.sanitizeStored(data))
+    }
+
+    func testProfilePhotoInspectsBytesBeforeDecodeAndSanitizesStoredPhotos() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            UIColor.systemIndigo.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+        }
+        let jpeg=try XCTUnwrap(image.jpegData(compressionQuality:0.8))
+        let png=try XCTUnwrap(image.pngData())
+        let jpegInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
+        XCTAssertTrue(jpegInfo.type.conforms(to:.jpeg))
+        XCTAssertEqual(jpegInfo.width,256);XCTAssertEqual(jpegInfo.height,256)
+        let pngInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(png))
+        XCTAssertTrue(pngInfo.type.conforms(to:.png))
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(jpeg),jpeg)
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(png),png)
+        let directory=FileManager.default.temporaryDirectory
+        let validURL=directory.appendingPathComponent(UUID().uuidString)
+        let invalidURL=directory.appendingPathComponent(UUID().uuidString)
+        let oversizedURL=directory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:validURL);try? FileManager.default.removeItem(at:invalidURL);try? FileManager.default.removeItem(at:oversizedURL)}
+        try jpeg.write(to:validURL)
+        try Data([0,1,2,3,4]).write(to:invalidURL)
+        try Data(repeating:0,count:WProfilePhotoPolicy.maximumInputBytes+1).write(to:oversizedURL)
+        XCTAssertEqual(try WProfilePhotoPolicy.validatedBytes(at:validURL),jpeg)
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:invalidURL))
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:oversizedURL))
+        XCTAssertNil(WProfilePhotoPolicy.inspect(Data([0,1,2,3,4])))
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(Data(repeating:0,count:WProfilePhotoPolicy.maximumOutputBytes+1)))
+        let large=UIGraphicsImageRenderer(size:CGSize(width:512,height:512),format:format).image{_ in UIColor.black.setFill();UIRectFill(CGRect(x:0,y:0,width:512,height:512))}
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(large.jpegData(compressionQuality:0.8)))
     }
 
     @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {

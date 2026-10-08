@@ -270,7 +270,7 @@ enum WRootTab: Int, CaseIterable {
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
-struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var body:some View {Group{if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize)}}
+struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var body:some View {Group{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport"){WireframeRoot().frame(width:390,height:790).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize)}}
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
@@ -358,7 +358,7 @@ struct WireframeRoot:View {
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
         if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
-        if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=ui.profile.photo}
+        if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)}
         if id=="T02"{ui.weight=ui.profile.weight}
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
     }
