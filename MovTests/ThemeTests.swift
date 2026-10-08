@@ -48,6 +48,14 @@ final class ThemeTests:XCTestCase {
         XCTAssertNotNil(rendered.cgImage, "The bundled logo asset must draw into a local SwiftUI-sized surface")
     }
 
+    func testReview52RecordExampleMarkerKeepsLegacyLocalRecordsReadable() throws {
+        let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1}"#.utf8)
+        let decoded = try JSONDecoder().decode(RunRecord.self, from: legacy)
+        XCTAssertNil(decoded.isExample, "Records saved before the Review52 fixture marker decode without migration")
+        let fixture = RunRecord(date: WReviewClock.referenceDate, title: "fixture", seconds: 1, kilometers: 1, isExample: true)
+        XCTAssertTrue(fixture.isExample == true)
+    }
+
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
