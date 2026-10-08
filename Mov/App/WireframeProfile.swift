@@ -114,7 +114,7 @@ struct WPhotoCrop:View {
         if !errorMessage.isEmpty{WNotice(text:errorMessage,danger:true)}
         HStack{Button("사진 적용"){let side:CGFloat=stageSide;let fit=min(side/image.size.width,side/image.size.height);let crop=WProfilePhotoPolicy.cropDiameter(for:min(image.size.width*fit,image.size.height*fit));let sourceSide=crop/fit;let center=CGPoint(x:image.size.width/2+point.width/fit,y:image.size.height/2+point.height/fit);let sourceRect=CGRect(x:center.x-sourceSide/2,y:center.y-sourceSide/2,width:sourceSide,height:sourceSide);if let data=WProfilePhotoPolicy.encode(image:image,crop:sourceRect){commit(data)}else{errorMessage="사진 용량을 줄이지 못했어요. 다른 사진을 선택해 주세요."}}.buttonStyle(WButtonStyle());Button("취소",action:cancel).buttonStyle(WButtonStyle(kind:1))}
     }}
-    private var cropPositionValue:String {let fit=min(stageSide/image.size.width,stageSide/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit);let diameter=WProfilePhotoPolicy.cropDiameter(for:min(displayed.width,displayed.height));let maxX=max(1,displayed.width/2-diameter/2);let maxY=max(1,displayed.height/2-diameter/2);if abs(point.width)<1 && abs(point.height)<1{return "가운데"};return "가로 \(Int(point.width/maxX*100))%, 세로 \(Int(point.height/maxY*100))% 이동"}
+    private var cropPositionValue:String {let fit=min(stageSide/image.size.width,stageSide/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit);let diameter=WProfilePhotoPolicy.cropDiameter(for:min(displayed.width,displayed.height));let x=WProfilePhotoPolicy.cropPositionPercent(offset:point.width,displayedSide:displayed.width,cropDiameter:diameter);let y=WProfilePhotoPolicy.cropPositionPercent(offset:point.height,displayedSide:displayed.height,cropDiameter:diameter);return "선택 영역: 가로 \(Int(x.rounded()))%, 세로 \(Int(y.rounded()))%"}
     private func moveCrop(_ direction:CGSize,step:CGFloat=4){let fit=min(stageSide/image.size.width,stageSide/image.size.height);let displayed=CGSize(width:image.size.width*fit,height:image.size.height*fit);let diameter=WProfilePhotoPolicy.cropDiameter(for:min(displayed.width,displayed.height));point=WProfilePhotoPolicy.clampedCropCenter(CGSize(width:point.width+direction.width*step,height:point.height+direction.height*step),displayedSize:displayed,cropDiameter:diameter);anchor=point}
 }
 
@@ -154,6 +154,13 @@ enum WProfilePhotoPolicy {
     static func clampedCropCenter(_ center:CGSize,displayedSize:CGSize,cropDiameter:CGFloat)->CGSize {
         let half=cropDiameter/2
         return CGSize(width:min(displayedSize.width/2-half,max(-displayedSize.width/2+half,center.width)),height:min(displayedSize.height/2-half,max(-displayedSize.height/2+half,center.height)))
+    }
+
+    static func cropPositionPercent(offset:CGFloat,displayedSide:CGFloat,cropDiameter:CGFloat)->CGFloat {
+        let maximumOffset=max(0,displayedSide/2-cropDiameter/2)
+        guard maximumOffset>0 else{return 50}
+        let clamped=min(maximumOffset,max(-maximumOffset,offset))
+        return (clamped+maximumOffset)/(2*maximumOffset)*100
     }
 
     static func sanitizeStored(_ data:Data?)->Data? {
