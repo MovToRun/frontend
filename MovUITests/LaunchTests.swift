@@ -648,6 +648,15 @@ extension LaunchTests {
             let recordedDay=app.buttons.matching(NSPredicate(format:"label CONTAINS %@ AND label CONTAINS %@","9월 29일","러닝 기록 있음")).firstMatch
             XCTAssertTrue(recordedDay.waitForExistence(timeout:5));recordedDay.tap()
             let selectedTitle=app.staticTexts["calendarSelectedDayTitle"],selectedCount=app.staticTexts["calendarSelectedDayCount"]
+            let pageScroll=app.scrollViews.firstMatch
+            XCTAssertTrue(pageScroll.exists)
+            var previousCalendarY=calendarMonth.frame.minY
+            for _ in 0..<5 where !selectedTitle.exists || !selectedTitle.isHittable {
+                pageScroll.swipeUp()
+                let currentCalendarY=calendarMonth.frame.minY
+                XCTAssertLessThan(currentCalendarY,previousCalendarY,"The statistics page must scroll toward selected-day details")
+                previousCalendarY=currentCalendarY
+            }
             XCTAssertTrue(selectedTitle.waitForExistence(timeout:5))
             XCTAssertEqual(selectedTitle.label,"9월 29일 기록")
             XCTAssertEqual(selectedCount.label,"1회")
