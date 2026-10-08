@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 19363)
-Total output lines: 936
-
 import XCTest
 import UIKit
 @MainActor final class LaunchTests:XCTestCase {
@@ -395,7 +392,192 @@ extension LaunchTests {
     func testLocalRecoveryPrivacyAndCancellationRoutes() {
         let cases:[(String,String,String)]=[
             ("A04","다시 시도","A01"),("H10","목표 유지","H04"),("H11","확인했어요","H07"),
-  …3363 tokens truncated…e(app.descendants(matching:.any)["shareGalleryEmpty"].waitForExistence(timeout:5))
+            ("P01","위치 권한 허용 · 예시","R01"),("P02","설정 안내 보기","P04"),("P03","홈으로","H01"),
+            ("P04","변경하지 않고 돌아오기","H01"),("P05","공간 확보 후 재시도 · 예시","H01"),
+            ("R09","일시정지로 돌아가기","R04"),("R10","정지된 기록 확인","R04"),("R11","기록 유지","R04"),
+            ("R12","빈 세션 닫기","R11"),("S03","임시 기록 확인","H06"),("S04","기록 보기","L04"),
+            ("S05","홈으로","H00"),("L03","다시 불러오기","L01"),("C01","내 러닝 카드 보기","M01"),
+            ("T07","카카오로 로그인","H00"),("T10","계속 사용하기","T01"),("T12","로그인 화면 보기","A01"),
+            ("T13","기기 데모 기록 삭제","L02"),("T14","설정으로 돌아가기","T01"),("T16","완료 응답 확인 · 예시","T12")
+        ]
+        for (screen,label,destination) in cases {
+            open(screen);tap(label)
+            XCTAssertTrue(app.descendants(matching:.any)["screen-"+destination].waitForExistence(timeout:5),screen+" → "+destination)
+            app.terminate()
+        }
+    }
+    func testGradeProgressAndMonthlyCalendar() {
+        open("M01");tap("등급 기준")
+        XCTAssertTrue(app.staticTexts["새싹러너"].exists)
+        XCTAssertTrue(app.staticTexts["누적 거리"].exists)
+        XCTAssertTrue(app.staticTexts["활동일"].exists)
+        capture("M01-two-progress-and-grades")
+        app.terminate();open("H07");tap("이번 달");tap("이전 달");tap("다음 달")
+        XCTAssertTrue(app.buttons["이전 달"].exists);capture("H07-month-calendar")
+    }
+}
+
+// Offline account regression: never enters or stores a real person's credentials.
+extension LaunchTests {
+    func testAuthIndependentRevealAndOTPBackClearsChallenge() {
+        open("A07");tap("가상 예시값 채우기")
+        XCTAssertEqual(app.secureTextFields.count,2)
+        tap("auth-reveal-auth-password")
+        XCTAssertEqual(app.secureTextFields.count,1)
+        XCTAssertEqual(app.buttons["auth-reveal-auth-password"].label,"비밀번호 숨기기")
+        tap("authPrimary");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.secureTextFields.count,2)
+        tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].exists)
+        tap("가상 예시값 채우기");tap("authPrimary");tap("가입 취소")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+    func testSocialReloginAndConsentPartialValidationBothThemes() {
+        for theme in ["light","dark"] {
+            app.launchArguments=["-wire-fixture","-wire-reset","-appearance",theme]
+            app.launch();XCTAssertTrue(app.buttons["tab-4"].waitForExistence(timeout:10))
+            tap("tab-4");tap("설정");tap("로그아웃");tap("로그아웃");tap("카카오로 로그인");tap("인증 성공 · 예시")
+            XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5))
+            tap("tab-4");tap("설정");tap("로그아웃");tap("로그아웃");tap("Google로 로그인");tap("인증 오류 · 예시");tap("다시 시도")
+            tap("Google로 로그인");tap("인증 취소")
+            tap("Google로 로그인");tap("인증 성공 · 예시")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+            app.buttons.matching(identifier:"내용 확인").element(boundBy:1).tap();tap("확인했어요");tap("동의하고 계속")
+            XCTAssertTrue(app.staticTexts["필수 항목을 모두 확인해 주세요."].exists)
+            app.staticTexts["이용약관 동의 (필수)"].tap();tap("모두 동의하고 계속")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5));capture("A03-consents-"+theme)
+            app.terminate()
+        }
+    }
+    func testAccountRemovalConfirmationAndRetry() {
+        open("T11")
+        let acknowledge=app.buttons["accountDeletionImpactAcknowledgement"]
+        let confirm=app.buttons["confirmAccountDeletion"]
+        XCTAssertTrue(app.descendants(matching:.any)["accountDeletionImpactNotice"].exists)
+        XCTAssertTrue(app.staticTexts["삭제 흐름의 영향 설명을 확인했어요"].exists)
+        XCTAssertFalse(confirm.isEnabled)
+        acknowledge.tap()
+        XCTAssertTrue(acknowledge.isSelected)
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-T16"].waitForExistence(timeout:5))
+        tap("오류 응답 확인 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T11"].waitForExistence(timeout:5))
+        XCTAssertFalse(acknowledge.isSelected);XCTAssertFalse(confirm.isEnabled)
+        tap("계정 유지");XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+    }
+    func testEmailManageCancelReturnsToProviders() {
+        open("T05");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("취소")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5))
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5))
+    }
+}
+
+
+extension LaunchTests {
+    func testSingleGoalWheelBothThemes() {
+        for theme in ["light","dark"]{
+            app.launchArguments=["-wire-screen","H03","-wire-fixture","-wire-reset","-wire-review-size","-appearance",theme];app.launch()
+            XCTAssertTrue(app.buttons["goal-distance"].waitForExistence(timeout:10));app.buttons["goal-distance"].tap()
+            let distance=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
+            XCTAssertTrue(distance.waitForExistence(timeout:5));XCTAssertEqual(distance.value as? String,"5 km");capture("H03-distance-"+theme)
+            distance.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
+            XCTAssertEqual(distance.value as? String,"5.5 km")
+            app.buttons["goal-time"].tap();let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+            XCTAssertTrue(time.waitForExistence(timeout:5));XCTAssertEqual(time.value as? String,"30분")
+            for _ in 0..<3{time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()}
+            XCTAssertEqual(time.value as? String,"1시간");capture("H03-time-"+theme)
+            app.buttons["goal-none"].tap();XCTAssertFalse(time.exists);capture("H03-none-"+theme)
+            app.terminate()
+        }
+    }
+    func testProviderCompletionBackAndEmailEscape() {
+        open("T01");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap()
+        func provider(_ name:String){app.buttons.matching(NSPredicate(format:"label CONTAINS %@",name)).firstMatch.tap()}
+        provider("Google");tap("카카오로 재확인 · 예시");tap("Google 인증 완료 · 예시");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5));tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap()
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("취소")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("가상 예시값 채우기");app.buttons["authPrimary"].tap();tap("로그인 수단 확인")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("뒤로")
+        provider("이메일");tap("카카오로 재확인 · 예시");tap("취소")
+        provider("Apple");tap("카카오로 재확인 · 예시");tap("Apple 인증 완료 · 예시");tap("로그인 수단 확인");tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5));capture("Provider-flow-returned-to-settings")
+    }
+}
+
+extension LaunchTests {
+    func testGoalWheelDragAndBounds() {
+        open("H03");tap("goal-distance")
+        let wheel=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
+        func drag(_ element:XCUIElement,_ up:Bool,_ speed:XCUIGestureVelocity){
+            let a=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.92:0.08))
+            let b=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.08:0.92))
+            a.press(forDuration:0.05,thenDragTo:b,withVelocity:speed,thenHoldForDuration:0)
+        }
+        drag(wheel,true,.slow);XCTAssertNotEqual(wheel.value as? String,"5 km")
+        drag(wheel,true,.fast);capture("H03-fast-flick")
+        drag(wheel,false,.fast);capture("H03-reverse")
+        for _ in 0..<10{drag(wheel,false,.fast)}
+        XCTAssertEqual(wheel.value as? String,"1 km")
+        drag(wheel,false,.slow);XCTAssertEqual(wheel.value as? String,"1 km")
+        tap("goal-time");let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+        for _ in 0..<3{drag(time,false,.fast)}
+        XCTAssertEqual(time.value as? String,"10분")
+        for _ in 0..<36{drag(time,true,.fast)}
+        XCTAssertEqual(time.value as? String,"6시간");capture("H03-time-upper-bound")
+        drag(time,true,.slow);XCTAssertEqual(time.value as? String,"6시간")
+        tap("goal-distance");XCTAssertEqual(wheel.value as? String,"1 km")
+    }
+    func testEmptyRecordListAndLookupFailureAreDistinct() {
+        for screen in ["L02","L03"] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-wire-review-size","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+            if screen=="L02" {
+                XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].waitForExistence(timeout:5))
+                XCTAssertFalse(app.otherElements["recordLookupFailure"].exists)
+            } else {
+                XCTAssertTrue(app.descendants(matching:.any)["recordLookupFailure"].waitForExistence(timeout:5))
+                XCTAssertFalse(app.staticTexts["아직 러닝 기록이 없어요"].exists)
+                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","0건이라고 단정하지 않아요")).firstMatch.exists)
+            }
+        }
+    }
+
+    func testInvalidRecordDetailsShowOnlyRecordedExclusionReason() {
+        open("S05")
+        tap("기록 보기")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5))
+        tap("유효 구간과 원본 기록")
+        XCTAssertTrue(app.staticTexts["GPS 수신 실패 예시"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","임의로 분류하지 않아요")).firstMatch.exists)
+    }
+
+    func testShareImageCreationGalleryAndDelete() {
+        app.launchArguments=["-wire-screen","Q01","-wire-fixture","-wire-reset","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.buttons["shareCreateImage"].exists);XCTAssertTrue(waitHittable(app.buttons["shareFormatStory"],timeout:10),app.debugDescription);app.buttons["shareFormatStory"].tap();app.swipeUp();tap("shareSelect-route")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","코스 색")).firstMatch.exists)
+        tap("shareSelect-metrics");XCTAssertTrue(app.buttons["shareCreateImage"].exists)
+        tap("shareCreateImage");XCTAssertTrue(app.descendants(matching:.any)["screen-Q02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["shareOutputPreview"].waitForExistence(timeout:5))
+        let outputDetails=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","PNG ·")).firstMatch
+        XCTAssertTrue(outputDetails.waitForExistence(timeout:5),app.debugDescription)
+        let dimensions=outputDetails.label.components(separatedBy:" · ").last?.components(separatedBy:" px").first?.components(separatedBy:" × ") ?? []
+        XCTAssertEqual(dimensions.count,2,outputDetails.label)
+        if dimensions.count==2,let width=Double(dimensions[0]),let height=Double(dimensions[1]) {
+            XCTAssertEqual(width/height,9.0/16.0,accuracy:0.002,outputDetails.label)
+            XCTAssertLessThanOrEqual(width,1080,outputDetails.label)
+            XCTAssertLessThanOrEqual(height,1920,outputDetails.label)
+        }
+        if let bytes=outputDetails.label.components(separatedBy:" · ").dropFirst().first.flatMap(Int.init){XCTAssertLessThanOrEqual(bytes,2*1024*1024)}
+        app.swipeUp();tap("shareOpenGallery");XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:5))
+        let remove=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","deleteShare-")).firstMatch
+        XCTAssertTrue(remove.waitForExistence(timeout:5));remove.tap();app.alerts.buttons["삭제"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["shareGalleryEmpty"].waitForExistence(timeout:5))
         capture("Q03-empty-after-delete")
     }
 
