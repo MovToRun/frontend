@@ -20,6 +20,19 @@ enum WPointCategory: String, CaseIterable, Identifiable, Equatable {
     var id: String { rawValue }
 }
 
+enum WPointArtworkGeometry {
+    static let listingAspect: CGFloat = 1.16
+    static let detailAspect: CGFloat = 1.35
+
+    static func cardSize(in container: CGSize, large: Bool) -> CGSize {
+        let horizontalInset: CGFloat = large ? 38 : 12
+        let verticalInset: CGFloat = large ? 42 : 17
+        let width = max(0, container.width - horizontalInset * 2)
+        let height = min(width / 1.65, max(0, container.height - verticalInset * 2))
+        return CGSize(width: width, height: height)
+    }
+}
+
 struct WPointProduct: Identifiable, Equatable {
     let id: String
     let name: String
@@ -254,7 +267,7 @@ extension WireframeRoot {
                         ForEach(visiblePointProducts) { product in
                             Button { ui.selectedPointProductID = product.id; go("B06") } label: {
                                 VStack(alignment: .leading, spacing: 7) {
-                                    WPointProductArtwork(product: product).aspectRatio(1.16, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
+                                    WPointProductArtwork(product: product).aspectRatio(WPointArtworkGeometry.listingAspect, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
                                     Text(product.kind).font(W.font(11)).foregroundStyle(W.muted)
                                     Text(product.name).font(W.font(16, .semibold)).lineLimit(1)
                                     HStack(alignment: .firstTextBaseline, spacing: 4) { Text("\(product.price.formatted())").font(W.font(15, .semibold)); Text("포인트").font(W.font(11)) }
@@ -372,7 +385,7 @@ extension WireframeRoot {
         let enough = pointsStore.canPurchase(product)
         return WPage(title: "아이템", back: back) {
             if pointsStore.dataUnavailable { pointDataUnavailableNotice }
-            WPointProductArtwork(product: product).aspectRatio(1.35, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
+            WPointProductArtwork(product: product, large: true).aspectRatio(WPointArtworkGeometry.detailAspect, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
                 .accessibilityIdentifier("pointProductArtwork")
             Text(product.name).font(W.font(22, .semibold))
             WText(text: product.kind, small: true)
@@ -480,35 +493,78 @@ private struct WPointsMark: View {
 
 private struct WPointProductArtwork: View {
     let product: WPointProduct
+    var large = false
+
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             ZStack {
-                Color.wire(0xF7F7F7, 0x292F2B)
+                W.soft
                 if product.category == .face {
-                    Circle().stroke(W.lime, lineWidth: size.width * 0.04).frame(width: size.width * 0.44, height: size.width * 0.44)
-                    Image(systemName: "person.crop.circle").resizable().scaledToFit().foregroundStyle(W.ink.opacity(0.65))
-                        .frame(width: size.width * 0.34, height: size.width * 0.34).overlay(Circle().stroke(W.lime, lineWidth: size.width * 0.035))
-                    HStack(spacing: size.width * 0.055) { ForEach(0..<3) { _ in Circle().fill(W.lime).frame(width: size.width * 0.04, height: size.width * 0.04) } }
-                        .offset(y: size.width * 0.26)
+                    profileArtwork
                 } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: size.width * 0.035).fill(.white).shadow(color: .black.opacity(0.08), radius: 12, y: 4)
-                        if product.id == "card-frame" { RoundedRectangle(cornerRadius: size.width * 0.035).stroke(W.lime, lineWidth: 3) }
-                        BrandMark(size: size.width * 0.075).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(size.width * 0.06)
-                        if product.id != "card-frame" {
-                            WPointPath(productID: product.id).stroke(W.lime, style: StrokeStyle(lineWidth: product.id == "line" ? 5 : 8, lineCap: .round, lineJoin: .round))
-                                .padding(.horizontal, size.width * 0.04).padding(.vertical, size.height * 0.12)
-                        }
-                        VStack(spacing: 3) { Capsule().fill(W.ink.opacity(0.75)).frame(width: size.width * 0.2, height: 3); Capsule().fill(W.ink.opacity(0.25)).frame(width: size.width * 0.13, height: 3) }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(size.width * 0.06)
-                    }
-                    .frame(width: size.width * 0.74, height: size.height * 0.72)
-                    .rotationEffect(.degrees(product.id == "line" ? 4 : product.id == "dawn" ? -4 : 0))
-                    .opacity(product.id == "dawn" ? 0.68 : 1)
+                    let cardSize = WPointArtworkGeometry.cardSize(in: size, large: large)
+                    cardArtwork(width: cardSize.width, height: cardSize.height)
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(size.width * 0.06)
+            }.frame(width: size.width, height: size.height)
         }.accessibilityElement(children: .ignore).accessibilityLabel("\(product.name) 예시 아이템 미리보기")
+            .accessibilityIdentifier("pointArtwork-\(product.id)")
+    }
+
+    private func cardArtwork(width: CGFloat, height: CGFloat) -> some View {
+        let cardWidth = max(0, width)
+        let cardHeight = max(0, height)
+        let radius: CGFloat = large ? 12 : 8
+        let markSize: CGFloat = large ? 20 : 11
+        let strokeScale = min(cardWidth / 240, cardHeight / 140)
+        return ZStack(alignment: .topLeading) {
+            W.paper
+            if product.id == "card-frame" {
+                RoundedRectangle(cornerRadius: radius).stroke(W.lime, lineWidth: 3)
+            } else {
+                WPointPath(productID: product.id)
+                    .stroke(W.lime.opacity(product.id == "dawn" ? 0.45 : 0.9), style: StrokeStyle(lineWidth: (product.id == "line" ? 11 : 18) * strokeScale, lineCap: .round))
+                    .frame(width: cardWidth, height: cardHeight)
+            }
+            BrandMark(size: markSize).frame(width: markSize, height: markSize).padding(.leading, large ? 16 : 10).padding(.top, large ? 14 : 9)
+            VStack(alignment: .leading, spacing: 3) {
+                RoundedRectangle(cornerRadius: 1).fill(W.ink.opacity(0.8)).frame(width: 29, height: 3)
+                RoundedRectangle(cornerRadius: 1).fill(W.ink.opacity(0.25)).frame(width: 18, height: 3)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(.leading, 11).padding(.bottom, 8)
+        }
+        .frame(width: cardWidth, height: cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: radius))
+        .shadow(color: .black.opacity(0.04), radius: 6.5, y: 3.5)
+        .rotationEffect(.degrees(product.id == "line" ? 4 : product.id == "dawn" ? -4 : 0))
+    }
+
+    private var profileArtwork: some View {
+        let diameter: CGFloat = large ? 124 : 75
+        let ringWidth: CGFloat = large ? 5 : 3
+        let innerDiameter: CGFloat = large ? 103 : 59
+        let iconSize: CGFloat = large ? 45 : 28
+        let dotDiameter: CGFloat = large ? 14 : 9
+        let markerDiameter = dotDiameter + 6
+        return ZStack {
+            Circle().stroke(W.lime, lineWidth: ringWidth).frame(width: diameter, height: diameter)
+            Circle().fill(W.paper).frame(width: innerDiameter, height: innerDiameter)
+            WPointProfileGlyph().stroke(W.muted, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+                .frame(width: iconSize, height: iconSize).rotationEffect(.degrees(12))
+            ForEach(0..<3) { index in
+                Circle().fill(W.lime).frame(width: dotDiameter, height: dotDiameter)
+                    .overlay(Circle().stroke(W.soft, lineWidth: 3))
+                    .position(markerPosition(index, diameter: diameter, markerDiameter: markerDiameter, large: large))
+            }
+        }.frame(width: diameter, height: diameter).rotationEffect(.degrees(-12))
+    }
+
+    private func markerPosition(_ index: Int, diameter: CGFloat, markerDiameter: CGFloat, large: Bool) -> CGPoint {
+        switch index {
+        case 0: CGPoint(x: markerDiameter / 2 - 4, y: 8 + markerDiameter / 2)
+        case 1: CGPoint(x: diameter - markerDiameter / 2 + 4, y: 8 + markerDiameter / 2)
+        default: CGPoint(x: (large ? 48 : 26) + markerDiameter / 2, y: diameter + 8 - markerDiameter / 2)
+        }
     }
 }
 
@@ -527,9 +583,24 @@ private struct WPointPath: Shape {
             path.addCurve(to: CGPoint(x: 145, y: 37), control1: CGPoint(x: 21, y: 39), control2: CGPoint(x: 72, y: -10))
             path.addCurve(to: CGPoint(x: 241, y: 112), control1: CGPoint(x: 218, y: 84), control2: CGPoint(x: 134, y: 131))
         }
-        let sx = rect.width / 240, sy = rect.height / 140
+        let scale = min(rect.width / 240, rect.height / 140)
         var transformed = Path()
-        transformed.addPath(path, transform: CGAffineTransform(scaleX: sx, y: sy))
+        transformed.addPath(path, transform: CGAffineTransform(translationX: (rect.width - 240 * scale) / 2, y: (rect.height - 140 * scale) / 2).scaledBy(x: scale, y: scale))
         return transformed
+    }
+}
+
+private struct WPointProfileGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let scale = min(rect.width / 24, rect.height / 24)
+        let x = (rect.width - 24 * scale) / 2, y = (rect.height - 24 * scale) / 2
+        let t = CGAffineTransform(translationX: x, y: y).scaledBy(x: scale, y: scale)
+        var path = Path()
+        path.addEllipse(in: CGRect(x: 8.5, y: 3.5, width: 7, height: 7))
+        path.move(to: CGPoint(x: 5, y: 21)); path.addLine(to: CGPoint(x: 5, y: 19))
+        path.addCurve(to: CGPoint(x: 12, y: 12), control1: CGPoint(x: 5, y: 15.134), control2: CGPoint(x: 8.134, y: 12))
+        path.addCurve(to: CGPoint(x: 19, y: 19), control1: CGPoint(x: 15.866, y: 12), control2: CGPoint(x: 19, y: 15.134))
+        path.addLine(to: CGPoint(x: 19, y: 21)); path.closeSubpath()
+        return path.applying(t)
     }
 }

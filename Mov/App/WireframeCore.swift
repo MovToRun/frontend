@@ -268,12 +268,13 @@ enum WRootTab: Int, CaseIterable {
         if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12"].contains(screen)){
             leaveAuth(for:next);path=[];screen=next;forward=true;rootIndex=2;error="";return
         };if next=="T05" && (Self.providerRoutes.contains(screen) || resetBack=="T05"){returnToProviders();return};if ["T17","A18"].contains(next){if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index+1))}else{path=["T01","T05"]};leaveAuth(for:next);forward=true;screen=next;error="";return};if screen=="A18" && next=="A01"{path=[];leaveAuth(for:next);screen=next;error="";return};leaveAuth(for:next);forward=true;let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][next] ?? roots.firstIndex(of:next){forward=index>rootIndex;previousRootIndex=rootIndex;rootIndex=index};path.append(screen);screen=next;error=""}
+    func openRecord(_ record:RunRecord){selected=record.id;forward=true;path.append(screen);screen="L04";error=""}
     func back(){
         if screen=="A15"{go("H00");return}
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
-struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")};var body:some View {Group{if captureViewport{WireframeRoot().frame(width:390,height:790).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)}}
+struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")};var body:some View {Group{if captureViewport{ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot().frame(width:390,height:766).clipped().offset(y:24)}.frame(width:390,height:790,alignment:.top).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)}}
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
@@ -288,7 +289,7 @@ struct WireframeRoot:View {
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
-            model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)])]
+            model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)],isExample:true)]
             model.persist()
         }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
@@ -310,17 +311,21 @@ struct WireframeRoot:View {
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
-    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05"].contains(ui.screen)}
+    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen)}
     var body:some View {
         ZStack {
             VStack(spacing:0){
                 GeometryReader { geo in
                     ZStack {
+                        if ui.screen=="L01" {
+                            recordsRoot
+                        } else {
                         home.accessibilityElement(children:.contain).offset(x:ui.rootIndex==2 ? 0:ui.rootIndex>2 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==2 || ui.previousRootIndex==2 ? 1:0).accessibilityHidden(ui.rootIndex != 2 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 2 && isRoot && !splash)
                         ready.accessibilityElement(children:.contain).offset(x:ui.rootIndex==1 ? 0:ui.rootIndex>1 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==1 || ui.previousRootIndex==1 ? 1:0).accessibilityHidden(ui.rootIndex != 1 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 1 && isRoot && !splash)
                         points.accessibilityElement(children:.contain).offset(x:ui.rootIndex==0 ? 0:ui.rootIndex>0 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==0 || ui.previousRootIndex==0 ? 1:0).accessibilityHidden(ui.rootIndex != 0 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 0 && isRoot && !splash)
                         community.accessibilityElement(children:.contain).offset(x:ui.rootIndex==3 ? 0:ui.rootIndex>3 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==3 || ui.previousRootIndex==3 ? 1:0).accessibilityHidden(ui.rootIndex != 3 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 3 && isRoot && !splash)
                         profile.accessibilityElement(children:.contain).offset(x:ui.rootIndex==4 ? 0:ui.rootIndex>4 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==4 || ui.previousRootIndex==4 ? 1:0).accessibilityHidden(ui.rootIndex != 4 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 4 && isRoot && !splash)
+                        }
                     }.frame(width:geo.size.width,height:geo.size.height).clipped()
                 }
                 nav
@@ -646,7 +651,7 @@ struct WGPSSignal:View {
     @Environment(\.accessibilityReduceMotion) private var systemMotion
     var reduced:Bool{systemMotion || ProcessInfo.processInfo.arguments.contains("-wire-reduced")}
     var review:Bool{ProcessInfo.processInfo.arguments.contains("-wire-review-size")}
-    var color:Color{review ? Color(red:1,green:90/255,blue:95/255):(searching || waiting) ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):Color(red:1,green:90/255,blue:95/255)}
+    var color:Color{(searching || waiting) ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):W.lime}
     var body:some View{TimelineView(.animation(minimumInterval:1.0/60,paused:reduced || !searching || review)){context in
         ZStack{RoundedRectangle(cornerRadius:12).fill(W.paper).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line,lineWidth:1))
             Circle().fill(color).frame(width:8,height:8)

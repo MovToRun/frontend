@@ -48,6 +48,27 @@ final class ThemeTests:XCTestCase {
         XCTAssertNotNil(rendered.cgImage, "The bundled logo asset must draw into a local SwiftUI-sized surface")
     }
 
+    func testReview52RecordExampleMarkerKeepsLegacyLocalRecordsReadable() throws {
+        let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1}"#.utf8)
+        let decoded = try JSONDecoder().decode(RunRecord.self, from: legacy)
+        XCTAssertNil(decoded.isExample, "Records saved before the Review52 fixture marker decode without migration")
+        let fixture = RunRecord(date: WReviewClock.referenceDate, title: "fixture", seconds: 1, kilometers: 1, isExample: true)
+        XCTAssertTrue(fixture.isExample == true)
+    }
+
+    func testReview52ShopArtworkMatchesSourceCardGeometry() {
+        XCTAssertEqual(WPointArtworkGeometry.listingAspect, 1.16, accuracy: 0.001)
+        XCTAssertEqual(WPointArtworkGeometry.detailAspect, 1.35, accuracy: 0.001)
+
+        let listing = WPointArtworkGeometry.cardSize(in: CGSize(width: 167, height: 144), large: false)
+        XCTAssertEqual(listing.width, 143, accuracy: 0.001, "B05 uses 12pt horizontal padding")
+        XCTAssertEqual(listing.height, 143 / 1.65, accuracy: 0.001, "The source card artwork keeps a 1.65 ratio")
+
+        let detail = WPointArtworkGeometry.cardSize(in: CGSize(width: 342, height: 253.333), large: true)
+        XCTAssertEqual(detail.width, 266, accuracy: 0.001, "B06 uses 38pt horizontal padding")
+        XCTAssertEqual(detail.height, 266 / 1.65, accuracy: 0.001, "The source detail card keeps a 1.65 ratio")
+    }
+
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))

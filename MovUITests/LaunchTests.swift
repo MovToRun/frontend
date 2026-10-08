@@ -38,6 +38,50 @@ import UIKit
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
         }
     }
+    func testReview52RunPanelAndRecordListDetailAlignment() {
+        app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["runValidityExplanation"].waitForExistence(timeout:5))
+        let pause=app.buttons["pauseRun"],details=app.buttons["runDetails"]
+        XCTAssertTrue(pause.isHittable);XCTAssertTrue(details.isHittable)
+        XCTAssertEqual(pause.frame.width,342,accuracy:0.5,"Review52 panel actions use the 342pt inset width")
+        XCTAssertEqual(details.frame.width,342,accuracy:0.5)
+        XCTAssertEqual(pause.frame.height,58,accuracy:0.5,"The final Review52 cascade sets 58pt action rows")
+        XCTAssertEqual(details.frame.height,58,accuracy:0.5)
+        XCTAssertEqual(details.frame.minY-pause.frame.maxY,10,accuracy:0.5,"The source action rows have a 10pt gap")
+        let runningMap=app.descendants(matching:.any)["runningMap"].firstMatch
+        XCTAssertTrue(runningMap.exists)
+        XCTAssertEqual(pause.frame.minY-runningMap.frame.minY,619,accuracy:4,"The source action stack begins at y=643 after the 24pt simulation banner")
+        XCTAssertEqual(app.staticTexts["runDistanceMetric"].frame.minY-runningMap.frame.minY,380,accuracy:6,"The source distance value begins near y=404 after the 24pt simulation banner")
+        let gpsSignal=app.buttons.matching(identifier:"위치 상태 안내").firstMatch
+        XCTAssertEqual(gpsSignal.value as? String,"GPS 연결됨")
+        XCTAssertTrue(containsBrandGreen(in:app.screenshot().image,rect:gpsSignal.frame),"The connected GPS signal uses the source lime color")
+        capture("R02-pause-panel-390x790")
+        pause.tap();XCTAssertTrue(app.buttons["resumeRun"].waitForExistence(timeout:5))
+        app.buttons["resumeRun"].tap();XCTAssertTrue(app.buttons["pauseRun"].waitForExistence(timeout:5))
+        app.terminate()
+
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance","light"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.buttons["tab-1"].isSelected,"The record list keeps the Run root selected")
+        XCTAssertFalse(app.buttons["뒤로"].exists,"The root list uses the source header rather than a pushed-page back control")
+        XCTAssertEqual(app.staticTexts["recordDate"].label,"2026.09.29")
+        XCTAssertEqual(app.staticTexts["recordValidityTime"].label,"30:08 유효 러닝")
+        XCTAssertEqual(app.staticTexts["recordPace"].label,"06:15 /km")
+        XCTAssertEqual(app.descendants(matching:.any)["recordPointExample"].label,"예시 적립 30 포인트")
+        capture("L01-record-list-390x790")
+
+        let record=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","record-")).firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout:5));XCTAssertTrue(record.isHittable)
+        record.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        XCTAssertTrue(app.staticTexts["recordReferenceDate"].waitForExistence(timeout:5),"Opening a saved record should show its detail date")
+        XCTAssertEqual(app.staticTexts["recordReferenceDate"].label,"2026.09.29 · 가상 예시")
+        capture("L04-record-detail-390x790")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["tab-1"].isSelected,"Back from detail returns to the records root")
+    }
+
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]
@@ -850,6 +894,21 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testReview52ShopArtworkUsesSourceGeometry() {
+        app.launchArguments=["-wire-screen","SHOP","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
+        app.launch();XCTAssertTrue(app.buttons["shop-item-line"].waitForExistence(timeout:10))
+        let listArtwork=app.descendants(matching:.any)["pointArtwork-line"].firstMatch
+        XCTAssertTrue(listArtwork.waitForExistence(timeout:5))
+        capture("B05-shop-source-artwork-390x790")
+        XCTAssertEqual(listArtwork.label,"모브 라인 예시 아이템 미리보기")
+        app.buttons["shop-item-line"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
+        let detailArtwork=app.descendants(matching:.any)["pointProductArtwork"].firstMatch
+        XCTAssertTrue(detailArtwork.waitForExistence(timeout:5))
+        capture("B06-shop-detail-source-artwork-390x790")
+        XCTAssertEqual(detailArtwork.label,"모브 라인 예시 아이템 미리보기")
+    }
+
     func testProfilePhotoCropHidesPreviewAndPreservesReview52Order(){
         app.launchArguments=["-wire-screen","M02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-photo-crop-fixture","-appearance","light"];app.launch()
         let crop=app.buttons["profilePhotoCropCircle"]

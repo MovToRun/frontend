@@ -46,6 +46,7 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var kilometers: Double
     var segments:[RunSegment]? = nil
     var weightKg:Double? = nil
+    var isExample:Bool? = nil
     var caloriesText:String {guard isValid else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
     var isValid: Bool { kilometers > 0 }
     var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }

@@ -5,10 +5,11 @@ extension WireframeRoot {
             let review=ProcessInfo.processInfo.arguments.contains("-wire-review-size")
             let record=review ? RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81):(store.session?.record(at:context.date) ?? current)
             let paused=ui.screen=="R04" || ui.screen=="R05" || store.session?.paused == true
+            let captureViewport=ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")
             GeometryReader{geometry in
-                WRunningViewport(collapsed:$ui.collapsed,reduced:reduceMotion,topInset:geometry.safeAreaInsets.top,bottomInset:geometry.safeAreaInsets.bottom,paused:paused,screen:ui.screen,pause:togglePause){handle in
+                WRunningViewport(collapsed:$ui.collapsed,reduced:reduceMotion,topInset:geometry.safeAreaInsets.top,bottomInset:captureViewport ? 0:geometry.safeAreaInsets.bottom,paused:paused,screen:ui.screen,pause:togglePause){handle in
                     fixedRunPanel(record:record,paused:paused,handle:handle)
-                }.ignoresSafeArea(.container,edges:[.top,.bottom])
+                }.modifier(WRunViewportSafeArea(captureViewport:captureViewport))
             }
         }
     }
@@ -31,19 +32,26 @@ extension WireframeRoot {
                     else{go("R06")}
                 }.buttonStyle(WButtonStyle(kind:1,panel:true)).contentTransition(.opacity).accessibilityIdentifier(ui.screen=="R05" ? "saveRun":paused ? "finishRun":"runDetails").accessibilityHidden(ui.collapsed)
             }
-            Button("이 기록 삭제"){go("R11")}.font(W.font(13,.medium)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))
-                .frame(maxWidth:.infinity,minHeight:44,alignment:.leading).opacity(ui.screen=="R05" ? 1:0)
-                .allowsHitTesting(ui.screen=="R05").accessibilityHidden(ui.screen != "R05")
-        }.padding(.horizontal,24).padding(.bottom,12)
+        }.padding(.horizontal,24).padding(.bottom,21)
     }
     @ViewBuilder private func runPanelMetrics(record:RunRecord,paused:Bool)->some View {
         VStack(alignment:.leading,spacing:8){
-            Text(ui.screen=="R05" ? "러닝을 마칠까요?":ui.screen=="R10" ? "저장을 다시 시도해 주세요":ui.screen=="R01" ? "위치 확인 중":" ")
-                .font(W.font(22,.bold)).frame(height:28,alignment:.leading)
+            if ui.screen != "R02" {
+                Text(ui.screen=="R05" ? "러닝을 마칠까요?":ui.screen=="R10" ? "저장을 다시 시도해 주세요":ui.screen=="R01" ? "위치 확인 중":" ")
+                    .font(W.font(22,.bold)).frame(height:28,alignment:.leading)
+            }
             WMetric(record:record,paused:paused,reservePauseSpace:true)
+            if ui.screen=="R02" && WReviewMode.tools {
+                WText(text:"확인된 유효 구간만 거리 합계에 포함해요. 판별 정보가 없는 구간은 알 수 없어요.",small:true)
+                    .fixedSize(horizontal:false,vertical:true).padding(.top,2).accessibilityIdentifier("runValidityExplanation")
+            }
+            if ui.screen=="R05" {
+                Button("이 기록 삭제"){go("R11")}.font(W.font(13,.medium)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))
+                    .frame(maxWidth:.infinity,minHeight:44,alignment:.trailing).accessibilityIdentifier("deleteRun")
+            }
             Text(ui.screen=="R03" ? "GPS 신호가 약해요":ui.screen=="R08" ? "네트워크 연결 없음":ui.screen=="R01" ? "시간은 계속 기록돼요":" ")
                 .font(W.font(12)).foregroundStyle(W.muted).frame(height:18,alignment:.leading)
-        }
+        }.padding(.top,ui.screen=="R02" ? 23:0)
     }
     func changeRunState(_ next:String){
         withAnimation(reduceMotion ? nil:.easeOut(duration:0.18)){ui.screen=next}
@@ -61,23 +69,66 @@ extension WireframeRoot {
         }
     }
     var runDetails:some View {WPage(title:"현재 러닝",back:back){WMetric(record:current);VStack(spacing:0){WRow(title:"유효 구간 평균 페이스",value:(current.kilometers>0 && current.pace.count==4 ? "0":"")+current.pace+" /km",plain:true);WRow(title:"추정 소모 칼로리",value:current.caloriesText,plain:true);WRow(title:"이번 러닝 목표",value:store.goal.summary,plain:true)};WText(text:"체중과 유효 거리를 바탕으로 한 추정값이에요.",small:true);WDisclosure(title:"유효 구간과 원본 기록",expanded:$ui.validityExpanded,triangle:true){WText(text:"위치 센서에서 확인한 구간 정보가 없어요. 시간 기록은 계속 유지돼요.",small:true)}.font(W.font(12))}actions:{Button(store.session?.paused == true ? "계속 달리기":"Ⅱ 일시정지"){togglePause()}.buttonStyle(WButtonStyle());button("러닝 화면으로 돌아가기",store.session?.paused == true ? "R04":"R02",kind:1)}}
-    var records:some View {VStack(spacing:0){WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("H01")}else{back()}});ScrollView{VStack(alignment:.leading,spacing:16){if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
+    var recordsRoot:some View {
+        VStack(spacing:0){
+            WHeader(title:"러닝 기록",root:true,showRootMark:true,trailing:AnyView(Color.clear.frame(width:44,height:44)))
+            recordsContent
+        }
+    }
+    var records:some View {VStack(spacing:0){WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("H01")}else{back()}});recordsContent}}
+    @ViewBuilder private var recordsContent:some View {ScrollView{VStack(alignment:.leading,spacing:16){if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
         if ui.screen == "L03" && store.records.isEmpty {
             VStack(alignment:.leading,spacing:12){Text("기록을 확인할 수 없어요").font(W.font(20,.semibold));WText(text:"조회에 실패해 기록이 0건이라고 단정하지 않아요. 다시 불러오거나 나중에 다시 확인해 주세요.")}.padding(.vertical,28).accessibilityIdentifier("recordLookupFailure")
         } else if ui.screen=="L02" || (store.records.isEmpty && ui.screen != "L03") {
             VStack(spacing:0){Text("아직 러닝 기록이 없어요").font(W.font(23,.semibold)).padding(.top,13).padding(.bottom,31);WText(text:"첫 러닝을 시작해 보세요").padding(.bottom,20);button("러닝 시작","H02")}.padding(.vertical,65)
         } else {WText(text:"기기에 저장된 기록",small:true);ForEach(store.records){r in recordRow(r)}}
-    }.padding(24)}}}
-    func recordRow(_ r:RunRecord,home:Bool=false)->some View {let dateText:String;if home{let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone.current;formatter.dateFormat="yyyy.MM.dd";dateText=formatter.string(from:r.date)+" · "+RunRecord.clock(r.seconds)+" 유효 러닝 · 예시"}else{dateText=r.date.formatted(.dateTime.year().month().day())+"\n"+RunRecord.clock(r.seconds)+" · "+r.pace+" /km"};return Button{ui.selected=r.id;go("L04")}label:{HStack(spacing:14){WMap(route:r.isValid).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12));VStack(alignment:.leading,spacing:5){Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true);Text("\(MovNumber.display(r.kilometers)) km").font(W.font(18,.semibold));WText(text:dateText,small:true)};Spacer();Image(systemName:"chevron.right").font(W.font(13))}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,15)}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}}
+    }.padding(24)}}
+    @ViewBuilder func recordRow(_ r:RunRecord,home:Bool=false)->some View {
+        let validSeconds=r.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? r.seconds
+        let pace=r.kilometers>0 && r.pace.count==4 ? "0"+r.pace:r.pace
+        let showsPointExample = !home && WReviewMode.tools && r.isValid
+        if home {
+            Button{ui.openRecord(r)}label:{HStack(spacing:14){WMap(route:r.isValid).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12));VStack(alignment:.leading,spacing:5){Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true);Text("\(MovNumber.display(r.kilometers)) km").font(W.font(18,.semibold));WText(text:recordDateText(r.date)+" · \(RunRecord.clock(r.seconds)) 유효 러닝 · 예시",small:true)};Spacer();Image(systemName:"chevron.right").font(W.font(13))}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,15).contentShape(Rectangle())}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}
+        } else {
+          Button{ui.openRecord(r)}label:{
+            HStack(spacing:14){
+                WMap(route:r.isValid).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12))
+                VStack(alignment:.leading,spacing:5){
+                    Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true)
+                    Text("\(MovNumber.display(r.kilometers)) km").font(W.font(18,.semibold))
+                    Text(recordDateText(r.date)).font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier(home ? "homeRecordDate":"recordDate")
+                    if !home {
+                        Text("\(RunRecord.clock(validSeconds)) 유효 러닝").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordValidityTime")
+                        HStack(spacing:7){
+                            Text("\(pace) /km").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordPace")
+                            if showsPointExample {
+                                HStack(spacing:3){Text("30");Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:14,height:14)}
+                                    .font(W.font(11)).foregroundStyle(W.muted).fixedSize()
+                                    .accessibilityElement(children:.ignore).accessibilityLabel("예시 적립 30 포인트").accessibilityIdentifier("recordPointExample")
+                            }
+                        }
+                    } else { WText(text:"\(RunRecord.clock(r.seconds)) 유효 러닝 · 예시",small:true) }
+                }
+                Spacer(minLength:4);Image(systemName:"chevron.right").font(W.font(13))
+            }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,15).contentShape(Rectangle())
+          }.buttonStyle(.plain).accessibilityIdentifier("record-\(r.id.uuidString)").overlay(alignment:.bottom){W.line.frame(height:1)}
+        }
+    }
+    private func recordDateText(_ date:Date)->String {let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone.current;formatter.dateFormat="yyyy.MM.dd";return formatter.string(from:date)}
+    private func recordReferenceDate(_ record:RunRecord)->String {
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone.current;formatter.dateFormat="yyyy.MM.dd"
+        let suffix=WReviewMode.tools ? " · \(record.isExample == true ? "가상 예시":"데모 기록")":""
+        return formatter.string(from:record.date)+suffix
+    }
     var recordDetail:some View {
         VStack(spacing:0){
-            WHeader(title:"러닝 기록",back:back)
+            WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("L01")}else{back()}})
             ScrollViewReader{proxy in
                 ScrollView{VStack(alignment:.leading,spacing:18){
-                    WText(text:current.date.formatted(.dateTime.year().month().day()),small:true)
+                    WText(text:recordReferenceDate(current),small:true).accessibilityIdentifier("recordReferenceDate")
                     WInlineRecordField(value:current.title,multiline:false,save:{value in var record=current;record.title=value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? RunRecord.title(for:record.date):value;store.update(record)},focus:{scrollEditor(proxy,"inlineTitle")}).id("inlineTitle")
                     WMetric(record:current,saved:true)
-                    WMap(route:current.isValid).frame(height:172).clipShape(RoundedRectangle(cornerRadius:14))
+                    WMap(route:current.isValid).frame(height:170).clipShape(RoundedRectangle(cornerRadius:12))
                     WRow(title:"추정 소모 칼로리",value:current.caloriesText)
                     WText(text:current.weightKg==nil ? "기록 당시 체중 정보가 없어요":"기록 당시의 체중으로 계산",small:true)
                     WDisclosure(title:"유효 구간과 원본 기록",expanded:$ui.validityExpanded,triangle:true){VStack(alignment:.leading,spacing:8){ForEach(Array(current.validityDetails.enumerated()),id:\.offset){item in WText(text:item.element,small:true)};WText(text:"표시한 거리와 페이스는 저장된 유효 구간을 바탕으로 계산해요. 원본 판별 정보가 없는 구간을 임의로 분류하지 않아요.",small:true)}.frame(maxWidth:.infinity,alignment:.leading)}.font(W.font(12)).padding(.vertical,18)
@@ -193,7 +244,7 @@ private struct WRunningViewport<Panel:View>:View {
     private var motion:Animation?{reduced ? nil:.timingCurve(0.22,0.72,0.18,1,duration:0.6)}
     var body:some View {
         GeometryReader{g in
-            let height=min(480,max(0,g.size.height-topInset-bottomInset))
+            let height=min(480,max(0,ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? (g.size.height+24)*0.6:g.size.height-topInset-bottomInset))
             let travel=height+bottomInset
             let progress=min(1,max(0,(collapsed ? 1.0:0.0)+drag/max(1,travel)))
             let expandedTop=g.size.height-bottomInset-height
@@ -221,6 +272,14 @@ private struct WRunningViewport<Panel:View>:View {
                 let projected=(collapsed ? travel:0)+v.translation.height+(v.predictedEndTranslation.height-v.translation.height)*0.25
                 withAnimation(motion){collapsed=projected>travel*0.5;drag=0}
             })
+    }
+}
+
+private struct WRunViewportSafeArea:ViewModifier {
+    var captureViewport:Bool
+    @ViewBuilder func body(content:Content)->some View {
+        if captureViewport {content}
+        else {content.ignoresSafeArea(.container,edges:[.top,.bottom])}
     }
 }
 
