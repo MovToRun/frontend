@@ -376,7 +376,7 @@ struct WireframeRoot:View {
                                 Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)
                             }
                         }
-                        if tab == .home { BrandMark(size:24) }
+                        if tab == .home { Color.clear.frame(width:24,height:24).accessibilityHidden(true) }
                         else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
                         if let caption=tab.caption {
