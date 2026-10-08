@@ -54,7 +54,7 @@ extension WireframeRoot {
             }}
             if ui.goal.kind != .none{
                 VStack(spacing:10){
-                    HStack(spacing:10){Text(ui.goal.kind == .time ? "시간 목표":"거리 목표").font(W.font(14,.medium));Text("목표에 도달해도 자동으로 종료하지 않아요.").font(W.font(10)).foregroundStyle(W.muted);Spacer(minLength:0)}.frame(height:21)
+                    HStack(spacing:10){Text(ui.goal.kind == .time ? "시간 목표":"거리 목표").font(W.font(14,.medium));Text("목표에 도달해도 자동으로 종료하지 않아요.").font(W.font(11)).foregroundStyle(Color.wire(0x535353,0xB0B0B0));Spacer(minLength:0)}.frame(height:21)
                     if ui.goal.kind == .distance{WGoalWheel(values:Array(2...1000),selection:Binding(get:{Int((ui.goal.kilometers*2).rounded())},set:{ui.goal.kilometers=Double($0)/2}))}
                     else{WGoalWheel(values:Array(stride(from:10,through:360,by:10)),selection:$ui.goal.minutes,time:true)}
                 }.padding(.top,2).transition(.opacity)
