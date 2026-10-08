@@ -532,22 +532,35 @@ DragGesture(minimumDistance:0).onChanged{v in
         VStack(spacing:10){
             ZStack{
                 RoundedRectangle(cornerRadius:18).fill(W.paper)
-                RoundedRectangle(cornerRadius:12).fill(W.soft).frame(height:60).padding(.horizontal,10)
+                RoundedRectangle(cornerRadius:12).fill(Color.wire(0xF5F5F5,0x262626)).frame(height:60).padding(.horizontal,10)
                 HStack(spacing:0){
                     wheelRows
                     if !time{Text("km").font(W.font(18,.medium)).frame(width:40,alignment:.leading).padding(.trailing,26)}
                 }.mask(LinearGradient(stops:[.init(color:.clear,location:0),.init(color:.black,location:0.24),.init(color:.black,location:0.76),.init(color:.clear,location:1)],startPoint:.top,endPoint:.bottom))
-            }.frame(height:144).clipShape(RoundedRectangle(cornerRadius:18)).overlay(RoundedRectangle(cornerRadius:18).stroke(W.line))
+            }.frame(height:144).clipShape(RoundedRectangle(cornerRadius:18)).overlay(RoundedRectangle(cornerRadius:18).stroke(Color.wire(0xEEEEEE,0x3A3A3A)))
             .contentShape(Rectangle()).highPriorityGesture(wheelDrag)
             .onAppear{position=CGFloat(index)*60}
             .onChange(of:values){_,_ in stop();dragY=nil;position=CGFloat(index)*60}
             .onChange(of:selection){_,_ in if dragY == nil && motion == nil{position=CGFloat(index)*60}}
             .onDisappear{stop()}
             .transaction{$0.animation=nil}
-            .accessibilityElement(children:.ignore).accessibilityIdentifier(time ? "timeGoalPicker":"distanceGoalPicker").accessibilityLabel(time ? "시간 목표":"거리 목표").accessibilityValue(label(selection))
+            .modifier(WGoalWheelAccessibility(identifier:time ? "timeGoalPicker":"distanceGoalPicker",label:time ? "시간 목표":"거리 목표",value:label(selection)))
             .accessibilityAdjustableAction{direction in stop();move(CGFloat(min(values.count-1,max(0,index+(direction == .increment ? 1:-1))))*60)}
-            Text("위아래로 스크롤해 목표를 맞춰 주세요").font(W.font(12)).foregroundStyle(W.muted).frame(height:18)
+            Text("위아래로 스크롤해 목표를 맞춰 주세요").font(W.font(12)).foregroundStyle(Color.wire(0x707070,0xB0B0B0)).frame(height:18)
         }
+    }
+}
+
+private struct WGoalWheelAccessibility:ViewModifier {
+    let identifier:String
+    let label:String
+    let value:String
+    func body(content:Content)->some View {
+        content.accessibilityElement(children:.ignore)
+            .accessibilityIdentifier(identifier)
+            .accessibilityLabel(label)
+            .accessibilityValue(value)
+            .accessibilityHint("위아래로 스크롤해 목표를 맞춰 주세요")
     }
 }
 
