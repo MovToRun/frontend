@@ -99,9 +99,9 @@ struct WAvatarEditor:View {
         if let draft{WPhotoCrop(image:draft){data=$0}}
         else{Group{if let picture{Image(uiImage:picture).resizable().scaledToFill()}else{WAvatarPlaceholder().stroke(W.muted,style:StrokeStyle(lineWidth:1.6*34/24,lineCap:.butt,lineJoin:.miter)).frame(width:34,height:34)}}.frame(width:80,height:80).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line)).frame(maxWidth:.infinity).padding(.bottom,6).accessibilityIdentifier("profilePhotoPreview")}
         HStack{PhotosPicker(selection:$item,matching:.images){Text(hasPhoto ? "사진 바꾸기":"사진 선택").font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.lime,in:RoundedRectangle(cornerRadius:10)).foregroundStyle(MovTokens.onBrand)};Button("사진 삭제"){data=nil;item=nil;draft=nil}.font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.line)).foregroundStyle(hasPhoto ? W.ink:W.muted).disabled(!hasPhoto)}.frame(maxWidth:.infinity)
-        Text("JPG · PNG · WebP, 8MB 이하\n이 브라우저에만 저장돼요. 서버로 전송하지 않아요.").font(W.font(11)).lineSpacing(6).foregroundStyle(W.muted)
+        Text("HEIC · HEIF · JPG · PNG 등 사진 형식, 20MB 이하\n자동 회전 보정 · JPEG 1024×1024 이하 · 2MB 이하로 저장돼요.").font(W.font(11)).lineSpacing(6).foregroundStyle(W.muted)
         if !message.isEmpty{WNotice(text:message,danger:true)}
-    }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height)else{message="JPG · PNG · WebP 형식의 8MB 이하 사진을 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}.onAppear{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-photo-crop-fixture"){draft=WProfilePhotoPolicy.reviewCaptureFixture()}}}
+    }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height)else{message="20MB 이하의 지원되는 사진을 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}.onAppear{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-photo-crop-fixture"){draft=WProfilePhotoPolicy.reviewCaptureFixture()}}}
 }
 struct WPhotoCrop:View {
     var image:UIImage
@@ -123,11 +123,11 @@ struct WPhotoCrop:View {
 }
 
 enum WProfilePhotoPolicy {
-    static let maximumInputBytes=8*1024*1024
-    static let maximumOutputBytes=200*1024
+    static let maximumInputBytes=20*1024*1024
+    static let maximumOutputBytes=2*1024*1024
     static let maximumPixels=20_000_000
     static let maximumEdge=8_192
-    static let outputEdge=256
+    static let outputEdge=1_024
 
     static func reviewCaptureFixture()->UIImage {
         let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=false
@@ -143,7 +143,7 @@ enum WProfilePhotoPolicy {
     static let initialZoom:CGFloat=1.35
 
     static func accepts(_ type:UTType)->Bool {
-        type.conforms(to:.jpeg) || type.conforms(to:.png) || type.conforms(to:.webP)
+        type.conforms(to:.image)
     }
 
     static func accepts(byteCount:Int)->Bool {
@@ -180,8 +180,8 @@ enum WProfilePhotoPolicy {
 
     static func sanitizeStored(_ data:Data?)->Data? {
         guard let data,data.count<=maximumOutputBytes,let info=inspect(data),
-              info.type.conforms(to:.jpeg) || info.type.conforms(to:.png),
-              info.width==outputEdge,info.height==outputEdge else{return nil}
+              ((info.width==outputEdge && info.height==outputEdge && info.type.conforms(to:.jpeg)) ||
+               (info.width==256 && info.height==256 && (info.type.conforms(to:.jpeg) || info.type.conforms(to:.png)) && data.count<=200*1024)) else{return nil}
         return data
     }
 
@@ -223,7 +223,7 @@ private struct WImportedProfilePhoto:Transferable {
 
 private enum WProfilePhotoImportError:LocalizedError {
     case invalidPhoto
-    var errorDescription:String?{"JPG · PNG · WebP 형식의 8MB 이하, 2,000만 화소 이하 사진을 선택해 주세요."}
+    var errorDescription:String?{"20MB 이하의 지원되는 사진(최대 2,000만 화소)을 선택해 주세요."}
 }
 
 struct WPhotoCropShade:Shape {

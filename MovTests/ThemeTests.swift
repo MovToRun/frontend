@@ -73,7 +73,10 @@ final class ThemeTests:XCTestCase {
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.webP))
-        XCTAssertFalse(WProfilePhotoPolicy.accepts(.heic))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.heic))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.heif))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.tiff))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(.pdf))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes+1))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:0))
@@ -98,8 +101,8 @@ final class ThemeTests:XCTestCase {
         }
         let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:100,y:0,width:400,height:400)))
         let output=try XCTUnwrap(UIImage(data:data)?.cgImage)
-        XCTAssertEqual(output.width,256)
-        XCTAssertEqual(output.height,256)
+        XCTAssertEqual(output.width,WProfilePhotoPolicy.outputEdge)
+        XCTAssertEqual(output.height,WProfilePhotoPolicy.outputEdge)
         XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
         XCTAssertEqual(data.prefix(3),Data([0xFF,0xD8,0xFF]))
         XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
@@ -116,18 +119,19 @@ final class ThemeTests:XCTestCase {
         let transparentPNG=try XCTUnwrap(UIImage(data:png))
         let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:transparentPNG,crop:CGRect(x:0,y:0,width:256,height:256)))
         let output=try XCTUnwrap(UIImage(data:jpeg)?.cgImage)
-        XCTAssertEqual(output.width,256);XCTAssertEqual(output.height,256)
+        XCTAssertEqual(output.width,WProfilePhotoPolicy.outputEdge);XCTAssertEqual(output.height,WProfilePhotoPolicy.outputEdge)
 
-        var rgba=[UInt8](repeating:0,count:256*256*4)
+        let edge=WProfilePhotoPolicy.outputEdge
+        var rgba=[UInt8](repeating:0,count:edge*edge*4)
         rgba.withUnsafeMutableBytes{bytes in
-            let context=CGContext(data:bytes.baseAddress,width:256,height:256,bitsPerComponent:8,bytesPerRow:256*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
+            let context=CGContext(data:bytes.baseAddress,width:edge,height:edge,bitsPerComponent:8,bytesPerRow:edge*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
             context?.draw(output,in:CGRect(x:0,y:0,width:256,height:256))
         }
-        let whiteIndex=(12*256+12)*4
+        let whiteIndex=(12*edge+12)*4
         XCTAssertGreaterThan(rgba[whiteIndex],245)
         XCTAssertGreaterThan(rgba[whiteIndex+1],245)
         XCTAssertGreaterThan(rgba[whiteIndex+2],245)
-        let redIndex=(128*256+128)*4
+        let redIndex=(edge/2*edge+edge/2)*4
         XCTAssertGreaterThan(rgba[redIndex],200)
         XCTAssertLessThan(rgba[redIndex+1],70)
         XCTAssertLessThan(rgba[redIndex+2],70)
@@ -146,6 +150,29 @@ final class ThemeTests:XCTestCase {
         let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:0,y:0,width:256,height:256)))
         XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
         XCTAssertNotNil(WProfilePhotoPolicy.sanitizeStored(data))
+    }
+
+    func testProfilePhotoCropNormalizesOrientationAndStripsMetadata() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:180,height:120),format:format)
+        let upright=renderer.image{context in
+            UIColor.systemOrange.setFill();context.fill(CGRect(x:0,y:0,width:90,height:120))
+            UIColor.systemBlue.setFill();context.fill(CGRect(x:90,y:0,width:90,height:120))
+        }
+        let oriented=UIImage(cgImage:try XCTUnwrap(upright.cgImage),scale:1,orientation:.right)
+        let crop=CGRect(origin:.zero,size:oriented.size)
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:oriented,crop:crop))
+        let source=try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData,nil))
+        let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil) as? [CFString:Any] ?? [:]
+        let dimensions=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
+        XCTAssertEqual(dimensions.width,1_024)
+        XCTAssertEqual(dimensions.height,1_024)
+        XCTAssertTrue(dimensions.type.conforms(to:.jpeg))
+        XCTAssertNil(properties[kCGImagePropertyOrientation])
+        XCTAssertNil(properties[kCGImagePropertyExifDictionary])
+        XCTAssertNil(properties[kCGImagePropertyTIFFDictionary])
+        XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
+        XCTAssertLessThanOrEqual(jpeg.count,2*1024*1024)
     }
 
     func testProfilePhotoInspectsBytesBeforeDecodeAndSanitizesStoredPhotos() throws {
