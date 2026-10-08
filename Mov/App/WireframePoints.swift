@@ -207,7 +207,7 @@ extension WireframeRoot {
                         Image("PrismArt").resizable().scaledToFit().frame(width: 96, height: 96).accessibilityHidden(true)
                     }.padding(.top, 14)
                     Button { go("SHOP") } label: {
-                        Text("쇼핑하러 가기").font(W.font(15, .semibold)).foregroundStyle(W.ink).frame(maxWidth: .infinity, minHeight: 54)
+                        Text("쇼핑하러 가기").font(W.font(15, .semibold)).foregroundStyle(MovTokens.onBrand).frame(maxWidth: .infinity, minHeight: 54)
                             .background(W.lime, in: RoundedRectangle(cornerRadius: 12))
                     }.buttonStyle(.plain).accessibilityIdentifier("browsePointShop")
                     VStack(alignment: .leading, spacing: 12) {
@@ -255,7 +255,7 @@ extension WireframeRoot {
                                 Button { selectedPointCategory = category } label: {
                                     Text(category.rawValue).font(W.font(11, .medium)).lineLimit(1).minimumScaleFactor(0.8)
                                         .padding(.horizontal, 5).frame(width: (geometry.size.width - 10) * fraction, height: 44)
-                                        .foregroundStyle(selectedPointCategory == category ? W.ink : W.muted)
+                                        .foregroundStyle(selectedPointCategory == category ? MovTokens.onBrand : W.muted)
                                         .background(selectedPointCategory == category ? W.lime : W.soft, in: RoundedRectangle(cornerRadius: 9))
                                 }.buttonStyle(.plain).accessibilityIdentifier("shop-category-\(category == .image ? "image" : category == .frame ? "frame" : "face")")
                                     .accessibilityAddTraits(selectedPointCategory == category ? .isSelected : [])

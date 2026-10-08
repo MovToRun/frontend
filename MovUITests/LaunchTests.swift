@@ -1076,6 +1076,21 @@ extension LaunchTests {
             tap("tab-2");XCTAssertFalse(app.buttons["tab-0"].isSelected);capture("PointIcon-unselected-"+theme);app.terminate()
         }
     }
+    func testPointAccentLabelsStayDarkInDarkAppearance(){
+        app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-wire-reset","-appearance","dark"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:10))
+        let shop=app.buttons["browsePointShop"]
+        XCTAssertTrue(shop.waitForExistence(timeout:5))
+        let overview=app.screenshot().image
+        XCTAssertTrue(containsBrandGreen(in:overview,rect:shop.frame));XCTAssertTrue(containsDarkPixel(in:overview,rect:shop.frame),"The points CTA uses the brand's dark on-accent semantic color in dark mode")
+        capture("Points-dark-accent-cta")
+        shop.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5))
+        let category=app.buttons["shop-category-image"]
+        XCTAssertTrue(category.waitForExistence(timeout:5))
+        let catalog=app.screenshot().image
+        XCTAssertTrue(containsBrandGreen(in:catalog,rect:category.frame));XCTAssertTrue(containsDarkPixel(in:catalog,rect:category.frame),"The selected shop category uses the dark on-accent semantic color in dark mode")
+        capture("Shop-dark-accent-category")
+    }
     func testB01LaunchAliasOpensPointsTab(){
         app.launchArguments=["-wire-screen","B01","-wire-fixture","-wire-reset","-appearance","light"];app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:10));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertTrue(app.staticTexts["pointBalance"].exists)

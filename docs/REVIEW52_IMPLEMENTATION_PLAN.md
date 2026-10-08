@@ -181,18 +181,18 @@ PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [x] | `B01` | 내 포인트 | `WireframePoints.swift` — 로컬 잔액, 거래 미리보기, 상점/내역/안내 이동 |
+| [x] | `B01` | 내 포인트 | `WireframePoints.swift` — 로컬 잔액, 거래 미리보기, 상점/내역/안내 이동; 다크 모드 샤드 대비와 라임 CTA 글자 대비 보정 |
 | [x] | `B02` | 포인트 내역 | `WireframePoints.swift` — 기기 내 로컬 거래 목록 |
 | [x] | `B03` | 포인트 내역 없음 | `WireframePoints.swift` — 빈 내역 상태 |
 | [x] | `B04` | 포인트 안내 | `WireframePoints.swift` — 로컬 포인트 안내 |
-| [x] | `B05` | 포인트 상점 | `WireframePoints.swift` — 예시 상품 카탈로그 및 분류 |
+| [x] | `B05` | 포인트 상점 | `WireframePoints.swift` — 예시 상품 카탈로그 및 분류; 선택 카테고리 라임 배경 글자 대비 보정 |
 | [x] | `B06` | 꾸미기 아이템 상세 | `WireframePoints.swift` — 상품 상세, 미리보기, 구매 확인 |
 | [x] | `B07` | 구매 완료 예시 | `WireframePoints.swift` — 로컬 구매 결과 |
 | [x] | `B08` | 포인트 부족 예시 | `WireframePoints.swift` — 구매 제한 및 적립 안내 이동 |
 | [x] | `B09` | 포인트 받는 방법 | `WireframePoints.swift` — 미연동 적립/광고 영역 안내 |
 | [x] | `B10` | 러닝 카드 미리보기 | `WireframePoints.swift` — 현재 로컬 프로필/러닝 기록을 사용한 미리보기 |
 
-구현 범위는 로컬 화면 이동과 예시 상태까지입니다. 상품/가격/초기 포인트는 UI 검증용 샘플이며 서버, 결제, 광고 재생, 보상 적립은 연결하지 않았습니다. PR #11에서 제공된 ZIP의 B05/B06 원본 SVG 경로와 CSS geometry를 SwiftUI로 반영하고 실제 화면을 대조했습니다.
+구현 범위는 로컬 화면 이동과 예시 상태까지입니다. 상품/가격/초기 포인트는 UI 검증용 샘플이며 서버, 결제, 광고 재생, 보상 적립은 연결하지 않았습니다. PR #11에서 제공된 ZIP의 B05/B06 원본 SVG 경로와 CSS geometry를 SwiftUI로 반영하고 실제 화면을 대조했습니다. 이번 다크 모드 조정은 [포인트 에셋·대비 메모](REVIEW52_POINTS_DARK_MODE.md)를 참고합니다.
 
 ### 커뮤니티 · 크루 · `Community / Crew`
 
