@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @MainActor final class LaunchTests:XCTestCase {
     var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
@@ -7,6 +8,44 @@ import XCTest
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
+    func containsBrandGreen(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index+1]>180 && bytes[index]<160 && bytes[index+2]<180 && bytes[index+3]>200}
+        }
+    }
+    func testReview52BrandMarksRenderFromLocalAsset() {
+        for screen in ["H00","H01"] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+            let headerMarks=app.images.matching(identifier:"rootHeaderBrandMark").allElementsBoundByIndex
+            XCTAssertTrue(headerMarks.first?.waitForExistence(timeout:5) ?? false,"\(screen) keeps its source-defined header logo")
+            let screenshot=app.screenshot().image
+            let headerMarkRegion=CGRect(x:8,y:40,width:48,height:48)
+            XCTAssertTrue(headerMarks.contains{$0.frame.intersects(headerMarkRegion)},"\(screen) header logo must be in the leading header slot")
+            XCTAssertTrue(containsBrandGreen(in:screenshot,rect:headerMarkRegion),"\(screen) header logo must render from the bundled mask asset")
+            if screen == "H00" {
+                let homeTab=app.buttons["tab-2"]
+                XCTAssertEqual(homeTab.label,"홈","The home tab keeps its VoiceOver name")
+                XCTAssertFalse(app.staticTexts["tab-caption-2"].exists,"The home logo has no visible caption")
+                let tabMark=app.images.matching(identifier:"homeTabBrandMark").firstMatch
+                XCTAssertTrue(tabMark.waitForExistence(timeout:5),"The centered home tab uses the source brand mark")
+                XCTAssertTrue(containsBrandGreen(in:app.screenshot().image,rect:tabMark.frame),"The tab asset must visibly render; an empty CSS-mask-like capture is not acceptable")
+            }
+            capture(screen+"-brand-mark")
+            app.terminate()
+        }
+    }
     func testCoreFlowAndAppearancePersistence(){
         open();let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
         XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name")

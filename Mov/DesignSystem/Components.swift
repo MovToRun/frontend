@@ -2,7 +2,14 @@ import SwiftUI
 
 struct BrandMark: View {
     var size: CGFloat = 30
-    var body: some View { Image("BrandMark").resizable().renderingMode(.template).scaledToFit().frame(width:size,height:size).foregroundStyle(MovTokens.brand).accessibilityLabel("모브") }
+    var tile = false
+    var body: some View {
+        Image("BrandMark").resizable().renderingMode(.template).scaledToFit()
+            .frame(width:tile ? size-10:size,height:tile ? size-10:size)
+            .frame(width:size,height:size)
+            .background(tile ? MovTokens.brandInk:Color.clear,in:RoundedRectangle(cornerRadius:size*0.28))
+            .foregroundStyle(MovTokens.brand).accessibilityLabel("모브")
+    }
 }
 struct AssetIcon: View {
     let name: String

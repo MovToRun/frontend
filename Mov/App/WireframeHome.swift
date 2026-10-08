@@ -1,7 +1,7 @@
 import SwiftUI
 extension WireframeRoot {
     var home:some View {
-        VStack(spacing:0){rootHeader("",showMark:false);ScrollView{VStack(alignment:.leading,spacing:14){WText(text:WReviewClock.now.formatted(.dateTime.month().day().weekday(.wide)) + (ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시" : ""),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
+        VStack(spacing:0){rootHeader("");ScrollView{VStack(alignment:.leading,spacing:14){WText(text:WReviewClock.now.formatted(.dateTime.month().day().weekday(.wide)) + (ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시" : ""),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
             Button{go("H03")}label:{HStack{VStack(alignment:.leading,spacing:9){WText(text:"오늘의 목표",small:true);Text(store.goal.summary).font(W.font(15,.medium))};Spacer();Image(systemName:"arrow.right")}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:14))}.accessibilityIdentifier("editGoal")
             button("달리러 가기","H01")
             VStack(alignment:.leading,spacing:16){HStack{Text("이번 주").font(W.font(17,.semibold));Spacer();Button("요약 보기"){go("H07")}.font(W.font(12))};weeklySummary}.padding(.top,28)
@@ -26,7 +26,7 @@ extension WireframeRoot {
         }
     }
     var ready:some View {
-        VStack(spacing:0){rootHeader("러닝",run:true,showMark:false);GeometryReader{g in ZStack(alignment:.bottom){WMap(controls:true,gpsWaiting:true)
+        VStack(spacing:0){rootHeader("러닝",run:true);GeometryReader{g in ZStack(alignment:.bottom){WMap(controls:true,gpsWaiting:true)
             VStack(alignment:.leading,spacing:16){Capsule().fill(W.border).frame(width:32,height:4).frame(maxWidth:.infinity).padding(.bottom,10)
                 Text(ui.screen=="H05" ? "러닝이 이어지고 있어요":"오늘의 러닝").font(W.font(24,.bold))
                 if ui.screen=="H02"{WText(text:"첫 러닝을 시작해 보세요")}

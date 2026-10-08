@@ -33,6 +33,20 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
     }
 
+    func testReview52BrandMarkAssetLoadsAndCanRenderLocally() throws {
+        let bundle = Bundle(for: WireState.self)
+        let image = try XCTUnwrap(UIImage(named: "BrandMark", in: bundle, compatibleWith: nil))
+        let source = try XCTUnwrap(image.cgImage)
+        XCTAssertEqual(source.width, 1254)
+        XCTAssertEqual(source.height, 1254)
+        XCTAssertNotEqual(source.alphaInfo, .none, "The transparent aperture mask must remain available")
+
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
+        XCTAssertNotNil(rendered.cgImage, "The bundled logo asset must draw into a local SwiftUI-sized surface")
+    }
+
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
