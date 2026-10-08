@@ -38,6 +38,21 @@ import UIKit
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
         }
     }
+    func containsLightGreenPixel(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]>160 && bytes[index+1]>210 && bytes[index+2]>165 && bytes[index+3]>200}
+        }
+    }
     func testReview52RunPanelAndRecordListDetailAlignment() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))
@@ -1090,6 +1105,18 @@ extension LaunchTests {
         let catalog=app.screenshot().image
         XCTAssertTrue(containsBrandGreen(in:catalog,rect:category.frame));XCTAssertTrue(containsDarkPixel(in:catalog,rect:category.frame),"The selected shop category uses the dark on-accent semantic color in dark mode")
         capture("Shop-dark-accent-category")
+    }
+    func testPointHistoryEarnedAndSpentIconsKeepContrastInDarkAppearance(){
+        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-reset","-appearance","dark"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:10))
+        let earned=app.descendants(matching:.any)["point-entry-row-earned"],spent=app.descendants(matching:.any)["point-entry-row-spent"]
+        XCTAssertTrue(earned.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(spent.waitForExistence(timeout:5),app.debugDescription)
+        let screenshot=app.screenshot().image
+        let earnedIcon=CGRect(x:earned.frame.minX,y:earned.frame.midY-12,width:24,height:24)
+        let spentIcon=CGRect(x:spent.frame.minX,y:spent.frame.midY-12,width:24,height:24)
+        XCTAssertTrue(containsLightGreenPixel(in:screenshot,rect:earnedIcon),"The dark earned-point variant exposes its bright facet")
+        XCTAssertTrue(containsLightGreenPixel(in:screenshot,rect:spentIcon),"The dark spent-point variant exposes its bright facet")
+        capture("Point-history-earned-spent-dark-contrast")
     }
     func testB01LaunchAliasOpensPointsTab(){
         app.launchArguments=["-wire-screen","B01","-wire-fixture","-wire-reset","-appearance","light"];app.launch()

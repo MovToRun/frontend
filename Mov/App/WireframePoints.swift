@@ -315,6 +315,7 @@ extension WireframeRoot {
     private func pointEntryRow(_ entry: WPointEntry) -> some View {
         HStack(spacing: 12) {
             Image(entry.kind == .earn ? "PrismEarned" : "PrismSpent").resizable().scaledToFit().frame(width: 24, height: 24)
+                .accessibilityIdentifier(entry.kind == .earn ? "point-entry-earned-icon" : "point-entry-spent-icon")
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.title).font(W.font(13, .medium))
                 HStack(spacing: 6) { Text(entry.date.formatted(.dateTime.month(.twoDigits).day(.twoDigits))).font(W.font(11)); Text(entry.detail).font(W.font(11)) }.foregroundStyle(W.muted)
@@ -325,6 +326,7 @@ extension WireframeRoot {
                 .accessibilityLabel("\(entry.amount >= 0 ? "더하기" : "빼기") \(abs(entry.amount).formatted()) 포인트")
         }.frame(minHeight: 62).overlay(alignment: .bottom) { W.line.frame(height: 1) }
             .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("point-entry-row-\(entry.kind == .earn ? "earned" : "spent")")
     }
 
     private func pointHistory(empty: Bool) -> some View {
