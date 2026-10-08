@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import UniformTypeIdentifiers
 @testable import Mov
 
@@ -323,6 +324,23 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WeeklyGoal.percent(value:23,goal:20),115)
         XCTAssertEqual(WeeklyGoal.percent(value:0,goal:20),0)
         XCTAssertEqual(WeeklyGoal.percent(value:4.82,goal:20),24)
+    }
+    @MainActor func testReview52GoalWheelColorsFollowComputedThemeTokens() {
+        func hex(_ color:Color,style:UIUserInterfaceStyle)->UInt32 {
+            let resolved=UIColor(color).resolvedColor(with:UITraitCollection(userInterfaceStyle:style))
+            var red:CGFloat=0,green:CGFloat=0,blue:CGFloat=0,alpha:CGFloat=0
+            XCTAssertTrue(resolved.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+            return UInt32((red*255).rounded())<<16 | UInt32((green*255).rounded())<<8 | UInt32((blue*255).rounded())
+        }
+        XCTAssertEqual(hex(W.line,style:.light),0xE5E5E5)
+        XCTAssertEqual(hex(W.line,style:.dark),0x3A3A3A)
+        XCTAssertEqual(hex(W.soft,style:.light),0xF7F7F7)
+        XCTAssertEqual(hex(W.soft,style:.dark),0x262626)
+        XCTAssertEqual(hex(W.muted,style:.light),0x686868)
+        XCTAssertEqual(hex(W.muted,style:.dark),0xB0B0B0)
+        let goalFieldHint=Color.wire(0x535353,0xD0D0D0)
+        XCTAssertEqual(hex(goalFieldHint,style:.light),0x535353)
+        XCTAssertEqual(hex(goalFieldHint,style:.dark),0xD0D0D0)
     }
     @MainActor func testPauseResumeAndSavedRecordSurviveReload() {
         let suite="MovTests."+UUID().uuidString

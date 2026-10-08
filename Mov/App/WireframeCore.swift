@@ -544,10 +544,23 @@ DragGesture(minimumDistance:0).onChanged{v in
             .onChange(of:selection){_,_ in if dragY == nil && motion == nil{position=CGFloat(index)*60}}
             .onDisappear{stop()}
             .transaction{$0.animation=nil}
-            .accessibilityElement(children:.ignore).accessibilityIdentifier(time ? "timeGoalPicker":"distanceGoalPicker").accessibilityLabel(time ? "시간 목표":"거리 목표").accessibilityValue(label(selection))
+            .modifier(WGoalWheelAccessibility(identifier:time ? "timeGoalPicker":"distanceGoalPicker",label:time ? "시간 목표":"거리 목표",value:label(selection)))
             .accessibilityAdjustableAction{direction in stop();move(CGFloat(min(values.count-1,max(0,index+(direction == .increment ? 1:-1))))*60)}
             Text("위아래로 스크롤해 목표를 맞춰 주세요").font(W.font(12)).foregroundStyle(W.muted).frame(height:18)
         }
+    }
+}
+
+private struct WGoalWheelAccessibility:ViewModifier {
+    let identifier:String
+    let label:String
+    let value:String
+    func body(content:Content)->some View {
+        content.accessibilityElement(children:.ignore)
+            .accessibilityIdentifier(identifier)
+            .accessibilityLabel(label)
+            .accessibilityValue(value)
+            .accessibilityHint("위아래로 스크롤해 목표를 맞춰 주세요")
     }
 }
 
