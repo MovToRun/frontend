@@ -32,12 +32,14 @@ extension WireframeRoot {
                     else{go("R06")}
                 }.buttonStyle(WButtonStyle(kind:1,panel:true)).contentTransition(.opacity).accessibilityIdentifier(ui.screen=="R05" ? "saveRun":paused ? "finishRun":"runDetails").accessibilityHidden(ui.collapsed)
             }
-        }.padding(.horizontal,24).padding(.bottom,12)
+        }.padding(.horizontal,24).padding(.bottom,21)
     }
     @ViewBuilder private func runPanelMetrics(record:RunRecord,paused:Bool)->some View {
         VStack(alignment:.leading,spacing:8){
-            Text(ui.screen=="R05" ? "러닝을 마칠까요?":ui.screen=="R10" ? "저장을 다시 시도해 주세요":ui.screen=="R01" ? "위치 확인 중":" ")
-                .font(W.font(22,.bold)).frame(height:28,alignment:.leading)
+            if ui.screen != "R02" {
+                Text(ui.screen=="R05" ? "러닝을 마칠까요?":ui.screen=="R10" ? "저장을 다시 시도해 주세요":ui.screen=="R01" ? "위치 확인 중":" ")
+                    .font(W.font(22,.bold)).frame(height:28,alignment:.leading)
+            }
             WMetric(record:record,paused:paused,reservePauseSpace:true)
             if ui.screen=="R02" && WReviewMode.tools {
                 WText(text:"확인된 유효 구간만 거리 합계에 포함해요. 판별 정보가 없는 구간은 알 수 없어요.",small:true)
@@ -49,7 +51,7 @@ extension WireframeRoot {
             }
             Text(ui.screen=="R03" ? "GPS 신호가 약해요":ui.screen=="R08" ? "네트워크 연결 없음":ui.screen=="R01" ? "시간은 계속 기록돼요":" ")
                 .font(W.font(12)).foregroundStyle(W.muted).frame(height:18,alignment:.leading)
-        }
+        }.padding(.top,ui.screen=="R02" ? 23:0)
     }
     func changeRunState(_ next:String){
         withAnimation(reduceMotion ? nil:.easeOut(duration:0.18)){ui.screen=next}

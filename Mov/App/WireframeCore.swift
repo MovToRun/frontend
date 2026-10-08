@@ -651,7 +651,7 @@ struct WGPSSignal:View {
     @Environment(\.accessibilityReduceMotion) private var systemMotion
     var reduced:Bool{systemMotion || ProcessInfo.processInfo.arguments.contains("-wire-reduced")}
     var review:Bool{ProcessInfo.processInfo.arguments.contains("-wire-review-size")}
-    var color:Color{review ? Color(red:1,green:90/255,blue:95/255):(searching || waiting) ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):Color(red:1,green:90/255,blue:95/255)}
+    var color:Color{(searching || waiting) ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):W.lime}
     var body:some View{TimelineView(.animation(minimumInterval:1.0/60,paused:reduced || !searching || review)){context in
         ZStack{RoundedRectangle(cornerRadius:12).fill(W.paper).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line,lineWidth:1))
             Circle().fill(color).frame(width:8,height:8)
