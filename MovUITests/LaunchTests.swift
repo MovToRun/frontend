@@ -476,19 +476,39 @@ extension LaunchTests {
 
 
 extension LaunchTests {
+func waitForGoalValue(_ element:XCUIElement,_ expected:String,file:StaticString=#filePath,line:UInt=#line) {
+        let matched=waitForLayout({element.exists && (element.value as? String)==expected},timeout:5)
+        XCTAssertTrue(matched,"Expected goal wheel value \(expected); actual: \(element.value ?? "<nil>")",file:file,line:line)
+    }
+    func selectGoal(_ identifier:String,file:StaticString=#filePath,line:UInt=#line) {
+        let matches=app.buttons.matching(identifier:identifier)
+        let tappable=waitForLayout({matches.allElementsBoundByIndex.contains(where:{$0.exists && $0.isHittable})},timeout:8)
+        XCTAssertTrue(tappable,"Goal option must become hittable before selection: \(identifier)\n\(app.debugDescription)",file:file,line:line)
+        guard tappable else{return}
+        guard let button=matches.allElementsBoundByIndex.first(where:{$0.exists && $0.isHittable}) else{return}
+        button.tap()
+        let selected=waitForLayout({matches.allElementsBoundByIndex.contains(where:{$0.isSelected})},timeout:5)
+        XCTAssertTrue(selected,"Goal option did not enter selected state: \(identifier)\n\(app.debugDescription)",file:file,line:line)
+    }
+
     func testSingleGoalWheelBothThemes() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H03","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance",theme];app.launch()
-            XCTAssertTrue(app.buttons["goal-distance"].waitForExistence(timeout:10));app.buttons["goal-distance"].tap()
+            XCTAssertTrue(app.buttons["goal-distance"].waitForExistence(timeout:10));selectGoal("goal-distance")
             let distance=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
-            XCTAssertTrue(distance.waitForExistence(timeout:5));XCTAssertEqual(distance.value as? String,"5 km");capture("H03-distance-"+theme)
+            XCTAssertTrue(distance.waitForExistence(timeout:5));waitForGoalValue(distance,"5 km");capture("H03-distance-"+theme)
             distance.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
-            XCTAssertEqual(distance.value as? String,"5.5 km")
-            app.buttons["goal-time"].tap();let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
-            XCTAssertTrue(time.waitForExistence(timeout:5));XCTAssertEqual(time.value as? String,"30분")
-            for _ in 0..<3{time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()}
-            XCTAssertEqual(time.value as? String,"1시간");capture("H03-time-"+theme)
-            app.buttons["goal-none"].tap();XCTAssertFalse(time.exists);capture("H03-none-"+theme)
+            waitForGoalValue(distance,"5.5 km")
+            selectGoal("goal-time");let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+            XCTAssertTrue(time.waitForExistence(timeout:5));waitForGoalValue(time,"30분")
+            for expected in ["40분","50분","1시간"] {
+                time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
+                waitForGoalValue(time,expected)
+            }
+            capture("H03-time-"+theme)
+            selectGoal("goal-none")
+            XCTAssertTrue(waitForLayout({!time.exists},timeout:5),"The selected no-goal state removes its wheel")
+            capture("H03-none-"+theme)
             app.terminate()
         }
     }
@@ -515,24 +535,26 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-H03"].waitForExistence(timeout:5))
         let distanceChoice=app.buttons["goal-distance"]
         let timeChoice=app.buttons["goal-time"]
-        distanceChoice.tap()
+        selectGoal("goal-distance")
         let distance=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
         XCTAssertTrue(distance.waitForExistence(timeout:5))
-        XCTAssertEqual(distance.value as? String,"5 km")
+        waitForGoalValue(distance,"5 km")
         distance.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
-        XCTAssertEqual(distance.value as? String,"5.5 km")
+        waitForGoalValue(distance,"5.5 km")
 
-        timeChoice.tap()
+        selectGoal("goal-time")
         let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
         XCTAssertTrue(time.waitForExistence(timeout:5))
-        XCTAssertEqual(time.value as? String,"30분")
-        for _ in 0..<3 { time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap() }
-        XCTAssertEqual(time.value as? String,"1시간")
+        waitForGoalValue(time,"30분")
+        for expected in ["40분","50분","1시간"] {
+            time.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.92)).tap()
+            waitForGoalValue(time,expected)
+        }
 
-        distanceChoice.tap()
-        XCTAssertEqual(distance.value as? String,"5.5 km")
-        timeChoice.tap()
-        XCTAssertEqual(time.value as? String,"1시간")
+        selectGoal("goal-distance")
+        waitForGoalValue(distance,"5.5 km")
+        selectGoal("goal-time")
+        waitForGoalValue(time,"1시간")
         capture("H03-goal-values-preserved-by-type")
 
         app.buttons["saveGoal"].tap()
@@ -544,32 +566,33 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-H03"].waitForExistence(timeout:5))
         let savedDistance=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
         XCTAssertTrue(app.buttons["goal-distance"].waitForExistence(timeout:5))
-        app.buttons["goal-distance"].tap()
+        selectGoal("goal-distance")
         XCTAssertTrue(savedDistance.waitForExistence(timeout:5))
-        XCTAssertEqual(savedDistance.value as? String,"5.5 km")
+        waitForGoalValue(savedDistance,"5.5 km")
     }
 
     func testGoalWheelDragAndBounds() {
-        open("H03");tap("goal-distance")
+        open("H03");selectGoal("goal-distance")
         let wheel=app.descendants(matching:.any)["distanceGoalPicker"].firstMatch
         func drag(_ element:XCUIElement,_ up:Bool,_ speed:XCUIGestureVelocity){
             let a=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.92:0.08))
             let b=element.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:up ? 0.08:0.92))
             a.press(forDuration:0.05,thenDragTo:b,withVelocity:speed,thenHoldForDuration:0)
         }
-        drag(wheel,true,.slow);XCTAssertNotEqual(wheel.value as? String,"5 km")
+        drag(wheel,true,.slow)
+        XCTAssertTrue(waitForLayout({(wheel.value as? String) != "5 km"},timeout:5),"Dragging changes the selected goal")
         drag(wheel,true,.fast);capture("H03-fast-flick")
         drag(wheel,false,.fast);capture("H03-reverse")
         for _ in 0..<10{drag(wheel,false,.fast)}
-        XCTAssertEqual(wheel.value as? String,"1 km")
-        drag(wheel,false,.slow);XCTAssertEqual(wheel.value as? String,"1 km")
-        tap("goal-time");let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
+        waitForGoalValue(wheel,"1 km")
+        drag(wheel,false,.slow);waitForGoalValue(wheel,"1 km")
+        selectGoal("goal-time");let time=app.descendants(matching:.any)["timeGoalPicker"].firstMatch
         for _ in 0..<3{drag(time,false,.fast)}
-        XCTAssertEqual(time.value as? String,"10분")
+        waitForGoalValue(time,"10분")
         for _ in 0..<36{drag(time,true,.fast)}
-        XCTAssertEqual(time.value as? String,"6시간");capture("H03-time-upper-bound")
-        drag(time,true,.slow);XCTAssertEqual(time.value as? String,"6시간")
-        tap("goal-distance");XCTAssertEqual(wheel.value as? String,"1 km")
+        waitForGoalValue(time,"6시간");capture("H03-time-upper-bound")
+        drag(time,true,.slow);waitForGoalValue(time,"6시간")
+        selectGoal("goal-distance");waitForGoalValue(wheel,"1 km")
     }
     func testEmptyRecordListAndLookupFailureAreDistinct() {
         for screen in ["L02","L03"] {
