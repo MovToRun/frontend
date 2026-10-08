@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import UniformTypeIdentifiers
 @testable import Mov
 
@@ -167,20 +168,18 @@ final class ThemeTests:XCTestCase {
             UIColor.systemBlue.setFill();context.fill(CGRect(x:90,y:0,width:90,height:120))
         }
         let oriented=UIImage(cgImage:try XCTUnwrap(upright.cgImage),scale:1,orientation:.right)
-        let crop=CGRect(origin:.zero,size:oriented.size)
-        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:oriented,crop:crop))
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:oriented,crop:CGRect(origin:.zero,size:oriented.size)))
         let source=try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData,nil))
         let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil) as? [CFString:Any] ?? [:]
         let dimensions=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
-        XCTAssertEqual(dimensions.width,1_024)
-        XCTAssertEqual(dimensions.height,1_024)
+        XCTAssertEqual(dimensions.width,1_024);XCTAssertEqual(dimensions.height,1_024)
         XCTAssertTrue(dimensions.type.conforms(to:.jpeg))
         XCTAssertNil(properties[kCGImagePropertyOrientation])
         let exif=properties[kCGImagePropertyExifDictionary] as? [CFString:Any] ?? [:]
         XCTAssertTrue(Set(exif.keys.map{String(describing:$0)}).isSubset(of:["ColorSpace","PixelXDimension","PixelYDimension"]))
         XCTAssertNil(properties[kCGImagePropertyTIFFDictionary])
         XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
-        XCTAssertLessThanOrEqual(jpeg.count,2*1024*1024)
+        XCTAssertLessThanOrEqual(jpeg.count,2_000_000)
     }
 
     func testProfilePhotoInspectsBytesBeforeDecodeAndSanitizesStoredPhotos() throws {
@@ -358,6 +357,23 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WeeklyGoal.percent(value:23,goal:20),115)
         XCTAssertEqual(WeeklyGoal.percent(value:0,goal:20),0)
         XCTAssertEqual(WeeklyGoal.percent(value:4.82,goal:20),24)
+    }
+    @MainActor func testReview52GoalWheelColorsFollowComputedThemeTokens() {
+        func hex(_ color:Color,style:UIUserInterfaceStyle)->UInt32 {
+            let resolved=UIColor(color).resolvedColor(with:UITraitCollection(userInterfaceStyle:style))
+            var red:CGFloat=0,green:CGFloat=0,blue:CGFloat=0,alpha:CGFloat=0
+            XCTAssertTrue(resolved.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+            return UInt32((red*255).rounded())<<16 | UInt32((green*255).rounded())<<8 | UInt32((blue*255).rounded())
+        }
+        XCTAssertEqual(hex(W.line,style:.light),0xE5E5E5)
+        XCTAssertEqual(hex(W.line,style:.dark),0x3A3A3A)
+        XCTAssertEqual(hex(W.soft,style:.light),0xF7F7F7)
+        XCTAssertEqual(hex(W.soft,style:.dark),0x262626)
+        XCTAssertEqual(hex(W.muted,style:.light),0x686868)
+        XCTAssertEqual(hex(W.muted,style:.dark),0xB0B0B0)
+        let goalFieldHint=Color.wire(0x535353,0xD0D0D0)
+        XCTAssertEqual(hex(goalFieldHint,style:.light),0x535353)
+        XCTAssertEqual(hex(goalFieldHint,style:.dark),0xD0D0D0)
     }
     @MainActor func testPauseResumeAndSavedRecordSurviveReload() {
         let suite="MovTests."+UUID().uuidString
