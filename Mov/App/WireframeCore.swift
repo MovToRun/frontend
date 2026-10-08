@@ -150,6 +150,7 @@ struct WMap:View {
     var centerControl=true
     var failed=false
     var gpsSearching=false
+    var gpsWaiting=false
     var gpsWeak=false
     var focusUser=false
     var userCenterY:CGFloat=0
@@ -170,7 +171,7 @@ struct WMap:View {
                     else{panOffset=CGSize(width:panOffset.width+v.translation.width,height:panOffset.height+v.translation.height)}
                 })}else{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface")}}
             if !controls && WReviewMode.tools{GeometryReader{g in if g.size.height>100{VStack(alignment:.leading){Text("가상 코스").font(W.font(11)).padding(.vertical,6).padding(.horizontal,9).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:5)).overlay(RoundedRectangle(cornerRadius:5).stroke(W.line));Spacer();Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.vertical,4).padding(.horizontal,6).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:3))}.foregroundStyle(W.muted).padding(.horizontal,18).padding(.vertical,16)}}}
-            if controls {VStack(alignment:.leading,spacing:8){Button{info.toggle()}label:{WGPSSignal(searching:gpsSearching,weak:gpsWeak)}.accessibilityLabel("위치 상태 안내");if WReviewMode.tools && (!failed || mapRecovered){Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.horizontal,6).padding(.vertical,4).background(W.paper).padding(.leading,6)};if info{WNotice(text:"위치와 신호 상태를 확인해 주세요.").frame(maxWidth:280)}}.padding(.horizontal,12).padding(.top,controlsTopInset+10)}
+            if controls {VStack(alignment:.leading,spacing:8){Button{info.toggle()}label:{WGPSSignal(searching:gpsSearching,weak:gpsWeak,waiting:gpsWaiting)}.accessibilityLabel("위치 상태 안내");if WReviewMode.tools && (!failed || mapRecovered){Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.horizontal,6).padding(.vertical,4).background(W.paper).padding(.leading,6)};if info{WNotice(text:"위치와 신호 상태를 확인해 주세요.").frame(maxWidth:280)}}.padding(.horizontal,12).padding(.top,controlsTopInset+10)}
         }.clipped().overlay(alignment:.bottomTrailing){if controls && centerControl{Button{withAnimation(.easeOut(duration:0.22)){panOffset = .zero}}label:{AssetIcon(name:"location",size:24).frame(width:44,height:44).background(W.paper,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line))}.accessibilityLabel("지도 중심").accessibilityIdentifier("mapRecenter").accessibilityValue(isCentered ? "중심":"이동됨").padding(16).padding(.bottom,centerControlBottomInset)}}
     }
 }
@@ -270,7 +271,7 @@ enum WRootTab: Int, CaseIterable {
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
-struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var body:some View {Group{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport"){WireframeRoot().frame(width:390,height:790).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize)}}
+struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")};var body:some View {Group{if captureViewport{WireframeRoot().frame(width:390,height:790).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)}}
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
@@ -285,7 +286,7 @@ struct WireframeRoot:View {
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
-            model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-10-01T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)])]
+            model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)])]
             model.persist()
         }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
@@ -638,18 +639,19 @@ enum WOriginalMotion {
 struct WGPSSignal:View {
     var searching=false
     var weak=false
+    var waiting=false
     @State private var began=Date()
     @Environment(\.accessibilityReduceMotion) private var systemMotion
     var reduced:Bool{systemMotion || ProcessInfo.processInfo.arguments.contains("-wire-reduced")}
     var review:Bool{ProcessInfo.processInfo.arguments.contains("-wire-review-size")}
-    var color:Color{review ? Color(red:1,green:90/255,blue:95/255):searching ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):Color(red:1,green:90/255,blue:95/255)}
+    var color:Color{review ? Color(red:1,green:90/255,blue:95/255):(searching || waiting) ? Color(white:0.6):weak ? Color(red:244/255,green:189/255,blue:50/255):Color(red:1,green:90/255,blue:95/255)}
     var body:some View{TimelineView(.animation(minimumInterval:1.0/60,paused:reduced || !searching || review)){context in
         ZStack{RoundedRectangle(cornerRadius:12).fill(W.paper).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line,lineWidth:1))
             Circle().fill(color).frame(width:8,height:8)
             ForEach(0..<2){i in let value=searching && !reduced && !review ? WOriginalMotion.gpsRing(WOriginalMotion.time(context.date.timeIntervalSince(began)),outer:i==1):(opacity:i==1 ? 0.2:0.45,scale:1.0)
                 Circle().stroke(color,lineWidth:1).frame(width:i==1 ? 20:14,height:i==1 ? 20:14).opacity(value.opacity).scaleEffect(value.scale)
             }
-        }.frame(width:44,height:44)
+        }.frame(width:44,height:44).accessibilityValue(waiting ? "GPS 연결 전":searching ? "위치 확인 중":weak ? "신호 약함":"GPS 연결됨")
     }.onAppear{began=Date()}.onChange(of:searching){_,_ in began=Date()}}
 }
 

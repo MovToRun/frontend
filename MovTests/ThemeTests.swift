@@ -17,6 +17,16 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    @MainActor func testReview52WeekFixtureUsesItsReferenceWeek() {
+        let suite = "review52-week-\(UUID().uuidString)"
+        let store = RunStore(defaults: UserDefaults(suiteName: suite)!)
+        let recordDate = ISO8601DateFormatter().date(from: "2026-09-29T07:12:00+09:00")!
+        store.records = [RunRecord(date: recordDate, title: "fixture", seconds: 1808, kilometers: 4.82)]
+        XCTAssertEqual(store.weeklyRecords(asOf: WReviewClock.referenceDate).map(\.kilometers), [4.82])
+        XCTAssertTrue(store.weeklyRecords(asOf: ISO8601DateFormatter().date(from: "2026-10-08T12:00:00+09:00")!).isEmpty)
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+    }
+
     func testRootTabRoutesAndLabelsMatchReview52Navigation() {
         XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
         XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])

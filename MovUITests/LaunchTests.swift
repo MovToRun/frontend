@@ -548,14 +548,15 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
-    func userOpen(_ screen:String,compact:Bool=false){
+    func userOpen(_ screen:String,compact:Bool=false,captureViewport:Bool=false){
         app.launchArguments=["-wire-fixture","-wire-reset","-wire-user-flow","-wire-screen",screen]
         if compact{app.launchArguments.append("-wire-compact-review")}
+        if captureViewport{app.launchArguments.append("-wire-capture-viewport")}
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
     }
     func fillUserAuth(confirm:Bool=false,current:Bool=false){
         if app.textFields["auth-email"].exists{let f=app.textFields["auth-email"];f.tap();f.typeText("runner@example.test");XCTAssertEqual(f.value as? String,"runner@example.test")}
-        func enterPassword(_ identifier:String){let reveal=app.buttons["auth-reveal-\(identifier)"];if app.secureTextFields[identifier].exists{reveal.tap()};let field=app.textFields[identifier];field.tap();field.typeText("MovReview482619");XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}
+        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;field.tap();field.typeText("MovReview482619");if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}}
         if current{enterPassword("auth-current")}
         if app.secureTextFields["auth-password"].exists{enterPassword("auth-password")}
         if confirm{enterPassword("auth-confirm")}
@@ -614,6 +615,33 @@ extension LaunchTests {
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 계속");fillUserAuth(confirm:true);tap("authPrimary");tap("뒤로")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5));tap("뒤로");tap("로그아웃");tap("로그아웃")
         XCTAssertTrue(app.buttons["로그인"].waitForExistence(timeout:5));XCTAssertFalse(app.buttons["가상 예시값 채우기"].exists);capture("User-logout-login")
+    }
+}
+
+extension LaunchTests {
+    func testReview52A01LayoutAndPasswordControls() {
+        userOpen("A01",captureViewport:true)
+        XCTAssertEqual(app.secureTextFields["auth-password"].placeholderValue,"8자 이상 입력")
+        XCTAssertFalse(app.buttons["auth-reveal-auth-password"].exists)
+        let gap=app.secureTextFields["auth-password"].frame.minY-app.textFields["auth-email"].frame.maxY
+        XCTAssertGreaterThan(gap,90)
+        XCTAssertLessThan(gap,110)
+    }
+
+    func testReview52H00ReferenceWeekShowsSeededGoalProgress() {
+        app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","H00","-wire-capture-viewport","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["10월 1일 목요일 · 가상 예시"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","4.82")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["24%"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2026.09.29 · 30:08 유효 러닝 · 예시")).firstMatch.exists)
+    }
+
+    func testReview52H01StartsInGPSWaitingState() {
+        app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","H01","-wire-capture-viewport","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.buttons["startRun"].waitForExistence(timeout:10))
+        XCTAssertEqual(app.buttons["위치 상태 안내"].value as? String,"GPS 연결 전")
     }
 }
 
