@@ -38,7 +38,7 @@ import UIKit
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
         }
     }
-    func containsLightGreenPixel(in image:UIImage, rect:CGRect)->Bool {
+    func containsDarkVariantFacetPixel(in image:UIImage, rect:CGRect)->Bool {
         guard let source=image.cgImage else{return false}
         let scale=image.scale
         let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
@@ -50,7 +50,9 @@ import UIKit
             context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
         }
         return pixels.withUnsafeBufferPointer{bytes in
-            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]>160 && bytes[index+1]>210 && bytes[index+2]>165 && bytes[index+3]>200}
+            stride(from:0,to:bytes.count,by:4).contains{index in
+                bytes[index]>=175 && bytes[index]<=205 && bytes[index+1]>=235 && bytes[index+2]>=175 && bytes[index+2]<=215 && bytes[index+3]>200
+            }
         }
     }
     func testReview52RunPanelAndRecordListDetailAlignment() {
@@ -1112,10 +1114,12 @@ extension LaunchTests {
         let earned=app.descendants(matching:.any)["point-entry-row-earned"],spent=app.descendants(matching:.any)["point-entry-row-spent"]
         XCTAssertTrue(earned.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(spent.waitForExistence(timeout:5),app.debugDescription)
         let screenshot=app.screenshot().image
-        let earnedIcon=CGRect(x:earned.frame.minX,y:earned.frame.midY-12,width:24,height:24)
-        let spentIcon=CGRect(x:spent.frame.minX,y:spent.frame.midY-12,width:24,height:24)
-        XCTAssertTrue(containsLightGreenPixel(in:screenshot,rect:earnedIcon),"The dark earned-point variant exposes its bright facet")
-        XCTAssertTrue(containsLightGreenPixel(in:screenshot,rect:spentIcon),"The dark spent-point variant exposes its bright facet")
+        // The source SVG facet changed from #202925 to #BFFFC7. Sample its interior
+        // polygon coordinates (SVG paths scaled by 0.8), excluding the pale #D9FFDE face.
+        let earnedFacet=CGRect(x:earned.frame.minX+12,y:earned.frame.midY-5,width:2.5,height:4)
+        let spentFacet=CGRect(x:spent.frame.minX+12,y:spent.frame.midY-5,width:2.5,height:4)
+        XCTAssertTrue(containsDarkVariantFacetPixel(in:screenshot,rect:earnedFacet),"The earned dark facet uses #BFFFC7 rather than the light asset's #D9FFDE facet")
+        XCTAssertTrue(containsDarkVariantFacetPixel(in:screenshot,rect:spentFacet),"The spent dark facet uses #BFFFC7 rather than the light asset's #D9FFDE facet")
         capture("Point-history-earned-spent-dark-contrast")
     }
     func testB01LaunchAliasOpensPointsTab(){
