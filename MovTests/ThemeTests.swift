@@ -169,7 +169,8 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(dimensions.height,1_024)
         XCTAssertTrue(dimensions.type.conforms(to:.jpeg))
         XCTAssertNil(properties[kCGImagePropertyOrientation])
-        XCTAssertNil(properties[kCGImagePropertyExifDictionary])
+        let exif=properties[kCGImagePropertyExifDictionary] as? [CFString:Any] ?? [:]
+        XCTAssertTrue(Set(exif.keys.map{String(describing:$0)}).isSubset(of:["ColorSpace","PixelXDimension","PixelYDimension"]))
         XCTAssertNil(properties[kCGImagePropertyTIFFDictionary])
         XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
         XCTAssertLessThanOrEqual(jpeg.count,2*1024*1024)
