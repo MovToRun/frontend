@@ -16,7 +16,7 @@
 | 대조 완료 | `A01`, `H00`, `H01` | PR #10 비교 기록·캡처 |
 | 대조 완료 | `H04` | 390×790 라이트·다크 HTML/SwiftUI pair 캡처 |
 | 대조 완료 | `R02`, `L01`, `L04`, `B05`, `B06` | PR #11 source/app 캡처 및 독립 Pro Max 검증 |
-| 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e focused UI 테스트 |
+| 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
 | 남음 | 인증 `E01–E02`, `A02–A23` | `A01` 제외 |
 | 남음 | 홈·목표·러닝 `H02–H03`, `H05–H06`, `H08–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H07 제외. H03은 wheel bounds unit test는 있으나 source/app 시각 대조는 남음 |
 | 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
@@ -86,7 +86,7 @@ PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다
 | [x] | `H04` | 주간 목표 | `weeklyGoal` — WireframeHome.swift |
 | [x] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
 | [x] | `H06` | 임시 기록 복구 | `informationPage` — WireframeInfo.swift |
-| [x] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift; 원본 대조 후 기간 선택/월간 달력 소개 정렬 |
+| [x] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift; 원본 대조 후 기간 선택/월간 달력 및 0일 빈 상태 정렬 |
 | [ ] | `H08` | 통계 데이터 없음 | `statistics` — WireframeHome.swift |
 | [ ] | `H09` | 목표 초과 달성 | `statistics` — WireframeHome.swift |
 | [x] | `H10` | 주간 목표 삭제 | `informationPage` — WireframeInfo.swift |
