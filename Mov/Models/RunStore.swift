@@ -27,6 +27,13 @@ struct WeeklyGoal: Codable {
     var minutes = 120
     static func percent(value:Double,goal:Double)->Int {guard goal>0 else{return 0};return Int((value/goal*100).rounded())}
 }
+enum WReviewClock {
+    static var referenceDate: Date { ISO8601DateFormatter().date(from: "2026-10-01T12:00:00+09:00")! }
+    static var now: Date {
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-wire-fixture") && args.contains("-wire-capture-viewport") ? referenceDate : Date()
+    }
+}
 struct RunSegment: Codable, Equatable {
     var distance:Double;var seconds:Double;var type="include";var reason:String?
 }
@@ -123,7 +130,8 @@ struct DemoSession: Codable {
     }
     func update(_ record: RunRecord) { if let i=records.firstIndex(where:{$0.id==record.id}) { records[i]=record; persist() } }
     func delete(_ id: UUID) { records.removeAll{$0.id==id}; persist() }
-    var weeklyRecords: [RunRecord] { var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current;let interval=calendar.dateInterval(of:.weekOfYear,for:Date())!;return records.filter{interval.contains($0.date) && $0.isValid} }
+    func weeklyRecords(asOf now: Date = WReviewClock.now) -> [RunRecord] { var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current;let interval=calendar.dateInterval(of:.weekOfYear,for:now)!;return records.filter{interval.contains($0.date) && $0.isValid} }
+    var weeklyRecords: [RunRecord] { weeklyRecords(asOf: WReviewClock.now) }
     var weeklyDistance: Double { weeklyRecords.reduce(0){$0+$1.kilometers} }
     var weeklySeconds: Double { weeklyRecords.reduce(0){$0+$1.seconds} }
     var totalDistance: Double { records.filter(\.isValid).reduce(0){$0+$1.kilometers} }

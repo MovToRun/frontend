@@ -1,13 +1,13 @@
 import SwiftUI
 extension WireframeRoot {
     var home:some View {
-        VStack(spacing:0){rootHeader("");ScrollView{VStack(alignment:.leading,spacing:14){WText(text:Date().formatted(.dateTime.month().day().weekday(.wide)),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
+        VStack(spacing:0){rootHeader("");ScrollView{VStack(alignment:.leading,spacing:14){WText(text:WReviewClock.now.formatted(.dateTime.month().day().weekday(.wide)) + (ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시" : ""),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
             Button{go("H03")}label:{HStack{VStack(alignment:.leading,spacing:9){WText(text:"오늘의 목표",small:true);Text(store.goal.summary).font(W.font(15,.medium))};Spacer();Image(systemName:"arrow.right")}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:14))}.accessibilityIdentifier("editGoal")
             button("달리러 가기","H01")
             VStack(alignment:.leading,spacing:16){HStack{Text("이번 주").font(W.font(17,.semibold));Spacer();Button("요약 보기"){go("H07")}.font(W.font(12))};weeklySummary}.padding(.top,28)
             W.line.frame(height:1).padding(.vertical,14)
             HStack{Text("최근 기록").font(W.font(17,.semibold));Spacer();Button("전체 보기"){go("L01")}.font(W.font(12))}
-            if let r=store.records.first{recordRow(r)}else{WText(text:"아직 러닝 기록이 없어요");WText(text:"첫 달리기부터 여기에 모아 볼게요",small:true)}
+            if let r=store.records.first{recordRow(r,home:true)}else{WText(text:"아직 러닝 기록이 없어요");WText(text:"첫 달리기부터 여기에 모아 볼게요",small:true)}
         }.padding(24)}}
     }
     var weeklySummary:some View {
@@ -26,14 +26,14 @@ extension WireframeRoot {
         }
     }
     var ready:some View {
-        VStack(spacing:0){rootHeader("러닝",run:true);GeometryReader{g in ZStack(alignment:.bottom){WMap(controls:true)
+        VStack(spacing:0){rootHeader("러닝",run:true);GeometryReader{g in ZStack(alignment:.bottom){WMap(controls:true,gpsWaiting:true)
             VStack(alignment:.leading,spacing:16){Capsule().fill(W.border).frame(width:32,height:4).frame(maxWidth:.infinity).padding(.bottom,10)
                 Text(ui.screen=="H05" ? "러닝이 이어지고 있어요":"오늘의 러닝").font(W.font(24,.bold))
                 if ui.screen=="H02"{WText(text:"첫 러닝을 시작해 보세요")}
                 Button{go("H03")}label:{HStack{VStack(alignment:.leading,spacing:6){WText(text:"이번 러닝",small:true);Text(store.goal.summary).font(W.font(14,.medium))};Spacer();Text(store.goal.kind == .none ? "목표 설정":"목표 변경").font(W.font(12))}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:12))}
                 Button(store.session==nil ? "러닝 시작":"러닝으로 돌아가기"){if store.session==nil{store.start(weight:Double(ui.profile.weight));go("R01")}else{go(store.session?.paused == true ? "R04":"R02")}}.buttonStyle(WButtonStyle()).accessibilityIdentifier("startRun")
                 runWeeklySummary
-            }.padding(24).background(W.paper,in:UnevenRoundedRectangle(topLeadingRadius:24,topTrailingRadius:24)).frame(maxHeight:g.size.height,alignment:.bottom)
+            }.padding(.horizontal,24).padding(.top,11).padding(.bottom,32).background(W.paper,in:UnevenRoundedRectangle(topLeadingRadius:24,topTrailingRadius:24)).frame(maxHeight:g.size.height,alignment:.bottom)
         }}}
     }
     var runWeeklySummary:some View {VStack(alignment:.leading,spacing:12){

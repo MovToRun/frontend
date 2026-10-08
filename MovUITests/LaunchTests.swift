@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @MainActor final class LaunchTests:XCTestCase {
     var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
@@ -7,6 +8,69 @@ import XCTest
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
+    func containsBrandGreen(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index+1]>180 && bytes[index]<160 && bytes[index+2]<180 && bytes[index+3]>200}
+        }
+    }
+    func containsDarkPixel(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
+        }
+    }
+    func testReview52BrandMarksRenderFromLocalAsset() {
+        for screen in ["H00","H01"] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+            let headerMarks=app.images.matching(identifier:"rootHeaderBrandMark").allElementsBoundByIndex
+            XCTAssertTrue(headerMarks.first?.waitForExistence(timeout:5) ?? false,"\(screen) keeps its source-defined header logo")
+            let screenshot=app.screenshot().image
+            let headerMarkRegion=CGRect(x:8,y:40,width:48,height:48)
+            // The final Review52 cascade overrides the initial dark-tile rule: 30×30, transparent, inset 0.
+            let visibleHeaderMark=headerMarks.first{$0.frame.intersects(headerMarkRegion)}
+            XCTAssertNotNil(visibleHeaderMark,"\(screen) header logo must be in the leading header slot")
+            if let visibleHeaderMark {
+                XCTAssertEqual(visibleHeaderMark.frame.width,30,accuracy:0.5,"The final header mark is 30pt wide")
+                XCTAssertEqual(visibleHeaderMark.frame.height,30,accuracy:0.5,"The final header mark is 30pt high")
+            }
+            XCTAssertTrue(containsBrandGreen(in:screenshot,rect:headerMarkRegion),"\(screen) header logo must render from the bundled mask asset")
+            XCTAssertFalse(containsDarkPixel(in:screenshot,rect:headerMarkRegion),"\(screen) header mark must not gain a dark tile")
+            if screen == "H00" {
+                let homeTab=app.buttons["tab-2"]
+                XCTAssertEqual(homeTab.label,"홈","The home tab keeps its VoiceOver name")
+                XCTAssertFalse(app.staticTexts["tab-caption-2"].exists,"The home logo has no visible caption")
+                let tabMark=app.images.matching(identifier:"homeTabBrandMark").firstMatch
+                XCTAssertTrue(tabMark.waitForExistence(timeout:5),"The centered home tab uses the source brand mark")
+                let homeMarkRegion=CGRect(x:homeTab.frame.midX-16,y:homeTab.frame.minY+7,width:32,height:32)
+                let tabScreenshot=app.screenshot().image
+                XCTAssertTrue(containsBrandGreen(in:tabScreenshot,rect:homeMarkRegion),"The 26pt tab asset must visibly render; an empty CSS-mask-like capture is not acceptable")
+                XCTAssertFalse(containsDarkPixel(in:tabScreenshot,rect:homeMarkRegion),"The center mark has no tile background")
+            }
+            capture(screen+"-brand-mark")
+            app.terminate()
+        }
+    }
     func testCoreFlowAndAppearancePersistence(){
         open();let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
         XCTAssertEqual(app.buttons["tab-2"].label,"홈","Home keeps its VoiceOver name")
@@ -548,14 +612,15 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
-    func userOpen(_ screen:String,compact:Bool=false){
+    func userOpen(_ screen:String,compact:Bool=false,captureViewport:Bool=false){
         app.launchArguments=["-wire-fixture","-wire-reset","-wire-user-flow","-wire-screen",screen]
         if compact{app.launchArguments.append("-wire-compact-review")}
+        if captureViewport{app.launchArguments.append("-wire-capture-viewport")}
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
     }
     func fillUserAuth(confirm:Bool=false,current:Bool=false){
         if app.textFields["auth-email"].exists{let f=app.textFields["auth-email"];f.tap();f.typeText("runner@example.test");XCTAssertEqual(f.value as? String,"runner@example.test")}
-        func enterPassword(_ identifier:String){let reveal=app.buttons["auth-reveal-\(identifier)"];if app.secureTextFields[identifier].exists{reveal.tap()};let field=app.textFields[identifier];field.tap();field.typeText("MovReview482619");XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}
+        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;field.tap();field.typeText("MovReview482619");if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}}
         if current{enterPassword("auth-current")}
         if app.secureTextFields["auth-password"].exists{enterPassword("auth-password")}
         if confirm{enterPassword("auth-confirm")}
@@ -614,6 +679,33 @@ extension LaunchTests {
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 계속");fillUserAuth(confirm:true);tap("authPrimary");tap("뒤로")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:5));tap("뒤로");tap("로그아웃");tap("로그아웃")
         XCTAssertTrue(app.buttons["로그인"].waitForExistence(timeout:5));XCTAssertFalse(app.buttons["가상 예시값 채우기"].exists);capture("User-logout-login")
+    }
+}
+
+extension LaunchTests {
+    func testReview52A01LayoutAndPasswordControls() {
+        userOpen("A01",captureViewport:true)
+        XCTAssertEqual(app.secureTextFields["auth-password"].placeholderValue,"8자 이상 입력")
+        XCTAssertFalse(app.buttons["auth-reveal-auth-password"].exists)
+        let gap=app.secureTextFields["auth-password"].frame.minY-app.textFields["auth-email"].frame.maxY
+        XCTAssertGreaterThan(gap,90)
+        XCTAssertLessThan(gap,110)
+    }
+
+    func testReview52H00ReferenceWeekShowsSeededGoalProgress() {
+        app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","H00","-wire-capture-viewport","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["10월 1일 목요일 · 가상 예시"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","4.82")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["24%"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2026.09.29 · 30:08 유효 러닝 · 예시")).firstMatch.exists)
+    }
+
+    func testReview52H01StartsInGPSWaitingState() {
+        app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","H01","-wire-capture-viewport","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.buttons["startRun"].waitForExistence(timeout:10))
+        XCTAssertEqual(app.buttons["위치 상태 안내"].value as? String,"GPS 연결 전")
     }
 }
 
