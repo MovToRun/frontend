@@ -125,7 +125,7 @@ final class ThemeTests:XCTestCase {
         var rgba=[UInt8](repeating:0,count:edge*edge*4)
         rgba.withUnsafeMutableBytes{bytes in
             let context=CGContext(data:bytes.baseAddress,width:edge,height:edge,bitsPerComponent:8,bytesPerRow:edge*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
-            context?.draw(output,in:CGRect(x:0,y:0,width:256,height:256))
+            context?.draw(output,in:CGRect(x:0,y:0,width:edge,height:edge))
         }
         let whiteIndex=(12*edge+12)*4
         XCTAssertGreaterThan(rgba[whiteIndex],245)

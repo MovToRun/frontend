@@ -204,8 +204,14 @@ enum WProfilePhotoPolicy {
             let scale=CGFloat(outputEdge)/crop.width
             image.draw(in:CGRect(x:-crop.minX*scale,y:-crop.minY*scale,width:image.size.width*scale,height:image.size.height*scale))
         }
+        guard let normalizedCGImage=normalized.cgImage else{return nil}
         for quality in [0.88,0.76,0.6,0.45] {
-            if let data=normalized.jpegData(compressionQuality:quality),data.count<=maximumOutputBytes,
+            let encoded=NSMutableData()
+            guard let destination=CGImageDestinationCreateWithData(encoded as CFMutableData,UTType.jpeg.identifier as CFString,1,nil) else{continue}
+            CGImageDestinationAddImage(destination,normalizedCGImage,[kCGImageDestinationLossyCompressionQuality:quality] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else{continue}
+            let data=encoded as Data
+            if data.count<=maximumOutputBytes,
                let decoded=UIImage(data:data)?.cgImage,decoded.width==outputEdge,decoded.height==outputEdge{return data}
         }
         return nil
