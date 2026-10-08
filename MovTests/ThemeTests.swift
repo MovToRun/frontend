@@ -619,6 +619,12 @@ extension ThemeTests {
 
 
 extension ThemeTests {
+    func testSourceDistanceFormattingKeepsAtMostTwoDecimalPlaces() {
+        XCTAssertEqual(MovNumber.display(3.456),"3.46")
+        XCTAssertEqual(MovNumber.display(3.4),"3.4")
+        XCTAssertEqual(MovNumber.display(3),"3")
+    }
+
     func testDisplayNumbersDoNotRoundStoredValues() {
         for (value,expected) in [(0.0,"0"),(5.0,"5"),(5.5,"5.5"),(1.23456789,"1.23"),(0.1+0.2,"0.3"),(9.999,"10"),(-0.001,"0"),(1000.0,"1000")]{XCTAssertEqual(MovNumber.display(value),expected)}
         let record=RunRecord(date:Date(),title:"fixture",seconds:240.123456,kilometers:0.999999)

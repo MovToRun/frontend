@@ -686,6 +686,15 @@ extension LaunchTests {
             let distance=app.staticTexts["periodDistanceValue"]
             XCTAssertTrue(distance.waitForExistence(timeout:5))
             XCTAssertEqual(distance.label,expectedDistance)
+            if screen == "H09" {
+                let percent=app.staticTexts["goal-percent-거리 목표"]
+                let overage=app.staticTexts["goal-overage-거리 목표"]
+                XCTAssertTrue(percent.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(percent.label,"115%")
+                XCTAssertTrue(overage.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(overage.label,"3 km 더 달렸어요")
+                XCTAssertTrue(app.descendants(matching:.any)["goal-progress-거리 목표"].exists,"The H09 goal progress bar remains present and caps its visual fill at 100%")
+            }
             let dateRange=app.staticTexts["statisticsDateRange"]
             XCTAssertTrue(dateRange.waitForExistence(timeout:5))
             XCTAssertEqual(dateRange.label,"가상 기준일은 2026년 10월 1일이에요.\n이번 주는 9월 28일~10월 4일 기록이에요.")
