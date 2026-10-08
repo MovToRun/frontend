@@ -677,6 +677,24 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].exists)
     }
 
+    func testReview52StatisticsEmptyAndOverGoalMatchSourcePresentation() {
+        for (screen,expectedDistance) in [("H08","0.00 km"),("H09","23.00 km")] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
+
+            let distance=app.staticTexts["periodDistanceValue"]
+            XCTAssertTrue(distance.waitForExistence(timeout:5))
+            XCTAssertEqual(distance.label,expectedDistance)
+            let dateRange=app.staticTexts["statisticsDateRange"]
+            XCTAssertTrue(dateRange.waitForExistence(timeout:5))
+            XCTAssertEqual(dateRange.label,"가상 기준일은 2026년 10월 1일이에요.\n이번 주는 9월 28일~10월 4일 기록이에요.")
+            XCTAssertGreaterThanOrEqual(dateRange.frame.height,24)
+            capture(screen+"-statistics-source-layout-390x790")
+            app.terminate()
+        }
+    }
+
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance",theme];app.launch()

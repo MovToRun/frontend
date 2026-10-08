@@ -18,8 +18,9 @@
 | 대조 완료 | `R02`, `L01`, `L04`, `B05`, `B06` | PR #11 source/app 캡처 및 독립 Pro Max 검증 |
 | 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
 | 대조 완료 | `H03` | 390×790 원본 화면과 SwiftUI distance/time 캡처 비교. 목표 카드/휠 배치와 행 치수 확인, 휠 테두리·선택 띠·보조 문구 색상 보정 |
+| 대조 완료 | `H08`, `H09` | Review52 ZIP dist 원본을 로컬 WKWebView로 390×790 CSS/2× 렌더하고, PR #14 병합 SHA의 SwiftUI를 새 임시 iPhone 17 Pro Max 한 대에서 순차 캡처. 고정 fixture에서 거리 소수점과 주간 날짜 설명 정합. [원본/앱 캡처와 렌더 설정](REVIEW52_H08_H09_CAPTURE.md) |
 | 남음 | 인증 `E01–E02`, `A02–A23` | `A01` 제외 |
-| 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H08–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07 제외 |
+| 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H10–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07–H09 제외 |
 | 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
@@ -44,7 +45,7 @@
 | 7 | `feature/community-crew` | C01–C43 | 앱 별도 5탭 구조, 피드/FAB/게시글/댓글/검색/크루 흐름, 가상 데이터·서버 미연동 표시 |
 | 8 | `feature/review52-visual-qa` | 전체 140 상태 × 라이트/다크 | 전체 구현 뒤 통합 시각 검수 1회. 차이는 수정 후 해당 상태만 재검수 |
 
-PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다. 이번 H07 보정도 같은 source/app 비교 viewport를 사용합니다. 로컬 시뮬레이션의 GPS·구매·인증·동기화 예시는 백엔드에 연결하지 않으며 서버 성공으로 오인시키지 않습니다. 기능 브랜치마다 화면을 대조하고 테스트·diff 검토 후 커밋·푸시·draft PR로 제출합니다. 다음 merge는 사용자 승인 후 진행합니다.
+PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책)가 main에 병합했습니다. H07–H09는 같은 source/app 비교 viewport를 사용합니다. 로컬 시뮬레이션의 GPS·구매·인증·동기화 예시는 백엔드에 연결하지 않으며 서버 성공으로 오인시키지 않습니다. 기능 브랜치마다 화면을 대조하고 테스트·diff 검토 후 커밋·푸시·draft PR로 제출합니다. 다음 merge는 사용자 승인 후 진행합니다.
 
 반응형 기준은 320pt 안팎부터 큰 iPhone 폭, 세로 공간, safe area, 키보드, 긴 문구/줄바꿈, Dynamic Type을 포함합니다. 고정 좌표로 전체 화면을 늘리지 않고 디자인 계층을 유지합니다. 러닝 지도/접이식 패널, 커뮤니티 피드/하단바/FAB, 공유 이미지 편집기는 전용 적응형 점검을 둡니다.
 
@@ -88,8 +89,8 @@ PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다
 | [x] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
 | [x] | `H06` | 임시 기록 복구 | `informationPage` — WireframeInfo.swift |
 | [x] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift; 원본 대조 후 기간 선택/월간 달력 및 0일 빈 상태 정렬 |
-| [ ] | `H08` | 통계 데이터 없음 | `statistics` — WireframeHome.swift |
-| [ ] | `H09` | 목표 초과 달성 | `statistics` — WireframeHome.swift |
+| [x] | `H08` | 통계 데이터 없음 | `statistics` — WireframeHome.swift; 원본의 0.00 km 표기와 기준일/주간 범위 안내 정렬 |
+| [x] | `H09` | 목표 초과 달성 | `statistics` — WireframeHome.swift; 원본의 두 자리 거리 표기와 기준일/주간 범위 안내 정렬 |
 | [x] | `H10` | 주간 목표 삭제 | `informationPage` — WireframeInfo.swift |
 | [x] | `H11` | 시간대 변경 안내 | `informationPage` — WireframeInfo.swift |
 | [x] | `P01` | 위치 권한 설명 | `informationPage` — WireframeInfo.swift |

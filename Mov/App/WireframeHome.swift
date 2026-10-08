@@ -1,4 +1,23 @@
 import SwiftUI
+
+enum WReview52StatisticsFormat {
+    static func kilometers(_ value:Double)->String {
+        guard value.isFinite else{return "—"}
+        return String(format:"%.2f",locale:Locale(identifier:"en_US_POSIX"),value)
+    }
+
+    static func weekDateNote(asOf date:Date,timeZone:TimeZone = .current)->String {
+        var calendar=Calendar(identifier:.iso8601)
+        calendar.timeZone=timeZone
+        let day=calendar.dateComponents([.year,.month,.day],from:date)
+        let week=calendar.dateInterval(of:.weekOfYear,for:date)!
+        let end=calendar.date(byAdding:.day,value:6,to:week.start)!
+        let first=calendar.dateComponents([.month,.day],from:week.start)
+        let last=calendar.dateComponents([.month,.day],from:end)
+        return "가상 기준일은 \(day.year!)년 \(day.month!)월 \(day.day!)일이에요.\n이번 주는 \(first.month!)월 \(first.day!)일~\(last.month!)월 \(last.day!)일 기록이에요."
+    }
+}
+
 extension WireframeRoot {
     var home:some View {
         VStack(spacing:0){rootHeader("");ScrollView{VStack(alignment:.leading,spacing:14){WText(text:WReviewClock.now.formatted(.dateTime.month().day().weekday(.wide)) + (ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시" : ""),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
@@ -94,12 +113,15 @@ extension WireframeRoot {
         let summary=RunPeriodSummary(records:periodRecords)
         return WPage(title:"나의 러닝",back:back){WPeriodControl(month:$ui.month)
             WText(text:ui.month ? "월간 유효 거리":"이번 주 유효 거리",small:true)
-            (Text(MovNumber.display(summary.kilometers)).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold)))
+            (Text(WReview52StatisticsFormat.kilometers(summary.kilometers)).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold))).accessibilityIdentifier("periodDistanceValue")
             HStack(spacing:0){VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 횟수",small:true);Text("\(summary.recordCount) 회").font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading);W.line.frame(width:1,height:48).padding(.horizontal,18).accessibilityHidden(true);VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 시간",small:true);Text(RunRecord.clock(summary.seconds)).font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading)}.accessibilityElement(children:.contain).accessibilityIdentifier("periodValidSummary")
             W.line.frame(height:1).padding(.vertical,10)
             if ui.month{WCalendar(month:$ui.calendarMonth,selected:$ui.calendarDay,records:store.records)
                 if let day=ui.calendarDay{let rows=store.records.filter{Calendar.current.isDate($0.date,inSameDayAs:day)};HStack{Text("\(day.formatted(.dateTime.month().day())) 기록").font(W.font(14,.semibold)).accessibilityIdentifier("calendarSelectedDayTitle");Spacer();if !rows.isEmpty{WText(text:"\(rows.count)회",small:true).accessibilityIdentifier("calendarSelectedDayCount")}};if rows.isEmpty{WText(text:"이날은 저장된 러닝 기록이 없어요",small:true)}else{ForEach(rows){recordRow($0)}}}
-            }else{Text(ui.screen=="H08" ? "아직 기록이 없어요":"이번 주 목표").font(W.font(17,.semibold));if ui.screen=="H08"{WText(text:"첫 러닝부터 채워질 거예요",small:true)};weeklySummary;WText(text:"월요일부터 일요일까지의 유효 기록을 합산해요.",small:true)}
+            }else{Text(ui.screen=="H08" ? "아직 기록이 없어요":"이번 주 목표").font(W.font(17,.semibold));if ui.screen=="H08"{WText(text:"첫 러닝부터 채워질 거예요",small:true)};weeklySummary
+                if ["H08","H09"].contains(ui.screen){WText(text:WReview52StatisticsFormat.weekDateNote(asOf:WReviewClock.now),small:true).accessibilityIdentifier("statisticsDateRange")}
+                else{WText(text:"월요일부터 일요일까지의 유효 기록을 합산해요.",small:true)}
+            }
         } actions:{}
     }
     var community:some View {VStack(spacing:0){WHeader(title:"커뮤니티",root:true);VStack(spacing:24){AssetIcon(name:"community",size:36).foregroundStyle(W.muted);Text("아직 준비 중이에요").font(W.font(22,.semibold));WText(text:"함께 달리는 사람들을 만나는 공간을\n준비하고 있어요.").multilineTextAlignment(.center);button("내 러닝 카드 보기","M01",kind:1).padding(.top,12)}.padding(40).frame(maxWidth:.infinity,maxHeight:.infinity)}}
