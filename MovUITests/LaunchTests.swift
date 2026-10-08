@@ -616,25 +616,110 @@ extension LaunchTests {
 
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
-            app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-appearance",theme];app.launch()
+            app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance",theme];app.launch()
             let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
             XCTAssertTrue(week.waitForExistence(timeout:10));let frame=week.frame
+            XCTAssertEqual(frame.width,165,accuracy:1,"The period selector spans the 342pt source content width with a 4pt gap and 4pt outer inset")
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","4.82")).firstMatch.exists)
+            XCTAssertTrue(app.staticTexts["30:08"].exists)
             month.tap();XCTAssertTrue(waitForLayout({month.isSelected}));XCTAssertEqual(week.frame,frame)
             XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists)
             let calendarMonth=app.staticTexts["calendarMonthTitle"]
             XCTAssertTrue(calendarMonth.waitForExistence(timeout:5));let selectedMonth=calendarMonth.label
-            tap("이전 달")
-            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label != selectedMonth}))
-            let priorMonth=calendarMonth.label
+            let pageScroll=app.scrollViews.firstMatch
+            let previousMonthButton=app.buttons["이전 달"]
+            XCTAssertTrue(waitHittable(previousMonthButton,timeout:5))
+            XCTAssertTrue(pageScroll.frame.contains(CGPoint(x:previousMonthButton.frame.midX,y:previousMonthButton.frame.midY)))
+            XCTAssertGreaterThanOrEqual(previousMonthButton.frame.width,40)
+            previousMonthButton.tap()
+            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label != selectedMonth && calendarMonth.label == "2026년 9월"},timeout:5))
             XCTAssertTrue(app.staticTexts["월간 유효 거리"].exists);capture("H07-month-"+theme)
-            week.tap();XCTAssertTrue(week.isSelected);month.tap()
-            XCTAssertEqual(calendarMonth.label,priorMonth);XCTAssertEqual(week.frame,frame)
-            week.tap();month.tap();week.tap();XCTAssertTrue(week.isSelected);capture("H07-week-"+theme)
+            XCTAssertTrue(app.staticTexts["9월 1일 달렸어요"].exists)
+            XCTAssertTrue(app.otherElements["calendarRunDayLegend"].exists || app.staticTexts["달린 날"].exists)
+            XCTAssertTrue(app.staticTexts["날짜를 선택하면 그날의 기록을 볼 수 있어요"].exists)
+            let populatedMonth=calendarMonth.label
+            XCTAssertTrue(waitHittable(previousMonthButton,timeout:5))
+            XCTAssertTrue(pageScroll.frame.contains(CGPoint(x:previousMonthButton.frame.midX,y:previousMonthButton.frame.midY)))
+            previousMonthButton.tap()
+            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label != populatedMonth && calendarMonth.label == "2026년 8월"},timeout:5))
+            XCTAssertEqual(calendarMonth.label,"2026년 8월")
+            XCTAssertTrue(app.staticTexts["8월 0일 달렸어요"].exists)
+            app.swipeUp()
+            capture("H07-empty-month-"+theme)
+            let emptyMonth=app.descendants(matching:.any)["calendarEmptyMonthMessage"]
+            XCTAssertTrue(emptyMonth.waitForExistence(timeout:5))
+            XCTAssertEqual(emptyMonth.label,"이 달에 저장된 러닝 기록이 없어요")
+            let nextMonthButton=app.buttons["다음 달"]
+            var previousCalendarY=calendarMonth.frame.minY
+            for _ in 0..<5 where !nextMonthButton.isHittable {
+                pageScroll.swipeDown()
+                let currentCalendarY=calendarMonth.frame.minY
+                XCTAssertGreaterThan(currentCalendarY,previousCalendarY,"The statistics page must return to the month navigation hit area")
+                previousCalendarY=currentCalendarY
+            }
+            XCTAssertTrue(nextMonthButton.isHittable)
+            XCTAssertTrue(pageScroll.frame.contains(CGPoint(x:nextMonthButton.frame.midX,y:nextMonthButton.frame.midY)))
+            nextMonthButton.tap()
+            XCTAssertTrue(waitForLayout({calendarMonth.exists && calendarMonth.label == "2026년 9월"},timeout:5))
+            let recordedDay=app.buttons.matching(NSPredicate(format:"label CONTAINS %@ AND label CONTAINS %@","9월 29일","러닝 기록 있음")).firstMatch
+            XCTAssertTrue(recordedDay.waitForExistence(timeout:5));recordedDay.tap()
+            let selectedTitle=app.staticTexts["calendarSelectedDayTitle"],selectedCount=app.staticTexts["calendarSelectedDayCount"]
+            XCTAssertTrue(pageScroll.exists)
+            var detailsCalendarY=calendarMonth.frame.minY
+            for _ in 0..<5 where !selectedTitle.exists || !selectedTitle.isHittable {
+                pageScroll.swipeUp()
+                let currentCalendarY=calendarMonth.frame.minY
+                XCTAssertLessThan(currentCalendarY,detailsCalendarY,"The statistics page must scroll toward selected-day details")
+                detailsCalendarY=currentCalendarY
+            }
+            XCTAssertTrue(selectedTitle.waitForExistence(timeout:5))
+            XCTAssertTrue(selectedTitle.isHittable,"The selected-day title should be in the visible scroll viewport")
+            XCTAssertTrue(selectedCount.isHittable,"The selected-day count should be in the visible scroll viewport")
+            XCTAssertEqual(selectedTitle.label,"9월 29일 기록")
+            XCTAssertEqual(selectedCount.label,"1회")
+            XCTAssertEqual(app.descendants(matching:.any).matching(identifier:"calendarSelectedDayTitle").count,1)
+            XCTAssertEqual(app.descendants(matching:.any).matching(identifier:"calendarSelectedDayCount").count,1)
             app.terminate()
         }
-        app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-reduced"];app.launch()
-        XCTAssertTrue(app.buttons["summary-month"].waitForExistence(timeout:10));tap("summary-month");tap("summary-week")
-        XCTAssertTrue(app.buttons["summary-week"].isSelected)
+    }
+
+    func testSummaryPeriodControlRepeatedTransitionsFromFreshFixture() {
+        for theme in ["light","dark"] {
+            app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance",theme];app.launch()
+            let scroll=app.scrollViews.firstMatch
+            let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
+            XCTAssertTrue(waitHittable(week,timeout:10));XCTAssertTrue(week.isSelected);XCTAssertFalse(month.isSelected)
+            let originalWeekFrame=week.frame
+            for (selected,unselected) in [(month,week),(week,month),(month,week),(week,month),(month,week),(week,month)] {
+                XCTAssertTrue(waitHittable(selected,timeout:5))
+                let hitFrame=selected.frame
+                XCTAssertTrue(scroll.frame.contains(CGPoint(x:hitFrame.midX,y:hitFrame.midY)),"Period button hit target must stay inside the visible statistics viewport")
+                XCTAssertGreaterThanOrEqual(hitFrame.height,44)
+                selected.tap()
+                XCTAssertTrue(waitForLayout({selected.isSelected && !unselected.isSelected},timeout:5),"Selected period accessibility state must settle before the next tap")
+                XCTAssertTrue(selected.isHittable)
+                XCTAssertEqual(selected.frame,hitFrame)
+                XCTAssertEqual(week.frame,originalWeekFrame)
+            }
+            month.tap()
+            XCTAssertTrue(waitForLayout({month.isSelected && !week.isSelected},timeout:5))
+            let monthTitle=app.staticTexts["calendarMonthTitle"]
+            XCTAssertTrue(monthTitle.waitForExistence(timeout:5))
+            let preservedMonth=monthTitle.label
+            week.tap()
+            XCTAssertTrue(waitForLayout({week.isSelected && !month.isSelected},timeout:5))
+            month.tap()
+            XCTAssertTrue(waitForLayout({month.isSelected && !week.isSelected && monthTitle.exists},timeout:5))
+            XCTAssertEqual(monthTitle.label,preservedMonth)
+            capture("H07-period-repeated-"+theme)
+            app.terminate()
+        }
+
+        app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-reduced","-appearance","light"];app.launch()
+        let week=app.buttons["summary-week"],month=app.buttons["summary-month"]
+        XCTAssertTrue(waitHittable(month,timeout:10));month.tap()
+        XCTAssertTrue(waitForLayout({month.isSelected && !week.isSelected},timeout:5))
+        week.tap();XCTAssertTrue(waitForLayout({week.isSelected && !month.isSelected},timeout:5))
     }
 }
 

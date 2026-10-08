@@ -3,13 +3,32 @@
 ## 기준과 확인 상태
 
 - 참조 기준: Review52, 140개 화면/상태, 제공된 원본 revision `commit645150b7f3a99a56279213e174ebb723baf40f7a`.
-- 상태명은 읽기 전용 Review52 Site의 화면 트리에서 확인했습니다. 원본 ZIP(`running-app-source.zip`, Library v0, 16,645,141 bytes)과 HTML(v51)은 Library 공식 Mac materialization이 각각 HTTP 403을 반환해 아직 로컬에서 읽지 못했습니다. 따라서 CSS/JS, 화면 내부 세부, 원본 모션 값을 대조하지 못한 상태이며 이를 확인한 것으로 취급하지 않습니다.
+- 사용자가 제공한 `running-app-source.zip`의 `dist/`를 로컬 기준 원본으로 사용합니다. CSS/JS와 해당 상태 화면을 확인하고, 390×790 viewport로 렌더해 앱 캡처와 대조합니다. Mac Safari의 사용자가 열어 둔 탭 자체는 세션에서 읽을 수 없으므로 탭 화면을 직접 촬영한 것으로 표현하지 않습니다.
 - 현재 구현 경로는 기준점 커밋 `0201a5a1ae90ca1cdd356ec243077b75ecf47995`의 `WireframeCore.screenView` 분기와 대상 파일을 기준으로 기록했습니다. 전용 분기가 없는 상태는 `informationPage` 기본 분기로 표시했습니다. ID 문자열이 코드/테스트에 있더라도 전용 UI 구현으로 간주하지 않습니다.
 - 140개 모두 체크리스트에 남깁니다. `L06`처럼 개발 참고용인 상태, 오류·빈 화면, 예시·전이 전용 상태는 회귀 점검 대상으로 유지하되 일반 사용자 메뉴에 노출하지 않습니다.
 
+### 시각 대조 coverage
+
+아래 표는 원본 렌더와 SwiftUI 실제 캡처를 비교한 범위입니다. 각 상태 목록의 `[x]`는 화면·전이의 로컬 구현 완료를 뜻하며, 시각 대조 완료와는 별도로 관리합니다.
+
+| 시각 상태 | 화면 | 근거 |
+|---|---|---|
+| 대조 완료 | `A01`, `H00`, `H01` | PR #10 비교 기록·캡처 |
+| 대조 완료 | `H04` | 390×790 라이트·다크 HTML/SwiftUI pair 캡처 |
+| 대조 완료 | `R02`, `L01`, `L04`, `B05`, `B06` | PR #11 source/app 캡처 및 독립 Pro Max 검증 |
+| 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
+| 남음 | 인증 `E01–E02`, `A02–A23` | `A01` 제외 |
+| 남음 | 홈·목표·러닝 `H02–H03`, `H05–H06`, `H08–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H07 제외. H03은 wheel bounds unit test는 있으나 source/app 시각 대조는 남음 |
+| 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
+| 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
+| 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
+| 제외 | 커뮤니티 `C01–C43` | 사용자가 이번 작업에서 신규 커뮤니티 기능을 제외함 |
+
+전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
+
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 포인트와 상점 루트는 현재 빈 placeholder이며, 커뮤니티 루트는 `C01` 안내 상태만 갖습니다. 인증, 홈/러닝, 기록, 프로필 구현은 각각 `WireframeAuth.swift`, `WireframeHome.swift`/`WireframeRun.swift`, `WireframeRun.swift`, `WireframeProfile.swift`에 있습니다. 따라서 이 문서의 라우트 표시는 실제 전용 UI가 있는지를 확인하는 기준이며, 미구현 행을 숨기지 않습니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`의 신규 구현은 현재 범위에서 제외합니다. 라우트 표시는 전용 UI 구현과 미구현 상태를 구분하는 기준입니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -24,7 +43,7 @@
 | 7 | `feature/community-crew` | C01–C43 | 앱 별도 5탭 구조, 피드/FAB/게시글/댓글/검색/크루 흐름, 가상 데이터·서버 미연동 표시 |
 | 8 | `feature/review52-visual-qa` | 전체 140 상태 × 라이트/다크 | 전체 구현 뒤 통합 시각 검수 1회. 차이는 수정 후 해당 상태만 재검수 |
 
-현재 `feature/home-running-goals-ui` 구현은 31개 대상 상태를 로컬 시뮬레이션 범위에서 완료했습니다. 완료 표시는 화면·전이·기기 로컬 상태 구현을 뜻하며 실제 GPS 센서/위치 권한 요청, 백엔드 저장·동기화는 포함하지 않습니다. 러닝 지도는 가상 사용자 위치와 화면 이동(pan)·재중심화를 지원하며, 재중심화와 패널 열림/닫힘 시 사용자가 보이는 지도 영역의 가운데를 유지합니다. 각 기능 브랜치는 기준점 `main`에서 분기해 해당 상태만 수정합니다. 기능 단위 빌드/자동 테스트와 diff 검토 후 커밋·푸시하고 draft PR을 만든 뒤 exact head/diff/검증 결과를 부모 검토에 넘깁니다. 부모 검토를 통과한 PR만 머지하고 다음 브랜치로 진행합니다. 포인트/구매·인증·소셜·위치·동기화는 백엔드/API 연결 없이 교체 가능한 로컬 상태로만 표현하며 서버 성공으로 오인시키지 않습니다.
+PR #10(A01/H00/H01)과 PR #11(R02/L01/L04/B05/B06)은 main에 병합했습니다. 이번 H07 보정도 같은 source/app 비교 viewport를 사용합니다. 로컬 시뮬레이션의 GPS·구매·인증·동기화 예시는 백엔드에 연결하지 않으며 서버 성공으로 오인시키지 않습니다. 기능 브랜치마다 화면을 대조하고 테스트·diff 검토 후 커밋·푸시·draft PR로 제출합니다. 다음 merge는 사용자 승인 후 진행합니다.
 
 반응형 기준은 320pt 안팎부터 큰 iPhone 폭, 세로 공간, safe area, 키보드, 긴 문구/줄바꿈, Dynamic Type을 포함합니다. 고정 좌표로 전체 화면을 늘리지 않고 디자인 계층을 유지합니다. 러닝 지도/접이식 패널, 커뮤니티 피드/하단바/FAB, 공유 이미지 편집기는 전용 적응형 점검을 둡니다.
 
@@ -67,7 +86,7 @@
 | [x] | `H04` | 주간 목표 | `weeklyGoal` — WireframeHome.swift |
 | [x] | `H05` | 진행 중인 러닝 | `ready` — WireframeHome.swift / WireframeRun.swift |
 | [x] | `H06` | 임시 기록 복구 | `informationPage` — WireframeInfo.swift |
-| [ ] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift |
+| [x] | `H07` | 주간·월간 요약 | `statistics` — WireframeHome.swift; 원본 대조 후 기간 선택/월간 달력 및 0일 빈 상태 정렬 |
 | [ ] | `H08` | 통계 데이터 없음 | `statistics` — WireframeHome.swift |
 | [ ] | `H09` | 목표 초과 달성 | `statistics` — WireframeHome.swift |
 | [x] | `H10` | 주간 목표 삭제 | `informationPage` — WireframeInfo.swift |
@@ -99,10 +118,10 @@
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `L01` | 기록 목록 | `records` — WireframeRun.swift |
+| [x] | `L01` | 기록 목록 | `records` — WireframeRun.swift; PR #11 Review52 source 대조 |
 | [ ] | `L02` | 기록 없음 | `records` — WireframeRun.swift |
 | [ ] | `L03` | 기록 조회 실패 | `records` — WireframeRun.swift |
-| [ ] | `L04` | 기록 상세 | `recordDetail` — WireframeRun.swift |
+| [x] | `L04` | 기록 상세 | `recordDetail` — WireframeRun.swift; PR #11 Review52 source 대조 |
 | [ ] | `L05` | 구간 기록 · 페이스 | `splits` — WireframeRun.swift |
 | [ ] | `L06` | 기록 편집 · 개발 참고 | `recordEdit` — WireframeRun.swift |
 | [ ] | `L07` | 러닝 기록 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -161,7 +180,7 @@
 | [x] | `B09` | 포인트 받는 방법 | `WireframePoints.swift` — 미연동 적립/광고 영역 안내 |
 | [x] | `B10` | 러닝 카드 미리보기 | `WireframePoints.swift` — 현재 로컬 프로필/러닝 기록을 사용한 미리보기 |
 
-구현 범위는 로컬 화면 이동과 예시 상태까지입니다. 상품/가격/초기 포인트는 UI 검증용 샘플이며 서버, 결제, 광고 재생, 보상 적립은 연결하지 않았습니다. Review52 페이지는 이 세션에서 열리지 않았고 저장소에 원본 프리즘/샤드 아트워크도 없어, 상품 아트는 SwiftUI 도형으로 표시합니다. 제공된 원본 ZIP의 접근 실패를 우회하지 않았습니다.
+구현 범위는 로컬 화면 이동과 예시 상태까지입니다. 상품/가격/초기 포인트는 UI 검증용 샘플이며 서버, 결제, 광고 재생, 보상 적립은 연결하지 않았습니다. PR #11에서 제공된 ZIP의 B05/B06 원본 SVG 경로와 CSS geometry를 SwiftUI로 반영하고 실제 화면을 대조했습니다.
 
 ### 커뮤니티 · 크루 · `Community / Crew`
 
