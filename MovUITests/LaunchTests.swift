@@ -633,6 +633,26 @@ extension LaunchTests {
             XCTAssertTrue(app.staticTexts["9월 1일 달렸어요"].exists)
             XCTAssertTrue(app.otherElements["calendarRunDayLegend"].exists || app.staticTexts["달린 날"].exists)
             XCTAssertTrue(app.staticTexts["날짜를 선택하면 그날의 기록을 볼 수 있어요"].exists)
+            let populatedMonth=calendarMonth.label
+            tap("이전 달")
+            XCTAssertTrue(waitForLayout({calendarMonth.label != populatedMonth}))
+            XCTAssertEqual(calendarMonth.label,"2026년 8월")
+            XCTAssertTrue(app.staticTexts["8월 0일 달렸어요"].exists)
+            app.swipeUp()
+            capture("H07-empty-month-"+theme)
+            let emptyMonth=app.descendants(matching:.any)["calendarEmptyMonthMessage"]
+            XCTAssertTrue(emptyMonth.waitForExistence(timeout:5))
+            XCTAssertEqual(emptyMonth.label,"이 달에 저장된 러닝 기록이 없어요")
+            app.swipeDown()
+            tap("다음 달")
+            let recordedDay=app.buttons.matching(NSPredicate(format:"label CONTAINS %@ AND label CONTAINS %@","9월 29일","러닝 기록 있음")).firstMatch
+            XCTAssertTrue(recordedDay.waitForExistence(timeout:5));recordedDay.tap()
+            let selectedTitle=app.staticTexts["calendarSelectedDayTitle"],selectedCount=app.staticTexts["calendarSelectedDayCount"]
+            XCTAssertTrue(selectedTitle.waitForExistence(timeout:5))
+            XCTAssertEqual(selectedTitle.label,"9월 29일 기록")
+            XCTAssertEqual(selectedCount.label,"1회")
+            XCTAssertEqual(app.descendants(matching:.any).matching(identifier:"calendarSelectedDayTitle").count,1)
+            XCTAssertEqual(app.descendants(matching:.any).matching(identifier:"calendarSelectedDayCount").count,1)
             week.tap();XCTAssertTrue(week.isSelected);month.tap()
             XCTAssertEqual(calendarMonth.label,priorMonth);XCTAssertEqual(week.frame,frame)
             week.tap();month.tap();week.tap();XCTAssertTrue(week.isSelected);capture("H07-week-"+theme)
