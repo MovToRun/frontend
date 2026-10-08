@@ -70,6 +70,13 @@ final class ThemeTests:XCTestCase {
     }
 
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
+        XCTAssertEqual(WProfilePhotoPolicy.maximumInputBytes,20_000_000)
+        XCTAssertEqual(WProfilePhotoPolicy.maximumOutputBytes,2_000_000)
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:20_000_000))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:20_000_001))
+        XCTAssertTrue(WProfilePhotoPolicy.acceptsOutput(byteCount:2_000_000))
+        XCTAssertFalse(WProfilePhotoPolicy.acceptsOutput(byteCount:2_000_001))
+        XCTAssertFalse(WProfilePhotoPolicy.acceptsOutput(byteCount:0))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
         XCTAssertTrue(WProfilePhotoPolicy.accepts(.webP))

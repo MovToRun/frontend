@@ -1001,7 +1001,7 @@ extension LaunchTests {
         XCTAssertEqual(crop.value as? String,"선택 영역: 가로 50%, 세로 50%")
         XCTAssertFalse(app.otherElements["profilePhotoPreview"].exists,"A pending crop hides the 80×80 photo preview")
         let stage=crop,help=app.staticTexts["profilePhotoCropHelp"],choose=app.buttons["사진 바꾸기"],remove=app.buttons["사진 삭제"]
-        let fileInfo=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","HEIC · HEIF · JPG · PNG 등 사진 형식, 20MB 이하")).firstMatch
+        let fileInfo=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","사진 원본 20 MB 이하 · HEIC/HEIF 포함")).firstMatch
         XCTAssertTrue(stage.exists && help.exists && choose.exists && remove.exists && fileInfo.exists,app.debugDescription)
         XCTAssertLessThan(stage.frame.minY,help.frame.minY);XCTAssertLessThan(help.frame.minY,choose.frame.minY);XCTAssertLessThan(choose.frame.minY,remove.frame.minY);XCTAssertLessThan(remove.frame.minY,fileInfo.frame.minY)
         let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="M02 crop app 390x790 synthetic";attachment.lifetime = .keepAlways;add(attachment)
