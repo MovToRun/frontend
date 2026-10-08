@@ -693,7 +693,10 @@ extension LaunchTests {
                 XCTAssertEqual(percent.label,"115%")
                 XCTAssertTrue(overage.waitForExistence(timeout:5),app.debugDescription)
                 XCTAssertEqual(overage.label,"3 km 더 달렸어요")
-                XCTAssertTrue(app.descendants(matching:.any)["goal-progress-거리 목표"].exists,"The H09 goal progress bar remains present and caps its visual fill at 100%")
+                let progress=app.descendants(matching:.any)["goal-progress-거리 목표"]
+                XCTAssertTrue(progress.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(progress.label,"거리 목표 진행률")
+                XCTAssertEqual(progress.value as? String,"100%","The H09 visual fill and accessible value cap at the source's 100% limit")
             }
             let dateRange=app.staticTexts["statisticsDateRange"]
             XCTAssertTrue(dateRange.waitForExistence(timeout:5))
