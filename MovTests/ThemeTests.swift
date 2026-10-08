@@ -36,6 +36,8 @@ final class ThemeTests:XCTestCase {
         XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 5_000, height: 4_001))
         XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 0, height: 1))
         XCTAssertEqual(WProfilePhotoPolicy.cropDiameter(for:300),300/1.35,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(CGSize(width:500,height:-500),displayedSize:CGSize(width:300,height:200),cropDiameter:100),CGSize(width:100,height:-50))
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(.zero,displayedSize:CGSize(width:300,height:200),cropDiameter:100),.zero)
     }
 
     func testProfilePhotoCropExportsSquareJpegWithinReview52Limit() throws {
