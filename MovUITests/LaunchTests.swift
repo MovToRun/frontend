@@ -679,7 +679,7 @@ extension LaunchTests {
 
     func testReview52StatisticsEmptyAndOverGoalMatchSourcePresentation() {
         for (screen,expectedDistance) in [("H08","0.00 km"),("H09","23.00 km")] {
-            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.wireframe.test.h08-h09","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
             app.launch()
             XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
 
