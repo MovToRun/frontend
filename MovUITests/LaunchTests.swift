@@ -1109,9 +1109,9 @@ extension LaunchTests {
         capture("Shop-dark-accent-category")
     }
     func testPointHistoryEarnedAndSpentIconsKeepContrastInDarkAppearance(){
-        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-reset","-appearance","dark"]
+        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.points-dark-b02","-wire-reset","-appearance","dark"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:10))
-        let earned=app.descendants(matching:.any)["point-entry-row-earned"],spent=app.descendants(matching:.any)["point-entry-row-spent"]
+        let earned=app.descendants(matching:.any)["point-entry-row-earned"].firstMatch,spent=app.descendants(matching:.any)["point-entry-row-spent"].firstMatch
         XCTAssertTrue(earned.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(spent.waitForExistence(timeout:5),app.debugDescription)
         let screenshot=app.screenshot().image
         // The source SVG facet changed from #202925 to #BFFFC7. Sample its interior
