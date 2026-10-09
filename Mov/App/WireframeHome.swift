@@ -42,6 +42,11 @@ enum WReview54HomeArc {
         return CGFloat(min(1, max(0, value / target)))
     }
 
+    static func progressRatio(value: Double, target: Double?) -> CGFloat {
+        guard let target else { return 0 }
+        return ratio(value: value, target: target)
+    }
+
     static func dualRingSize(availableWidth: CGFloat) -> CGFloat {
         min(173, max(0, (availableWidth - 14) / 2))
     }
@@ -71,7 +76,7 @@ private struct WReview54RingVisual: View {
                 .stroke(W.lime,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
             HStack(alignment:.firstTextBaseline,spacing:4) {
                 Text(value).font(.system(size:size<200 ? 27:48,weight:.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
-                Text(unit).font(.system(size:size<200 ? 12:16)).foregroundStyle(W.muted)
+                if !unit.isEmpty { Text(unit).font(.system(size:size<200 ? 12:16)).foregroundStyle(W.muted) }
             }.position(x:size/2,y:size/2)
         }
         .frame(width:size,height:size*WReview54HomeArc.viewBoxHeight/WReview54HomeArc.viewBoxWidth)
@@ -191,27 +196,29 @@ extension WireframeRoot {
     }
     func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220)->some View {
         let displayed=unit=="km" ? WReview52StatisticsFormat.kilometers(value):RunGoal.duration(Int(value))
+        let targetText=target.map{unit=="km" ? MovNumber.display($0):RunGoal.duration(Int($0))} ?? ""
         let progressDescription:String
-        let targetText:String
         if let target {
-            targetText=unit=="km" ? MovNumber.display(target):RunGoal.duration(Int(target))
-            progressDescription="\(displayed) \(unit) / \(targetText) \(unit) · \(percent ?? 0)%"
+            if unit=="km" {
+                progressDescription="\(displayed) km / \(targetText) km · \(percent ?? 0)%"
+            } else {
+                progressDescription="\(displayed) / \(targetText) · \(percent ?? 0)%"
+            }
         } else {
-            targetText=""
-            progressDescription="\(displayed) km"
+            progressDescription=unit=="km" ? "\(displayed) km":displayed
         }
         return VStack(spacing:0) {
-            WReview54RingVisual(value:displayed,unit:unit,progress:WReview54HomeArc.ratio(value:value,target:target ?? 1),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription)
+            WReview54RingVisual(value:displayed,unit:unit=="km" ? "km":"",progress:WReview54HomeArc.progressRatio(value:value,target:target),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription)
             .accessibilityIdentifier("homeRing-\(identifier)")
             if let target,let percent {
                 HStack(spacing:6) {
-                    Text("목표 \(targetText) \(unit)")
+                    Text(unit=="km" ? "목표 \(targetText) km":"목표 \(targetText)").accessibilityIdentifier("homeRingTarget-\(identifier)")
                     Text("·")
                     Text("\(percent)%").accessibilityIdentifier("homeRingPercent-\(identifier)")
                     if value>=target { Image(systemName:"checkmark.circle.fill").foregroundStyle(W.lime).accessibilityHidden(true) }
                 }.font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,8)
                 if value>target {
-                    Text("\(unit=="km" ? MovNumber.display(value-target):RunGoal.duration(Int(value-target))) \(unit) 더 달렸어요")
+                    Text(unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요")
                         .font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,6)
                         .accessibilityIdentifier("homeRingOverage-\(identifier)")
                 }

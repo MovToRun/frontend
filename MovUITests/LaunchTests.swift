@@ -79,6 +79,8 @@ import UIKit
         launchExample("time")
         XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
         XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"1시간 30분 / 2시간 · 75%")
+        XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
 
         launchExample("both")
         XCTAssertTrue(app.descendants(matching:.any)["homeDualRings"].exists)
@@ -94,12 +96,17 @@ import UIKit
         let timeOverage=app.staticTexts["homeRingOverage-time"]
         XCTAssertTrue(distanceOverage.exists)
         XCTAssertTrue(timeOverage.exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"2시간 30분 / 2시간 · 125%")
+        XCTAssertEqual(timeOverage.label,"30분 더 달렸어요")
+        XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
         XCTAssertGreaterThanOrEqual(app.buttons["homeEditWeeklyGoal"].frame.minY,max(distanceOverage.frame.maxY,timeOverage.frame.maxY),"Goal action stays below both overage messages")
 
         launchExample("unset")
         XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
         XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].exists)
         XCTAssertEqual(app.descendants(matching:.any)["homeRing-distance"].label,"이번 주 달린 거리")
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-distance"].value as? String,"12.00 km")
+        XCTAssertFalse(app.staticTexts["homeRingPercent-distance"].exists)
 
         launchExample("over")
         XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"115%")

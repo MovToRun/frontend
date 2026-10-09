@@ -23,6 +23,8 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WReview54HomeArc.viewBoxHeight,190)
         XCTAssertEqual(WReview54HomeArc.sweepDegrees,220)
         XCTAssertEqual(WReview54HomeArc.ratio(value:12,target:20),0.6,accuracy:0.0001)
+        XCTAssertEqual(WReview54HomeArc.progressRatio(value:12,target:nil),0)
+        XCTAssertEqual(WReview54HomeArc.progressRatio(value:12,target:20),0.6,accuracy:0.0001)
         XCTAssertEqual(WReview54HomeArc.ratio(value:23,target:20),1,accuracy:0.0001)
         XCTAssertEqual(WReview54HomeArc.ratio(value:12,target:0),0,accuracy:0.0001)
         XCTAssertEqual(WReview54HomeArc.ratio(value:.infinity,target:20),0,accuracy:0.0001)
