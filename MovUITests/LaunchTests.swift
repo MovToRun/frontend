@@ -38,6 +38,23 @@ import UIKit
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
         }
     }
+    func containsDarkVariantFacetPixel(in image:UIImage, rect:CGRect)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        return pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).contains{index in
+                bytes[index]>=175 && bytes[index]<=205 && bytes[index+1]>=235 && bytes[index+2]>=175 && bytes[index+2]<=215 && bytes[index+3]>200
+            }
+        }
+    }
     func testReview52RunPanelAndRecordListDetailAlignment() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))
@@ -1105,6 +1122,35 @@ extension LaunchTests {
             app.launch();XCTAssertTrue(app.buttons["tab-0"].waitForExistence(timeout:10));XCTAssertTrue(app.buttons["tab-0"].isSelected);capture("PointIcon-selected-"+theme)
             tap("tab-2");XCTAssertFalse(app.buttons["tab-0"].isSelected);capture("PointIcon-unselected-"+theme);app.terminate()
         }
+    }
+    func testPointAccentLabelsStayDarkInDarkAppearance(){
+        app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-wire-reset","-appearance","dark"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:10))
+        let shop=app.buttons["browsePointShop"]
+        XCTAssertTrue(shop.waitForExistence(timeout:5))
+        let overview=app.screenshot().image
+        XCTAssertTrue(containsBrandGreen(in:overview,rect:shop.frame));XCTAssertTrue(containsDarkPixel(in:overview,rect:shop.frame),"The points CTA uses the brand's dark on-accent semantic color in dark mode")
+        capture("Points-dark-accent-cta")
+        shop.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5))
+        let category=app.buttons["shop-category-image"]
+        XCTAssertTrue(category.waitForExistence(timeout:5))
+        let catalog=app.screenshot().image
+        XCTAssertTrue(containsBrandGreen(in:catalog,rect:category.frame));XCTAssertTrue(containsDarkPixel(in:catalog,rect:category.frame),"The selected shop category uses the dark on-accent semantic color in dark mode")
+        capture("Shop-dark-accent-category")
+    }
+    func testPointHistoryEarnedAndSpentIconsKeepContrastInDarkAppearance(){
+        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.points-dark-b02","-wire-reset","-appearance","dark"]
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:10))
+        let earned=app.descendants(matching:.any)["point-entry-row-earned"].firstMatch,spent=app.descendants(matching:.any)["point-entry-row-spent"].firstMatch
+        XCTAssertTrue(earned.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(spent.waitForExistence(timeout:5),app.debugDescription)
+        let screenshot=app.screenshot().image
+        // The source SVG facet changed from #202925 to #BFFFC7. Sample its interior
+        // polygon coordinates (SVG paths scaled by 0.8), excluding the pale #D9FFDE face.
+        let earnedFacet=CGRect(x:earned.frame.minX+12,y:earned.frame.midY-5,width:2.5,height:4)
+        let spentFacet=CGRect(x:spent.frame.minX+12,y:spent.frame.midY-5,width:2.5,height:4)
+        XCTAssertTrue(containsDarkVariantFacetPixel(in:screenshot,rect:earnedFacet),"The earned dark facet uses #BFFFC7 rather than the light asset's #D9FFDE facet")
+        XCTAssertTrue(containsDarkVariantFacetPixel(in:screenshot,rect:spentFacet),"The spent dark facet uses #BFFFC7 rather than the light asset's #D9FFDE facet")
+        capture("Point-history-earned-spent-dark-contrast")
     }
     func testB01LaunchAliasOpensPointsTab(){
         app.launchArguments=["-wire-screen","B01","-wire-fixture","-wire-reset","-appearance","light"];app.launch()
