@@ -45,6 +45,11 @@ enum WReview54HomeArc {
     static func dualRingSize(availableWidth: CGFloat) -> CGFloat {
         min(173, max(0, (availableWidth - 14) / 2))
     }
+
+    static func dualRingHeight(size: CGFloat, showsOverage: Bool) -> CGFloat {
+        guard showsOverage else { return 165 }
+        return max(165, size * viewBoxHeight / viewBoxWidth + 8 + 14 + 18)
+    }
 }
 
 private struct WReview54Arc: Shape {
@@ -160,6 +165,7 @@ extension WireframeRoot {
         let seconds=store.weeklySeconds
         let distanceGoal=store.weekly.distanceEnabled ? Double(store.weekly.kilometers):nil
         let timeGoal=store.weekly.timeEnabled ? Double(store.weekly.minutes):nil
+        let showsOverage=(distanceGoal.map{distance>$0} ?? false) || (timeGoal.map{seconds/60>$0} ?? false)
         return VStack(spacing:0) {
             if distanceGoal == nil && timeGoal == nil {
                 homeRing(value:distance,unit:"km",target:nil,percent:nil,identifier:"distance")
@@ -173,7 +179,7 @@ extension WireframeRoot {
                             homeRing(value:distance,unit:"km",target:distanceGoal,percent:WeeklyGoal.percent(value:distance,goal:distanceGoal),identifier:"distance",size:ringSize)
                             homeRing(value:seconds/60,unit:"분",target:timeGoal,percent:WeeklyGoal.percent(value:seconds/60,goal:timeGoal),identifier:"time",size:ringSize)
                         }.accessibilityElement(children:.contain).accessibilityIdentifier("homeDualRings")
-                    }.frame(height:165).padding(.horizontal,1).padding(.top,12)
+                    }.frame(height:showsOverage ? WReview54HomeArc.dualRingHeight(size:173,showsOverage:true):165).padding(.horizontal,1).padding(.top,12)
                 } else if let target=distanceGoal {
                     homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
                 } else if let target=timeGoal {

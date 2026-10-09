@@ -89,6 +89,13 @@ import UIKit
         app.buttons["homeEditWeeklyGoal"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:6))
 
+        launchExample("both-over")
+        let distanceOverage=app.staticTexts["homeRingOverage-distance"]
+        let timeOverage=app.staticTexts["homeRingOverage-time"]
+        XCTAssertTrue(distanceOverage.exists)
+        XCTAssertTrue(timeOverage.exists)
+        XCTAssertGreaterThanOrEqual(app.buttons["homeEditWeeklyGoal"].frame.minY,max(distanceOverage.frame.maxY,timeOverage.frame.maxY),"Goal action stays below both overage messages")
+
         launchExample("unset")
         XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
         XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].exists)
