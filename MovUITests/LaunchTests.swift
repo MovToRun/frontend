@@ -71,6 +71,7 @@ import UIKit
         XCTAssertTrue(app.buttons["homeStartRun"].exists)
         XCTAssertTrue(app.descendants(matching:.any)["homeRingPercent-distance"].exists,app.debugDescription)
         XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"60%")
+        XCTAssertTrue(app.staticTexts["homeRecentMetadata"].label.contains("07:12 시작 · 75:00 유효 러닝 · 예시"))
         capture("H00-weekly-below")
         app.buttons["homeWeeklySummary"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H07"].waitForExistence(timeout:6))
@@ -84,12 +85,14 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
         XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
         XCTAssertTrue(app.buttons["homeEditWeeklyGoal"].exists)
+        XCTAssertLessThanOrEqual(app.descendants(matching:.any)["homeDualRings"].frame.maxX,368.5,"Dual goal rings stay within the source 22pt content inset")
         app.buttons["homeEditWeeklyGoal"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:6))
 
         launchExample("unset")
         XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
         XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-distance"].label,"이번 주 달린 거리")
 
         launchExample("over")
         XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"115%")

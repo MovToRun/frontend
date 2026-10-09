@@ -41,6 +41,10 @@ enum WReview54HomeArc {
         guard value.isFinite, target.isFinite, target > 0 else { return 0 }
         return CGFloat(min(1, max(0, value / target)))
     }
+
+    static func dualRingSize(availableWidth: CGFloat) -> CGFloat {
+        min(173, max(0, (availableWidth - 14) / 2))
+    }
 }
 
 private struct WReview54Arc: Shape {
@@ -52,6 +56,7 @@ private struct WReview54RingVisual: View {
     let unit:String
     let progress:CGFloat
     let size:CGFloat
+    let accessibilityTitle:String
     let accessibilityValue:String
     private var lineWidth:CGFloat { WReview54HomeArc.strokeWidth * size / WReview54HomeArc.viewBoxWidth }
     var body:some View {
@@ -66,7 +71,7 @@ private struct WReview54RingVisual: View {
         }
         .frame(width:size,height:size*WReview54HomeArc.viewBoxHeight/WReview54HomeArc.viewBoxWidth)
         .accessibilityElement(children:.ignore)
-        .accessibilityLabel(unit=="km" ? "주간 거리 목표 진행률":"주간 시간 목표 진행률")
+        .accessibilityLabel(accessibilityTitle)
         .accessibilityValue(accessibilityValue)
     }
 }
@@ -133,7 +138,6 @@ extension WireframeRoot {
     }
     func homeRecentRecord(_ record:RunRecord)->some View {
         let validSeconds=record.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? record.seconds
-        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone.current;formatter.dateFormat="yyyy.MM.dd"
         return Button { ui.openRecord(record) } label: {
             HStack(spacing:10) {
                 VStack(alignment:.leading,spacing:5) {
@@ -142,7 +146,7 @@ extension WireframeRoot {
                         Text(MovNumber.display(record.kilometers)).font(W.font(19,.semibold)).monospacedDigit()
                         Text("km").font(W.font(13))
                     }.accessibilityIdentifier("homeRecentDistance")
-                    Text("\(formatter.string(from:record.date)) · \(RunRecord.clock(validSeconds)) 유효 러닝\(record.isExample == true ? " · 예시":"")")
+                    Text("\(recordWhen(record)) · \(RunRecord.clock(validSeconds)) 유효 러닝\(record.isExample == true ? " · 예시":"")")
                         .font(W.font(10)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("homeRecentMetadata")
                 }
                 Spacer(minLength:6)
@@ -163,10 +167,13 @@ extension WireframeRoot {
                 WText(text:"이번 주 달린 거리",small:true).padding(.top,3)
             } else {
                 if let distanceGoal,let timeGoal {
-                    HStack(alignment:.top,spacing:14) {
-                        homeRing(value:distance,unit:"km",target:distanceGoal,percent:WeeklyGoal.percent(value:distance,goal:distanceGoal),identifier:"distance",size:170)
-                        homeRing(value:seconds/60,unit:"분",target:timeGoal,percent:WeeklyGoal.percent(value:seconds/60,goal:timeGoal),identifier:"time",size:170)
-                    }.padding(.top,12).accessibilityElement(children:.contain).accessibilityIdentifier("homeDualRings")
+                    GeometryReader { proxy in
+                        let ringSize=WReview54HomeArc.dualRingSize(availableWidth:proxy.size.width)
+                        HStack(alignment:.top,spacing:14) {
+                            homeRing(value:distance,unit:"km",target:distanceGoal,percent:WeeklyGoal.percent(value:distance,goal:distanceGoal),identifier:"distance",size:ringSize)
+                            homeRing(value:seconds/60,unit:"분",target:timeGoal,percent:WeeklyGoal.percent(value:seconds/60,goal:timeGoal),identifier:"time",size:ringSize)
+                        }.accessibilityElement(children:.contain).accessibilityIdentifier("homeDualRings")
+                    }.frame(height:165).padding(.horizontal,1).padding(.top,12)
                 } else if let target=distanceGoal {
                     homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
                 } else if let target=timeGoal {
@@ -188,7 +195,7 @@ extension WireframeRoot {
             progressDescription="\(displayed) km"
         }
         return VStack(spacing:0) {
-            WReview54RingVisual(value:displayed,unit:unit,progress:WReview54HomeArc.ratio(value:value,target:target ?? 1),size:size,accessibilityValue:progressDescription)
+            WReview54RingVisual(value:displayed,unit:unit,progress:WReview54HomeArc.ratio(value:value,target:target ?? 1),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription)
             .accessibilityIdentifier("homeRing-\(identifier)")
             if let target,let percent {
                 HStack(spacing:6) {

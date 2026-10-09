@@ -26,6 +26,9 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WReview54HomeArc.ratio(value:23,target:20),1,accuracy:0.0001)
         XCTAssertEqual(WReview54HomeArc.ratio(value:12,target:0),0,accuracy:0.0001)
         XCTAssertEqual(WReview54HomeArc.ratio(value:.infinity,target:20),0,accuracy:0.0001)
+        XCTAssertEqual(WReview54HomeArc.dualRingSize(availableWidth:346),166,accuracy:0.1)
+        XCTAssertEqual(WReview54HomeArc.dualRingSize(availableWidth:276),131,accuracy:0.1)
+        XCTAssertLessThanOrEqual(2*WReview54HomeArc.dualRingSize(availableWidth:276)+14,276)
         let bounds=WReview54HomeArc.path(in:CGRect(x:0,y:0,width:240,height:190)).boundingRect
         XCTAssertEqual(bounds.minX,13,accuracy:0.2)
         XCTAssertEqual(bounds.maxX,227,accuracy:0.2)
