@@ -677,6 +677,36 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].exists)
     }
 
+    func testReview52StatisticsEmptyAndOverGoalMatchSourcePresentation() {
+        for (screen,expectedDistance) in [("H08","0.00 km"),("H09","23.00 km")] {
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.wireframe.test.h08-h09","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
+
+            let distance=app.staticTexts["periodDistanceValue"]
+            XCTAssertTrue(distance.waitForExistence(timeout:5))
+            XCTAssertEqual(distance.label,expectedDistance)
+            if screen == "H09" {
+                let percent=app.staticTexts["goal-percent-거리 목표"]
+                let overage=app.staticTexts["goal-overage-거리 목표"]
+                XCTAssertTrue(percent.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(percent.label,"115%")
+                XCTAssertTrue(overage.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(overage.label,"3 km 더 달렸어요")
+                let progress=app.descendants(matching:.any)["goal-progress-거리 목표"]
+                XCTAssertTrue(progress.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(progress.label,"거리 목표 진행률")
+                XCTAssertEqual(progress.value as? String,"100%","The H09 visual fill and accessible value cap at the source's 100% limit")
+            }
+            let dateRange=app.staticTexts["statisticsDateRange"]
+            XCTAssertTrue(dateRange.waitForExistence(timeout:5))
+            XCTAssertEqual(dateRange.label,"가상 기준일은 2026년 10월 1일이에요.\n이번 주는 9월 28일~10월 4일 기록이에요.")
+            XCTAssertGreaterThanOrEqual(dateRange.frame.height,24)
+            capture(screen+"-statistics-source-layout-390x790")
+            app.terminate()
+        }
+    }
+
     func testSummaryMovingPeriodAndCalendarPreservation() {
         for theme in ["light","dark"]{
             app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-reset","-wire-capture-viewport","-appearance",theme];app.launch()

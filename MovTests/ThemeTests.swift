@@ -448,6 +448,15 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(invalid.caloriesText,"0 kcal")
     }
 
+    func testReview52StatisticsPrecisionAndReferenceWeekCopy() {
+        let reference=ISO8601DateFormatter().date(from:"2026-10-01T12:00:00+09:00")!
+        let seoul=TimeZone(identifier:"Asia/Seoul")!
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(0),"0.00")
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(23),"23.00")
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(.infinity),"—")
+        XCTAssertEqual(WReview52StatisticsFormat.weekDateNote(asOf:reference,timeZone:seoul),"가상 기준일은 2026년 10월 1일이에요.\n이번 주는 9월 28일~10월 4일 기록이에요.")
+    }
+
     @MainActor func testRecentMonthlyAverageUsesValidRecordsAndShowsZero() {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
@@ -610,6 +619,12 @@ extension ThemeTests {
 
 
 extension ThemeTests {
+    func testSourceDistanceFormattingKeepsAtMostTwoDecimalPlaces() {
+        XCTAssertEqual(MovNumber.display(3.456),"3.46")
+        XCTAssertEqual(MovNumber.display(3.4),"3.4")
+        XCTAssertEqual(MovNumber.display(3),"3")
+    }
+
     func testDisplayNumbersDoNotRoundStoredValues() {
         for (value,expected) in [(0.0,"0"),(5.0,"5"),(5.5,"5.5"),(1.23456789,"1.23"),(0.1+0.2,"0.3"),(9.999,"10"),(-0.001,"0"),(1000.0,"1000")]{XCTAssertEqual(MovNumber.display(value),expected)}
         let record=RunRecord(date:Date(),title:"fixture",seconds:240.123456,kilometers:0.999999)

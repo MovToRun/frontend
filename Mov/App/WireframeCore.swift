@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum WWireDefaults {
+    static func resolve(arguments:[String] = ProcessInfo.processInfo.arguments)->(defaults:UserDefaults,suiteName:String?) {
+        if let index=arguments.firstIndex(of:"-wire-test-store-suite"),arguments.indices.contains(index+1),!arguments[index+1].isEmpty {
+            let suite=arguments[index+1]
+            return (UserDefaults(suiteName:suite)!,suite)
+        }
+        if arguments.contains("-wire-fixture") { return (UserDefaults(suiteName:"mov.wireframe.review")!,"mov.wireframe.review") }
+        return (.standard,nil)
+    }
+}
+
 // Native views use the original HTML's dimensions. No web view or screen raster is used for UI.
 extension Color {
     static func wire(_ light: UInt32, _ dark: UInt32) -> Color {
@@ -233,7 +244,7 @@ enum WRootTab: Int, CaseIterable {
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
-    init(){let args=ProcessInfo.processInfo.arguments;defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
+    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
     var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
@@ -282,9 +293,10 @@ struct WireframeRoot:View {
     @State var pointsStore:WPointsStore
     init(){
         let args=ProcessInfo.processInfo.arguments
-        let defaults=args.contains("-wire-fixture") ? UserDefaults(suiteName:"mov.wireframe.review")! : UserDefaults.standard
+        let defaultsSelection=WWireDefaults.resolve(arguments:args)
+        let defaults=defaultsSelection.defaults
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
-        if resetFixture{Self.didPrepareFixture=true;defaults.removePersistentDomain(forName:"mov.wireframe.review")}
+        if resetFixture{Self.didPrepareFixture=true;if let suite=defaultsSelection.suiteName{defaults.removePersistentDomain(forName:suite)}}
         let model=RunStore(defaults:defaults)
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
