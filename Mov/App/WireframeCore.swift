@@ -304,6 +304,23 @@ struct WireframeRoot:View {
             model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)],isExample:true)]
             model.persist()
         }
+        if args.contains("-wire-fixture"), defaultsSelection.suiteName != nil,
+           let i=args.firstIndex(of:"-wire-home-weekly-example"),args.indices.contains(i+1) {
+            let date=ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!
+            let examples:[String:(Double,Double,Double?,Int?)] = [
+                "below":(12,4500,20,nil), "exact":(20,7500,20,nil), "over":(23,8625,20,nil),
+                "time":(12,5400,nil,120), "both":(12,5400,20,120), "half":(20,5400,20,120),
+                "both-over":(23,9000,20,120), "long-week":(60,36000,nil,600), "unset":(12,4500,nil,nil)
+            ]
+            if let example=examples[args[i+1]] {
+                model.weekly.distanceEnabled=example.2 != nil
+                model.weekly.kilometers=example.2 ?? 20
+                model.weekly.timeEnabled=example.3 != nil
+                model.weekly.minutes=example.3 ?? 120
+                model.records=[RunRecord(date:date,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:example.1,kilometers:example.0,segments:[RunSegment(distance:example.0,seconds:example.1)],isExample:true)]
+                model.persist()
+            }
+        }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
         _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
     }

@@ -18,6 +18,20 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testReview54HomeArcUsesSourceSweepAndClampsProgress() {
+        XCTAssertEqual(WReview54HomeArc.viewBoxWidth,240)
+        XCTAssertEqual(WReview54HomeArc.viewBoxHeight,190)
+        XCTAssertEqual(WReview54HomeArc.sweepDegrees,220)
+        XCTAssertEqual(WReview54HomeArc.ratio(value:12,target:20),0.6,accuracy:0.0001)
+        XCTAssertEqual(WReview54HomeArc.ratio(value:23,target:20),1,accuracy:0.0001)
+        XCTAssertEqual(WReview54HomeArc.ratio(value:12,target:0),0,accuracy:0.0001)
+        XCTAssertEqual(WReview54HomeArc.ratio(value:.infinity,target:20),0,accuracy:0.0001)
+        let bounds=WReview54HomeArc.path(in:CGRect(x:0,y:0,width:240,height:190)).boundingRect
+        XCTAssertEqual(bounds.minX,13,accuracy:0.2)
+        XCTAssertEqual(bounds.maxX,227,accuracy:0.2)
+        XCTAssertLessThan(bounds.maxY,157,"The 220° arc remains open toward the lower edge")
+    }
+
     @MainActor func testReview52WeekFixtureUsesItsReferenceWeek() {
         let suite = "review52-week-\(UUID().uuidString)"
         let store = RunStore(defaults: UserDefaults(suiteName: suite)!)

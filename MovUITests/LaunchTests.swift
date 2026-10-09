@@ -55,6 +55,51 @@ import UIKit
             }
         }
     }
+    func testReview54HomeWeeklyArcsExamplesAndNavigation() {
+        let suite="mov.wireframe.test.review54-home"
+        func launchExample(_ example:String) {
+            app.terminate()
+            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
+                "-wire-reset","-wire-capture-viewport","-wire-home-weekly-example",example,"-appearance","light"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:12),"Home example: \(example)")
+        }
+
+        launchExample("below")
+        XCTAssertTrue(app.staticTexts["homeWeeklyHeading"].exists)
+        XCTAssertFalse(app.buttons["editGoal"].exists,"The home removes the per-run goal card")
+        XCTAssertTrue(app.buttons["homeStartRun"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRingPercent-distance"].exists,app.debugDescription)
+        XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"60%")
+        capture("H00-weekly-below")
+        app.buttons["homeWeeklySummary"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H07"].waitForExistence(timeout:6))
+
+        launchExample("time")
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+
+        launchExample("both")
+        XCTAssertTrue(app.descendants(matching:.any)["homeDualRings"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
+        XCTAssertTrue(app.buttons["homeEditWeeklyGoal"].exists)
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:6))
+
+        launchExample("unset")
+        XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
+        XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].exists)
+
+        launchExample("over")
+        XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"115%")
+        XCTAssertTrue(app.staticTexts["homeRingOverage-distance"].exists)
+        app.buttons["homeStartRun"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:6))
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
     func testReview52RunPanelAndRecordListDetailAlignment() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))
