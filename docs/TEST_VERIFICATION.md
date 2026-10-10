@@ -10,6 +10,15 @@
 - The existing `testAuthenticationConsentAndProviderProtection` fails because it expects a `홈으로` control after signup, while the completion screen exposes `시작하기` and has already routed to H00. The same isolated failure reproduces with the merged-main Swift sources and the unchanged test method (`/tmp/mov-community-baseline-check/AuthBaseline.xcresult`), so it is baseline behavior rather than this discovery change.
 - The reference `community-model.js` defines HOT as the public feed filtered by its existing `hot` marker and does not compute a rank. The local screen follows that fixture-only policy; live search and popularity aggregation remain unconnected. This run verifies functional flows, not source/app pixel or motion parity; full visual QA remains open.
 
+## Authentication success action and UI-test maintenance
+
+- Branch: `feature/fix-auth-success-accessibility`, based on merged PR #37 main SHA `78f84e1f3e87f27b8b0da1ccc1e4a6e07ea75c47`.
+- A15's existing `시작하기` button now has the stable accessibility ID `signupCompletionStart`; its visible copy and route to H00 are unchanged. The regression uses the ID and separately asserts the visible label.
+- Updated stale auth-test expectations to the current empty-email copy, made password entry replace any existing value, and aligned the ordinary user reset test with the actual `reset-email` field and fixture-only code visibility. Ordinary user flow covers reset entry/cancel/back; complete reset, code resend, password policy, and return-to-login are covered in the dedicated fixture-backed reset UI tests.
+- Verification: 80/80 passed (72 unit tests + 8 focused auth UI tests, 0 failed, 0 skipped) on the existing iPhone 17 Pro, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used unique app, unit-test, and UI-test bundle IDs with isolated fixture storage.
+- Result bundle: `/tmp/mov-auth-selector-fix/AuthRegression-final.xcresult`.
+- The pre-existing Swift concurrency warning for the PhotosPicker sendable closure referencing main-actor profile data in `WireframeProfile.swift:156` remains a separate follow-up and is outside this test-maintenance patch. These functional tests do not constitute full source/app pixel or motion QA.
+
 ## Crew information and member application list (C32–C33)
 
 - Branch: `feature/community-crew-info-applications`, based on merged PR #35 main SHA `b682c19f34eb9169e3121eb14ed92fa8a0e8a076`.
