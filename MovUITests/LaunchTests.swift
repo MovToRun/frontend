@@ -470,6 +470,50 @@ import UIKit
         app.buttons["goal-time"].tap();XCTAssertTrue(app.descendants(matching:.any)["timeGoalPicker"].exists);capture("H03-time")
         app.buttons["이 목표로 달리기"].tap()
     }
+
+    func testPaceChartTouchSelectsTheSegmentUnderItsVisiblePosition() {
+        app.launchArguments=["-wire-screen","L05","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L05"].waitForExistence(timeout:15),app.debugDescription)
+        let chart=app.descendants(matching:.any)["구간 평균 페이스 그래프"].firstMatch
+        XCTAssertTrue(chart.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue((chart.value as? String ?? "").contains("0–1 km"),String(describing:chart.value))
+        capture("L05-valid-chart-touch")
+        chart.coordinate(withNormalizedOffset:CGVector(dx:0.98,dy:0.55)).tap()
+        XCTAssertTrue((chart.value as? String ?? "").contains("4–4.82 km"),"A touch on the visible chart's right edge should select its last split; value=\(String(describing:chart.value)) frame=\(chart.frame)")
+    }
+
+    func testInvalidRunSplitViewOmitsAverageAndExplainsRecordedGap() {
+        app.launchArguments=["-wire-screen","S05","-wire-fixture","-wire-reset","-wire-test-store-suite","mov.records.splits.invalid.\(UUID().uuidString)","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.buttons["기록 보기"].waitForExistence(timeout:10))
+        tap("기록 보기")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5))
+        XCTAssertTrue(waitHittable(app.buttons["editTitle"],timeout:8),app.debugDescription)
+        let splitButtons=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","구간 기록"))
+        for _ in 0..<3 where !splitButtons.allElementsBoundByIndex.contains(where:{$0.isHittable}) { app.swipeUp() }
+        XCTAssertTrue(waitForLayout({splitButtons.allElementsBoundByIndex.contains(where:{$0.isHittable})},timeout:5),app.debugDescription)
+        splitButtons.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L05"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["아직 표시할 페이스가 없어요"].exists)
+        XCTAssertTrue(app.staticTexts["유효한 거리와 시간이 있는 기록부터 표시해요."].exists)
+        XCTAssertEqual(app.staticTexts["splitAverageLabel"].label,"0:00 /km")
+        XCTAssertFalse(app.staticTexts["유효 평균은 확인할 수 있어요. 임의의 구간이나 변화 선은 만들지 않아요."].exists)
+        XCTAssertTrue(app.staticTexts["GPS 누락"].exists)
+        XCTAssertTrue(app.staticTexts["신호가 누락된 구간은 제외하고 거리를 추정하지 않았어요"].exists)
+        capture("L05-invalid-gap-copy")
+    }
+
+    func testPaceChartReflowsOnCompactDarkViewport() {
+        app.launchArguments=["-wire-screen","L05","-wire-fixture","-wire-reset","-wire-test-store-suite","mov.records.splits.compact.\(UUID().uuidString)","-wire-compact-review","-wire-reduced","-appearance","dark"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L05"].waitForExistence(timeout:10))
+        let chart=app.descendants(matching:.any)["구간 평균 페이스 그래프"].firstMatch
+        XCTAssertTrue(chart.exists,app.debugDescription)
+        XCTAssertLessThanOrEqual(chart.frame.maxX,app.frame.maxX+1,"The chart stays within the 320pt review viewport")
+        XCTAssertTrue(app.staticTexts["구간별 기록"].exists)
+        capture("L05-compact-dark-reduced")
+    }
 }
 
 @MainActor final class PasswordResetUITests:XCTestCase {
@@ -1596,7 +1640,9 @@ extension LaunchTests {
         app.swipeDown();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정");capture("Title-inline-saved")
         for _ in 0..<3 where !app.buttons["editTitle"].isHittable { app.swipeDown() }
         tap("editTitle");replaceInput(title,"저장하지 않을 제목");tap("뒤로")
-        tap("전체 보기");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","제목만 수정")).firstMatch.tap();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정")
+        app.buttons["tab-1"].tap()
+        XCTAssertTrue(waitHittable(app.buttons["openRecords"],timeout:5),app.debugDescription)
+        app.buttons["openRecords"].tap();app.buttons.matching(NSPredicate(format:"label CONTAINS %@","제목만 수정")).firstMatch.tap();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정")
         app.swipeUp();tap("editMemo");replaceInput(memo,String(repeating:"나",count:301));XCTAssertFalse(app.buttons["finishMemo"].isEnabled);XCTAssertEqual(app.staticTexts["inlineMemoCount"].label,"301/300")
         replaceInput(memo,"");tap("finishMemo");XCTAssertEqual(app.staticTexts["recordMemo"].label,"러닝의 느낌을 남겨 보세요");tap("editMemo");replaceInput(memo,"저장하지 않을 메모");tap("뒤로")
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@","제목만 수정")).firstMatch.tap();app.swipeUp();XCTAssertEqual(app.staticTexts["recordMemo"].label,"러닝의 느낌을 남겨 보세요");capture("Memo-empty-restored")

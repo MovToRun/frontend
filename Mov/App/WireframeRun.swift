@@ -146,7 +146,7 @@ extension WireframeRoot {
     }
 
     var recordEdit:some View {WPage(title:"기록 편집",back:back){WField(label:"제목 (40자 이내)",text:$ui.title,limit:40).accessibilityIdentifier("recordTitleInput").padding(.top,18);WField(label:"메모 (300자 이내)",text:$ui.memo,limit:300,multiline:true).accessibilityIdentifier("recordMemoInput");WText(text:"제목을 비우면 시작 날짜와 시간대의 기본 이름을 사용해요.\n거리·시간·경로는 바꾸지 않아요.",small:true);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}actions:{Button("변경 저장"){guard ui.title.count<=40 && ui.memo.count<=300 else{ui.error="제목은 40자, 메모는 300자 이내로 입력해 주세요.";return};var r=current;r.title=ui.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? RunRecord.title(for:r.date):ui.title;r.memo=ui.memo;store.update(r);back()}.buttonStyle(WButtonStyle()).accessibilityIdentifier("saveRecordEdit")}}
-    var splits:some View {WPage(title:"구간 기록",back:back){HStack{Text("구간 평균 페이스").font(W.font(16,.semibold));Spacer();Text(current.pace+" /km").font(W.font(13,.medium))};WPaceChart(record:current).padding(.top,-18)}actions:{}}
+    var splits:some View {let chart=WPaceChart(record:current);return WPage(title:"구간 기록",back:back){HStack{Text("구간 평균 페이스").font(W.font(16,.semibold));Spacer();Text(chart.averageLabel).font(W.font(13,.medium)).foregroundStyle(chart.hasAverage ? W.ink:W.muted).accessibilityIdentifier("splitAverageLabel")};chart.padding(.top,-18)}actions:{}}
     var completion:some View {WPage(title:"러닝 완료",back:ui.screen=="S02" ? nil:{go("H00")}){VStack(alignment:.leading,spacing:0){if ["S01","S05"].contains(ui.screen){WCompletionFeedback(recordID:current.id,seen:$ui.completionFeedbackSeen)};WText(text:recordWhen(current),small:true).padding(.top,["S01","S05"].contains(ui.screen) ? 0:6)};Text(ProcessInfo.processInfo.arguments.contains("-wire-review-size") ? "10월 1일 아침 러닝":current.title).font(W.font(14,.medium));WHeading(text:ui.screen=="S03" ? "아직 저장하지\n못했어요":ui.screen=="S02" ? "기록을\n저장하고 있어요":ui.screen=="S05" ? "유효한 러닝\n구간이 없어요":"가볍게,\n잘 달렸어요").padding(.top,-7);WMetric(record:current,saved:ui.screen != "S03").padding(.top,-3);WMap(route:ui.screen != "S05").frame(height:172).clipShape(RoundedRectangle(cornerRadius:14));WRow(title:"추정 소모 칼로리",value:current.caloriesText,separator:false);if !["S01","S05"].contains(ui.screen){WNotice(text:ui.screen=="S03" ? "이 기기에 임시 기록이 남아 있어요. 다시 저장해 주세요.":ui.screen=="S02" ? "저장 결과를 확인하기 전에는 완료로 표시하지 않아요.":"기기에 저장됨 · 동기화 대기\n클라우드 백업을 추가할 경우의 후속 상태예요.",danger:ui.screen=="S03")}}actions:{if ui.screen=="S02"{Button("저장 중…"){}.buttonStyle(WButtonStyle()).disabled(true)}else if ui.screen=="S03"{Button("다시 저장"){saveRun()}.buttonStyle(WButtonStyle());button("임시 기록 확인","H06",kind:1)}else{button("기록 보기","L04");if ui.screen=="S01" && current.isValid{button("공유 이미지 만들기","Q01",kind:1).accessibilityIdentifier("createRunShare")};button("홈으로","H00",kind:1)}}}
 }
 
@@ -155,8 +155,18 @@ struct WPaceChart:View {
     @State private var selected=0
     struct Point:Identifiable {var id:Int;var start:Double;var end:Double;var pace:Double;var group:Int}
     var points:[Point] {var distance=0.0;var group=0;var result:[Point]=[];for (i,s) in (record.segments ?? []).enumerated(){if s.type != "include" || s.distance<=0 || s.seconds<=0{group+=1;continue};let start=distance;distance+=s.distance;result.append(Point(id:i,start:start,end:distance,pace:s.seconds/s.distance,group:group))};return result}
+    var hasAverage:Bool {record.kilometers>0 && record.seconds>0}
+    var averageLabel:String {hasAverage ? record.pace+" /km":"0:00 /km"}
+    var hasExcludedSegments:Bool {record.segments?.contains{$0.type != "include" || $0.distance<=0 || $0.seconds<=0} ?? false}
+    var sourceNote:String {
+        if record.segments != nil {
+            let base="명시한 가상 구간의 유효 거리와 이동 시간으로 계산해요. 실제 자동 판별 기능은 아직 없어요."
+            return hasExcludedSegments ? base+"\n제외된 구간은 거리·이동 시간·페이스에 반영하지 않아요.":base
+        }
+        return hasAverage ? "기존 저장 합계의 평균이에요. 원본 구간 판별 정보가 없어 변화 선은 표시하지 않아요.":"유효 구간 정보가 부족해 페이스를 계산할 수 없어요."
+    }
     var body:some View {VStack(alignment:.leading,spacing:0){
-        if points.isEmpty{VStack(spacing:14){Text("구간 데이터가 없어요").font(W.font(18,.medium));WText(text:"유효 평균은 확인할 수 있어요. 임의의 구간이나 변화 선은 만들지 않아요.",small:true)}.frame(maxWidth:.infinity,minHeight:210).background(W.soft,in:RoundedRectangle(cornerRadius:12))}
+        if points.isEmpty{VStack(spacing:14){Text(hasAverage ? "구간 데이터가 없어요":"아직 표시할 페이스가 없어요").font(W.font(18,.medium));WText(text:hasAverage ? "유효 평균은 확인할 수 있어요. 임의의 구간이나 변화 선은 만들지 않아요.":"유효한 거리와 시간이 있는 기록부터 표시해요.",small:true)}.frame(maxWidth:.infinity,minHeight:210).background(W.soft,in:RoundedRectangle(cornerRadius:12))}
         else {Text("페이스 (분/km) · 위로 갈수록 빨라요").font(W.font(11)).foregroundStyle(W.muted).padding(.top,21).padding(.bottom,4)
             GeometryReader{geometry in
                 let values=points.map(\.pace)+[record.seconds/max(0.01,record.kilometers)]
@@ -176,12 +186,40 @@ struct WPaceChart:View {
         }.aspectRatio(320.0/216.0,contentMode:.fit).accessibilityElement(children:.ignore).accessibilityLabel("구간 평균 페이스 그래프").accessibilityValue(readout).accessibilityAdjustableAction{d in selected=min(points.count-1,max(0,selected+(d == .increment ? 1:-1)))}
             Text(readout).font(W.font(13)).frame(maxWidth:.infinity,minHeight:24);Text("┄ 유효 평균 \(record.pace) /km").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.center).padding(.top,7)
         }
-        Text(points.isEmpty ? "기존 저장 합계의 평균이에요. 원본 구간 판별 정보가 없어 변화 선은 표시하지 않아요.":"저장된 구간의 유효 거리와 이동 시간으로 계산해요. 제외된 구간은 아래에서 확인할 수 있어요.").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).lineSpacing(5.15).padding(.top,23)
+        Text(sourceNote).font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).lineSpacing(5.15).padding(.top,23)
         Text("구간별 기록").font(W.font(15,.semibold)).padding(.top,29).padding(.bottom,5);VStack(spacing:0){splitRow("구간",value:"페이스",header:true)
-        if let segments=record.segments,!segments.isEmpty{ForEach(Array(segments.enumerated()),id:\.offset){i,s in if let point=points.first(where:{$0.id==i}){splitRow("\(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace),separator:i<segments.count-1)}else{VStack(alignment:.leading,spacing:6){Text(s.type=="pause" ? "일시정지":"유효 구간에서 제외").font(W.font(14,.medium));WText(text:s.reason ?? "유효 러닝으로 확인할 수 없어 제외했어요.",small:true)}.padding(.vertical,12)}}}else{splitRow("전체 \(MovNumber.display(record.kilometers)) km",value:record.pace)} }
+        if let segments=record.segments,!segments.isEmpty{ForEach(Array(segments.enumerated()),id:\.offset){i,s in if let point=points.first(where:{$0.id==i}){splitRow("\(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace),separator:i<segments.count-1)}else{VStack(alignment:.leading,spacing:6){Text(exclusionTitle(s)).font(W.font(14,.medium));WText(text:exclusionDescription(s),small:true)}.padding(.vertical,12)}}}else if hasAverage{splitRow("전체 \(MovNumber.display(record.kilometers)) km",value:record.pace)}else{splitRow("유효 기록 없음",value:record.segments == nil ? "—":"0:00")} }
     }.onChange(of:record.id){_,_ in selected=0}.onChange(of:points.count){_,count in selected=min(selected,max(0,count-1))}}
     func pace(_ seconds:Double)->String {String(format:"%d:%02d",Int(seconds)/60,Int(seconds)%60)}
     func splitRow(_ title:String,value:String,header:Bool=false,separator:Bool=true)->some View {HStack{Text(title).font(W.font(12,header ? .semibold:.regular));Spacer();Text(value).font(W.font(header ? 12:11,header ? .semibold:.regular)).foregroundStyle(header ? W.ink:W.muted)}.frame(minHeight:49).overlay(alignment:.bottom){if separator{W.line.frame(height:1)}}}
+    func exclusionTitle(_ segment:RunSegment)->String {
+        switch segment.type {
+        case "gps-gap":return "GPS 누락"
+        case "pause":return "일시정지"
+        case "vehicle":return "차량 이동 제외"
+        case "transit":return "대중교통 제외"
+        case "gps-spike":return "GPS 튐 제외"
+        case "long-idle":return "오랜 정지 제외"
+        case "unknown":return "판별 정보 없음"
+        case "invalid-metrics":return "거리·시간 확인 필요"
+        case "conflicting-flag":return "제외 표시된 구간"
+        default:return "유효 구간에서 제외"
+        }
+    }
+    func exclusionDescription(_ segment:RunSegment)->String {
+        switch segment.type {
+        case "gps-gap":return "신호가 누락된 구간은 제외하고 거리를 추정하지 않았어요"
+        case "pause":return "일시정지한 시간은 유효 러닝에서 제외했어요"
+        case "vehicle":return "차량 이동으로 표시된 구간은 유효 러닝에서 제외했어요"
+        case "transit":return "대중교통으로 표시된 구간은 유효 러닝에서 제외했어요"
+        case "gps-spike":return "GPS 튐으로 표시된 구간은 유효 러닝에서 제외했어요"
+        case "long-idle":return "오래 멈춘 것으로 표시된 구간은 유효 러닝에서 제외했어요"
+        case "unknown":return "센서 정보가 없어 유효 러닝에서 제외했어요"
+        case "invalid-metrics":return "거리나 시간 값이 유효하지 않아 제외했어요"
+        case "conflicting-flag":return "유효하지 않음 또는 제외로 표시된 구간이에요"
+        default:return "유효 러닝으로 확인할 수 없어 제외했어요"
+        }
+    }
     var readout:String{guard !points.isEmpty else{return "구간 데이터 없음"};let p=points[min(selected,points.count-1)];return "\(MovNumber.display(p.start))–\(MovNumber.display(p.end)) km 구간 · \(pace(p.pace)) /km"}
 }
 
