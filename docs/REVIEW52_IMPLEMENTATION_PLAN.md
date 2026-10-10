@@ -58,7 +58,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `E02` | 앱 스플래시 | `WSplash` — WireframeCore.swift |
 | [ ] | `A01` | 로그인 | `authForm` — WireframeAuth.swift |
 | [x] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift; 각 내용 확인 후 해당 항목 체크, 일부 동의 차단, 전체 동의 순차 모션/취소 복구 |
-| [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 로컬 닉네임 중복/필수 검증, 선택 체중, 기기 내 데모 완료 |
+| [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 닉네임 필수/길이 검증, 검토모드 전용 fixture 충돌 점검, 선택 체중, 원본 완료 문구 |
 | [x] | `A04` | 로그인 실패 | `loginFailure` — WireframeAuth.swift; 취소·연결 끊김 문구 및 A01 재시도 로컬 흐름 |
 | [ ] | `A06` | 약관·개인정보 검토 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `A07` | 이메일 회원가입 | `authForm` — WireframeAuth.swift |
@@ -242,3 +242,5 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C41` | 인기글 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C42` | 차단한 사용자 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C43` | 내 활동 기록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+
+인증·가입 화면은 서버/API에 연결되어 있지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

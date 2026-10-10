@@ -4,7 +4,7 @@ import UIKit
     var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
-    func openAuthFixture(_ screen:String,suite:String){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
@@ -712,6 +712,27 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요."].exists)
         XCTAssertTrue(app.buttons["시작하기"].exists)
+    }
+
+    func testUserFlowSignupDoesNotAssumeGlobalNicknameAvailability() {
+        openAuthFixture("A02",suite:"mov.wireframe.test.a03-user-flow-nickname",userFlow:true)
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5))
+        let nickname=app.textFields["signupNicknameInput"]
+        replaceInput(nickname,"runmate")
+        tap("signupContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.staticTexts["검토용 예시 계정에서 사용 중인 닉네임이에요."].exists)
+    }
+
+    func testReviewModeKeepsReservedFixtureNicknameFeedback() {
+        openAuthFixture("A02",suite:"mov.wireframe.test.a03-review-fixture-nickname")
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5))
+        replaceInput(app.textFields["signupNicknameInput"],"runmate")
+        tap("signupContinue")
+        XCTAssertTrue(app.staticTexts["검토용 예시 계정에서 사용 중인 닉네임이에요."].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].exists)
     }
 
     func testLoginFailureScreenCopyAndRetry() {

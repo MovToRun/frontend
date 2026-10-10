@@ -85,7 +85,7 @@ extension WireframeRoot {
             Button(onboarding ? "계속":"변경 저장") {
                 ui.error=""
                 if onboarding, let error=WSignupNicknameValidation.error(for:ui.nickname){ui.error=error;return}
-                if onboarding, let error=WSignupNicknameValidation.fixtureError(for:ui.nickname){ui.error=error;return}
+                if onboarding, reviewTools, let error=WSignupNicknameValidation.fixtureError(for:ui.nickname){ui.error=error;return}
                 if let error=WSignupWeightValidation.error(for:ui.weight){ui.error=error;return}
                 if onboarding && (!ui.consentTerms || !ui.consentPrivacy){ui.error="필수 항목을 확인해 주세요.";go("A02");return}
                 ui.profile.weight=ui.weight
