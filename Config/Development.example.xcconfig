@@ -1,0 +1,5 @@
+// Copy to Development.local.xcconfig and replace the reserved placeholder after the development API host is agreed.
+MOV_API_ENVIRONMENT = development
+MOV_API_BASE_URL = https:/$()/api-dev.example.invalid
+MOV_API_REQUEST_TIMEOUT_SECONDS = 30
+MOV_API_RESOURCE_TIMEOUT_SECONDS = 60
