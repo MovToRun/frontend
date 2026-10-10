@@ -6,6 +6,7 @@ import UIKit
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
+    private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{app.scrollViews.firstMatch.swipeUp()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
@@ -1688,6 +1689,106 @@ import UIKit
         tap("communityPublishButton")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","주말 러닝 메모")).firstMatch.waitForExistence(timeout:5))
+    }
+
+    func testCommunityOwnPostEditPreviewsAndUpdatesExistingPostInPlace() {
+        launchCommunity("C01",viewerID:"fixture-member-ga-on")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuEditPost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.textFields["communityComposeTitle"].value as? String,"오늘은 강변을 따라 5 km")
+        XCTAssertEqual(app.textViews["communityComposeBody"].value as? String,"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.")
+        replace("수정한 강변 러닝",into:app.textFields["communityComposeTitle"])
+        replace("기존 글의 내용을 고쳤어요.",into:app.textViews["communityComposeBody"])
+        tap("communityPreviewButton")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"수정한 강변 러닝")
+        XCTAssertEqual(app.staticTexts["communityPreviewBody"].label,"기존 글의 내용을 고쳤어요.")
+        tap("communityEditPostSave")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"수정한 강변 러닝")
+        XCTAssertTrue(app.buttons["communityDetailImageOpen"].exists,"Editing text preserves the existing fixture image")
+        XCTAssertTrue(app.staticTexts["댓글 1"].exists,"Editing text preserves the existing comments")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts.matching(identifier:"communityPostTitle-p1").count,1,"Editing keeps the original post ID and does not create a duplicate")
+        XCTAssertEqual(app.staticTexts["communityPostTitle-p1"].label,"수정한 강변 러닝")
+    }
+
+    func testCommunityPostEditUsesC26ForChangedDraftAndSkipsItWhenUnchanged() {
+        launchCommunity("C01",viewerID:"fixture-member-ga-on")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap();app.buttons["communityMenuEditPost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        app.buttons["communityComposeCancel"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5),"An unchanged edit returns immediately")
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists)
+
+        app.buttons["communityPostMore"].tap();app.buttons["communityMenuEditPost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        replace("버릴 수정 초안",into:app.textFields["communityComposeTitle"])
+        app.buttons["communityComposeCancel"].tap()
+        let discard=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(discard.waitForExistence(timeout:5))
+        discard.buttons["계속 편집"].tap()
+        XCTAssertEqual(app.textFields["communityComposeTitle"].value as? String,"버릴 수정 초안","Continuing edit keeps only the draft changed")
+        app.buttons["communityComposeCancel"].tap()
+        app.alerts["변경사항을 버릴까요?"].buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"오늘은 강변을 따라 5 km","Discard leaves the saved post unchanged")
+    }
+
+    func testCommunityPostDeleteCleansProfileLikesHistoryAndLeavesSafeNotificationTarget() {
+        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite","community-delete-\(UUID().uuidString)","-wire-reset","-appearance","light","-wire-community-viewer","fixture-member-ga-on","-wire-community-notification-samples"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:10))
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityDetailLike"].tap()
+        app.buttons["communityPostMore"].tap()
+        XCTAssertTrue(app.buttons["communityMenuEditPost"].exists)
+        app.buttons["communityMenuDeletePost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityPostDeleteConfirmation"].waitForExistence(timeout:3))
+        app.buttons["communityPostDeleteCancel"].tap()
+        XCTAssertTrue(app.staticTexts["communityDetailTitle"].exists,"Cancel keeps the post intact")
+        app.buttons["communityPostMore"].tap();app.buttons["communityMenuDeletePost"].tap()
+        app.buttons["communityPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["communityPostTitle-p1"].exists,"Deleted posts disappear from the feed")
+
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityProfilePostCount"].label,"1","The own-profile post list and count are derived from remaining posts")
+        let profileSettings=app.buttons["communityOwnProfileSettings"]
+        XCTAssertTrue(profileSettings.exists)
+        profileSettings.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        app.buttons["communityLikedPostsRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityLikedPostsEmpty"].waitForExistence(timeout:5),"Deleting a post clears its like entry")
+        app.buttons["뒤로"].tap()
+        app.buttons["communityActivityRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityActivityEmpty"].waitForExistence(timeout:5),"Deleting a post clears its recent-view entry")
+        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
+        app.buttons["communityNotificationBell"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityNotificationUnavailable-sample-post"].waitForExistence(timeout:5),"A stale notification remains visibly marked unavailable")
+        app.buttons["communityNotification-sample-post"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityNotificationError"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists,"A notification for a deleted post never routes to a stale detail")
+    }
+
+    func testCrewManagerCanDeleteCrewPostButCannotEditAnotherMembersPost() {
+        app.launchArguments=["-wire-screen","C04","-wire-fixture","-wire-test-store-suite","community-crew-post-delete-\(UUID().uuidString)","-wire-reset","-appearance","light","-wire-community-crew-post"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["communityDetailTitle"].exists)
+        app.buttons["communityPostMore"].tap()
+        XCTAssertFalse(app.buttons["communityMenuEditPost"].exists,"A crew manager cannot edit another member's post")
+        XCTAssertTrue(app.buttons["communityMenuDeletePost"].exists,"The crew owner can delete a crew post")
+        app.buttons["communityMenuDeletePost"].tap()
+        app.buttons["communityPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
     }
 
     func testPaceChartReflowsOnCompactDarkViewport() {
