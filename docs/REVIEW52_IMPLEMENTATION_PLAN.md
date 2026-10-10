@@ -31,11 +31,11 @@
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C06–C08`, `C10–C26`, `C28–C43`입니다. 커뮤니티 `C01–C05`, `C09`, `C27`은 피드→게시판→게시물/댓글→글쓰기/미리보기의 로컬 흐름을 구현했으며, 5탭 진입과 나머지 검색·프로필·크루 흐름은 후속 `feature/community-crew` 구현 범위로 남습니다. 커뮤니티는 전체 프론트 목표에서 제외되지 않았으며, 백엔드 연결 없이 로컬 fixture로 구현합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C06`, `C08`의 신고·차단 진입, `C10–C26`, `C28–C29`, `C32–C43`입니다. 커뮤니티 `C01–C05`, `C07`, `C09`, `C27`, `C30–C31`은 로컬 화면/이동을 구현했습니다. 러너 프로필 기본 흐름은 로컬로 구현했지만 C08 더보기의 신고/차단 동작과 화면 `C23`, `C42`는 후속 범위이며 완료로 세지 않습니다. 커뮤니티는 백엔드 연결 없이 로컬 fixture로 구현합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 첫 수직 흐름 `C01–C05`, `C09`, `C27`은 `WireframeHome.swift`에서 세션 메모리 fixture로 동작합니다. `C06–C08`, `C10–C26`, `C28–C43`은 전체 프론트 계획의 미완료 범위이며, 검색·프로필·크루와 나머지 화면 이동은 후속 `feature/community-crew` 단계에 남깁니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C05`, `C07`, `C09`, `C27`, `C30–C31` 및 C08 기본 프로필 흐름은 `WireframeHome.swift`의 로컬 fixture로 동작합니다. C08 신고/차단 메뉴와 `C23`, `C42`는 미완료이며 나머지 검색·프로필·크루 흐름도 후속 범위입니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -217,8 +217,8 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C04` | 게시물 | `communityPostDetail` — 예시 사진·좋아요·댓글 로컬 추가 |
 | [x] | `C05` | 글쓰기 | `communityCompose` — 로컬 초안과 제목/본문 한도 |
 | [ ] | `C06` | 좋아요한 글 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C07` | 러닝 카드 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C08` | 러너 프로필 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C07` | 러닝 카드 | `communityCardPreview` — 방문/닫기, 사진 확대 |
+| [ ] | `C08` | 러너 프로필 (부분 구현) | 기본 프로필·통계·게시글·로컬 팔로우·내 정보 편집 구현; 원본 더보기의 신고/차단 진입 미완료 |
 | [x] | `C09` | 게시 미리보기 | `communityPreview` — 세션 안 로컬 게시 예시 |
 | [ ] | `C10` | 계정 인증 신청 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C11` | 인증 신청 상태 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -240,8 +240,8 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C27` | 전체 게시판 | `communityAllBoards` — 분류 선택 후 해당 목록으로 이동 |
 | [ ] | `C28` | 커뮤니티 설정 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C29` | 커뮤니티 검색 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C30` | 팔로워·팔로잉 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C31` | 프로필 사진 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C30` | 팔로워·팔로잉 | `communityConnections` — 로컬 관계 목록과 카드 미리보기 |
+| [x] | `C31` | 프로필 사진 | `communityPhotoViewer` — 등록 사진 확대 또는 빈 사진 안내 |
 | [ ] | `C32` | 크루 정보 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C33` | 신청 중인 크루 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C34` | 멤버 관리 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -255,6 +255,6 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C42` | 차단한 사용자 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C43` | 내 활동 기록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 
-다음 community slice는 C04 댓글 답글입니다. 답글은 임의 depth 제한 없이 부모 ID로 연결하며 부모 인용/세로 연결 표시를 사용합니다. 작성자가 자신의 댓글을 삭제하면 본문 대신 삭제 표식을 남기고 자식 답글은 보존합니다. 이 UI는 세션 내 가상 예시이며 신고·차단·서버 연동을 추가하지 않습니다.
+이번 프로필 slice는 C07 카드 미리보기, C08 프로필 기본 흐름, C30 관계 목록, C31 사진 보기까지 구현합니다. 팔로우 관계와 프로필 편집은 로컬 상태/기존 `ui.profile` 저장을 사용하며 서버 동기화는 없습니다. C08 더보기의 신고·차단 진입과 `C23` 신고, `C42` 차단 사용자 관리는 원본 화면 범위 후속 작업으로 남기며 이 PR에서 완료 처리하지 않습니다. 기존 C04 답글은 임의 depth 제한 없이 부모 ID로 연결하고 부모 인용/세로 연결 표시를 사용합니다. 작성자가 자신의 댓글을 삭제하면 본문 대신 삭제 표식을 남기고 자식 답글은 보존합니다. 이 UI는 세션 내 가상 예시이며 신고·차단·서버 연동을 추가하지 않습니다.
 
 인증·가입·비밀번호 재설정 화면은 서버/API나 실제 이메일 발송에 연결되어 있지 않습니다. 재설정 A24–A28은 가입 A19–A23의 검수 규칙과 UI 구조를 재사용하지만 별도 세션·발급기·증명 ID를 사용하며, 가입 상태를 읽거나 변경하지 않습니다. 각 로컬 challenge 안에서 OTP 발급기는 이전에 발행한 여섯 자리 값을 재사용하지 않습니다. 실제 발급·비밀번호 변경 권위는 서버에 두어야 하며, 5분 만료·60초 재요청·5회 잠금은 로컬 검토 흐름으로 보안 인증 구현이 아닙니다. 비밀번호 재설정 완료 화면은 실제 비밀번호나 로그인 상태를 바꾸지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

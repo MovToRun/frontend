@@ -31,6 +31,64 @@ enum WCommunityCommentActions {
     }
 }
 
+struct WCommunityRunner:Identifiable,Equatable {
+    let id:String
+    let name:String
+    let rank:String
+    let introduction:String
+    let region:String
+    let averageDistance:Double
+    let verified:Bool
+}
+
+enum WCommunityRunnerFixtures {
+    static let values:[WCommunityRunner]=[
+        WCommunityRunner(id:"fixture-member-ga-on",name:"가온러너",rank:"열정러너",introduction:"천천히, 멀리 함께 달려요",region:"모브시 강변",averageDistance:4.2,verified:true),
+        WCommunityRunner(id:"fixture-member-no-eul",name:"노을러너",rank:"새싹러너",introduction:"퇴근 후 가볍게 달려요",region:"모브시 중앙",averageDistance:3.1,verified:false),
+        WCommunityRunner(id:"fixture-member-early",name:"새벽러너",rank:"시작러너",introduction:"일찍 시작하는 하루",region:"모브시 북부",averageDistance:1.8,verified:false)
+    ]
+    static let baseFollowing:[(String,String)]=[
+        ("fixture-member-ga-on","fixture-member-no-eul"),
+        ("fixture-member-no-eul","fixture-member-ga-on"),
+        ("fixture-member-early","fixture-member-ga-on"),
+        ("fixture-member-ga-on","fixture-member-current")
+    ]
+}
+
+struct WLocalCommunityFollowProvider {
+    private(set) var viewerFollows:Set<String>=[]
+    mutating func toggle(_ target:String,viewer:String,knownUsers:Set<String>)->Bool {
+        guard target != viewer,knownUsers.contains(target) else{return false}
+        if !viewerFollows.insert(target).inserted{viewerFollows.remove(target)}
+        return true
+    }
+    func followingIDs(for user:String,viewer:String)->Set<String> {
+        var ids=Set(WCommunityRunnerFixtures.baseFollowing.filter{$0.0==user}.map{$0.1})
+        if user==viewer{ids.formUnion(viewerFollows)}
+        return ids
+    }
+    func followerIDs(for user:String,viewer:String)->Set<String> {
+        var ids=Set(WCommunityRunnerFixtures.baseFollowing.filter{$0.1==user}.map{$0.0})
+        if viewerFollows.contains(user){ids.insert(viewer)}
+        return ids
+    }
+}
+
+struct WCommunityProfileDraft:Equatable {
+    var nickname:String
+    var introduction:String
+    var region:String
+    var photo:Data?
+
+    init(nickname:String,introduction:String,region:String,photo:Data?) {
+        self.nickname=nickname;self.introduction=introduction;self.region=region;self.photo=photo
+    }
+    init(profile:WLocalProfile) {
+        self.init(nickname:profile.nickname,introduction:profile.introduction,region:profile.region,photo:WProfilePhotoPolicy.sanitizeStored(profile.photo))
+    }
+    func differs(from profile:WLocalProfile)->Bool {self != WCommunityProfileDraft(profile:profile)}
+}
+
 struct WCommunityPost:Identifiable {
     let id:String
     let authorMemberID:String
@@ -50,9 +108,9 @@ struct WCommunityPost:Identifiable {
 enum WCommunityFixtures {
     static let boards=["러닝 인증","러닝 질문","러닝 정보·팁","러닝화·장비","대회 정보·후기","러닝 메이트 모집","크루 모집","자유게시판","연애","익명게시판"]
     static let posts:[WCommunityPost]=[
-        WCommunityPost(id:"p1",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
+        WCommunityPost(id:"p1",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"열정러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
         WCommunityPost(id:"p2",authorMemberID:"fixture-member-no-eul",author:"노을러너",rank:"새싹러너",board:boards[1],title:"비 오는 날에는 어떻게 달리세요?",text:"가볍게 나갈지 실내에서 운동할지 고민이에요. 각자의 방법을 듣고 싶어요.",date:"10.05 08:16",likes:12,views:92,comments:[],hot:true),
-        WCommunityPost(id:"p3",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[6],title:"모브 강변 크루에서 함께 달려요",text:"주말 아침에 편하게 만나요. 소개와 가입 안내를 먼저 확인해 주세요.",date:"10.05 07:52",likes:8,views:64,comments:[],hot:true)
+        WCommunityPost(id:"p3",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"열정러너",board:boards[6],title:"모브 강변 크루에서 함께 달려요",text:"주말 아침에 편하게 만나요. 소개와 가입 안내를 먼저 확인해 주세요.",date:"10.05 07:52",likes:8,views:64,comments:[],hot:true)
     ]
 }
 
@@ -572,12 +630,18 @@ extension WireframeRoot {
             }
         } actions:{}
     }
-    var community:some View {
+    @ViewBuilder var community:some View {
+        if ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID { communityOwnProfile }
+        else { communityFeed }
+    }
+
+    var communityFeed:some View {
         VStack(spacing:0){
             HStack {
                 Button { go("C02") } label:{Image(systemName:"square.grid.2x2").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
                     .buttonStyle(.plain).accessibilityLabel("전체 게시판").accessibilityIdentifier("communityAllBoards")
                 Spacer(minLength:0)
+                Button{openCommunityOwnProfile()}label:{Image(systemName:"person.crop.circle").font(.system(size:20,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("내 프로필").accessibilityIdentifier("communityOpenOwnProfile")
             }
             .overlay { BrandMark(size:26).frame(width:44,height:44).accessibilityIdentifier("communityHeaderMark") }
             .padding(.horizontal,16).frame(height:64).background(W.paper)
@@ -603,18 +667,15 @@ extension WireframeRoot {
 
     func communityPostCard(_ post:WCommunityPost)->some View {
         VStack(alignment:.leading,spacing:0){
-            Button { openCommunityPost(post) } label:{
-                VStack(alignment:.leading,spacing:6){
-                    HStack(spacing:10){
-                        communityAvatar(post.author)
-                        VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)}
-                        Spacer()
-                        Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)
-                    }.frame(minHeight:44)
-                    Text(post.title).font(W.font(16,.semibold)).foregroundStyle(W.ink).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityPostTitle-\(post.id)")
-                    Text(post.text).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
-                }.padding(.vertical,20).contentShape(Rectangle()).frame(maxWidth:.infinity,alignment:.leading)
-            }.buttonStyle(.plain).accessibilityIdentifier(post.author=="나" ? "communityPostOpen-local":"communityPostOpen-\(post.id)")
+            Button { openCommunityCard(for:post.authorMemberID,origin:"C01") } label:{
+                HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)}
+                    .frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("communityPostAuthor-\(post.id)")
+            Button { openCommunityPost(post) } label:{VStack(alignment:.leading,spacing:6){
+                Text(post.title).font(W.font(16,.semibold)).foregroundStyle(W.ink).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityPostTitle-\(post.id)")
+                Text(post.text).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
+            }.padding(.bottom,8).contentShape(Rectangle()).frame(maxWidth:.infinity,alignment:.leading)}
+                .buttonStyle(.plain).accessibilityIdentifier(post.author=="나" ? "communityPostOpen-local":"communityPostOpen-\(post.id)")
             if let imageName=post.imageName{Button{openCommunityPost(post)}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:194).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).padding(.top,8).accessibilityLabel("게시글 예시 사진 열기").accessibilityIdentifier("communityFeedImageOpen-\(post.id)")}
             HStack(spacing:18){
                 Button { toggleCommunityLike(post.id) } label:{Label("\(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(11)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}
@@ -671,6 +732,143 @@ extension WireframeRoot {
         })
     }
 
+    func communityRunner(_ id:String)->WCommunityRunner {
+        if id==ui.communityViewerMemberID {
+            let rank=store.totalDistance==0 ? "시작러너":store.tier=="마스터" ? "러닝마스터":store.tier=="도전" ? "도전러너":store.tier=="열정" ? "열정러너":"새싹러너"
+            return WCommunityRunner(id:id,name:ui.profile.nickname,rank:rank,introduction:ui.profile.introduction,region:ui.profile.region,averageDistance:store.averageDistance,verified:false)
+        }
+        return WCommunityRunnerFixtures.values.first{$0.id==id} ?? WCommunityRunnerFixtures.values[0]
+    }
+
+    func communityRunnerPhoto(_ id:String)->Data? {
+        id==ui.communityViewerMemberID ? WProfilePhotoPolicy.sanitizeStored(ui.profile.photo):nil
+    }
+
+    @ViewBuilder func communityRunnerAvatar(_ runner:WCommunityRunner,photo:Data?,zoomable:Bool)->some View {
+        if zoomable {Button{ui.communitySelectedUserID=runner.id;go("C31")}label:{communityRunnerAvatarFace(runner,photo:photo)}.buttonStyle(.plain).accessibilityLabel("\(runner.name) 프로필 사진 확대").accessibilityIdentifier("communityCardPhotoOpen")}
+        else {communityRunnerAvatarFace(runner,photo:photo)}
+    }
+
+    func communityRunnerAvatarFace(_ runner:WCommunityRunner,photo:Data?)->some View {
+        Group {
+            if let photo,let image=UIImage(data:photo){Image(uiImage:image).resizable().scaledToFill()}
+            else{Text(String(runner.name.prefix(1))).font(W.font(18,.semibold)).foregroundStyle(W.ink)}
+        }.frame(width:48,height:48).background(W.paper).clipShape(Circle()).overlay(Circle().stroke(W.line))
+    }
+
+    func communityRunnerCard(_ runner:WCommunityRunner,photo:Data?,zoomable:Bool)->some View {
+        VStack(alignment:.leading,spacing:0){
+            HStack{Text("러닝 카드").font(W.font(11)).foregroundStyle(W.muted);Spacer();BrandMark(size:28)}.frame(height:28)
+            HStack(alignment:.center,spacing:12){
+                communityRunnerAvatar(runner,photo:photo,zoomable:zoomable)
+                VStack(alignment:.leading,spacing:3){
+                    HStack(spacing:5){Text(runner.rank).font(W.font(11,.medium)).foregroundStyle(W.muted);if runner.verified{Image(systemName:"checkmark.seal.fill").font(.system(size:13)).foregroundStyle(Color.wire(0x2580EB,0x63A5F2)).accessibilityLabel("계정 인증 완료")}}
+                    Text(runner.name).font(W.font(22,.semibold)).lineLimit(2).minimumScaleFactor(0.8).accessibilityIdentifier("communityCardName")
+                }
+            }.padding(.top,22).padding(.bottom,18)
+            Text(runner.introduction).font(W.font(14)).lineSpacing(5).fixedSize(horizontal:false,vertical:true).padding(.bottom,14)
+            Text(runner.region).font(W.font(12)).foregroundStyle(W.muted)
+            W.line.frame(height:1).padding(.top,16)
+            HStack(alignment:.firstTextBaseline){Text("최근 1달 평균 러닝당 거리").font(W.font(10)).foregroundStyle(W.muted);Spacer();(Text(MovNumber.display(runner.averageDistance)).font(W.font(21,.semibold))+Text(" km").font(W.font(12))).accessibilityIdentifier("communityCardAverage")}
+                .padding(.top,12)
+        }
+        .padding(20).frame(maxWidth:.infinity,minHeight:250,alignment:.topLeading)
+        .background(W.soft,in:RoundedRectangle(cornerRadius:20))
+        .accessibilityElement(children:.contain).accessibilityIdentifier("communityRunnerCard")
+    }
+
+    func openCommunityCard(for userID:String,origin:String){ui.communitySelectedUserID=userID;ui.communityCardOriginScreen=origin;go("C07")}
+    func openCommunityOwnProfile(){ui.communitySelectedUserID=ui.communityViewerMemberID;ui.communityProfileEditing=false;go("C08")}
+    func communityKnownUserIDs()->Set<String>{Set(WCommunityRunnerFixtures.values.map(\.id)+[ui.communityViewerMemberID])}
+    func communityFollowingIDs(for userID:String)->[String]{ui.communityFollowProvider.followingIDs(for:userID,viewer:ui.communityViewerMemberID).sorted()}
+    func communityFollowerIDs(for userID:String)->[String]{ui.communityFollowProvider.followerIDs(for:userID,viewer:ui.communityViewerMemberID).sorted()}
+    func communityProfilePosts(for userID:String)->[WCommunityPost]{ui.communityPosts.filter{$0.authorMemberID==userID && $0.board != "익명게시판"}}
+    func toggleCommunityFollow(_ userID:String){_ = ui.communityFollowProvider.toggle(userID,viewer:ui.communityViewerMemberID,knownUsers:communityKnownUserIDs())}
+
+    func communityProfileMetrics(_ userID:String,posts:[WCommunityPost])->some View {
+        let followers=communityFollowerIDs(for:userID),following=communityFollowingIDs(for:userID)
+        return HStack(spacing:0){
+            VStack(spacing:7){Text("게시글").font(W.font(12)).foregroundStyle(W.muted);Text("\(posts.count)").font(W.font(18,.semibold)).accessibilityIdentifier("communityProfilePostCount")}.frame(maxWidth:.infinity,minHeight:58)
+            W.line.frame(width:1,height:42)
+            Button{ui.communityConnectionsKind="followers";go("C30")}label:{VStack(spacing:7){Text("팔로워").font(W.font(12)).foregroundStyle(W.muted);Text("\(followers.count)").font(W.font(18,.semibold)).accessibilityIdentifier("communityProfileFollowerCount")}.frame(maxWidth:.infinity,minHeight:58)}.buttonStyle(.plain).accessibilityIdentifier("communityProfileFollowers")
+            W.line.frame(width:1,height:42)
+            Button{ui.communityConnectionsKind="following";go("C30")}label:{VStack(spacing:7){Text("팔로잉").font(W.font(12)).foregroundStyle(W.muted);Text("\(following.count)").font(W.font(18,.semibold)).accessibilityIdentifier("communityProfileFollowingCount")}.frame(maxWidth:.infinity,minHeight:58)}.buttonStyle(.plain).accessibilityIdentifier("communityProfileFollowing")
+        }.padding(.vertical,4)
+    }
+
+    var communityCardPreview:some View {
+        let runner=communityRunner(ui.communitySelectedUserID)
+        return ZStack(alignment:.bottom){
+            Group {switch ui.communityCardOriginScreen{case "C04":communityPostDetail;case "C30":communityConnections;case "C08":communityRunnerProfile;default:communityFeed}}
+                .accessibilityHidden(true).allowsHitTesting(false)
+            Color.black.opacity(0.42).ignoresSafeArea()
+            ScrollView{VStack(spacing:9){
+                communityRunnerCard(runner,photo:communityRunnerPhoto(runner.id),zoomable:true)
+                Button("프로필 방문"){ui.communityProfileEditing=false;go("C08")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCardVisit")
+                Button("닫기",action:back).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCardClose")
+            }.padding(16).frame(maxWidth:520).frame(maxWidth:.infinity).padding(.bottom,12)}
+                .frame(maxHeight:.infinity,alignment:.bottom)
+                .background(W.paper,in:UnevenRoundedRectangle(topLeadingRadius:24,topTrailingRadius:24))
+                .accessibilityElement(children:.contain).accessibilityIdentifier("communityCardSheet")
+        }
+        .accessibilityIdentifier("communityCardPreview")
+    }
+
+    var communityRunnerProfile:some View {
+        let runner=communityRunner(ui.communitySelectedUserID),posts=communityProfilePosts(for:ui.communitySelectedUserID)
+        let own=runner.id==ui.communityViewerMemberID
+        return VStack(spacing:0){
+            WHeader(title:runner.name,back:back)
+            ScrollView{VStack(alignment:.leading,spacing:18){
+                communityRunnerCard(runner,photo:communityRunnerPhoto(runner.id),zoomable:false)
+                communityProfileMetrics(runner.id,posts:posts)
+                if own {
+                    Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit")
+                } else {
+                    Button(ui.communityFollowProvider.viewerFollows.contains(runner.id) ? "팔로우 취소":"팔로우"){toggleCommunityFollow(runner.id)}.buttonStyle(WButtonStyle(kind:ui.communityFollowProvider.viewerFollows.contains(runner.id) ? 1:0)).accessibilityIdentifier("communityProfileFollow")
+                }
+                HStack{Text("작성한 글").font(W.font(17,.semibold));Spacer();Text("\(posts.count)").font(W.font(13)).foregroundStyle(W.muted)}
+                if posts.isEmpty{VStack(alignment:.leading,spacing:5){Text("아직 작성한 글이 없어요").font(W.font(15,.medium))}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,20).accessibilityIdentifier("communityProfilePostsEmpty")}
+                else{ForEach(posts){post in communityPostCard(post)}}
+            }.padding(.horizontal,22).padding(.top,16).padding(.bottom,24)}
+        }.background(W.paper).accessibilityIdentifier("communityRunnerProfile")
+    }
+
+    func beginCommunityProfileEdit(){ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo);ui.error="";ui.communityProfileEditing=true}
+    func communityProfileDraftHasChanges()->Bool {
+        WCommunityProfileDraft(nickname:ui.nickname,introduction:ui.introduction,region:ui.region,photo:ui.photo).differs(from:ui.profile)
+    }
+    func saveCommunityProfileEdit(){
+        guard WProfileValidation.isValid(nickname:ui.nickname,introduction:ui.introduction) else{ui.error="닉네임은 1–20자, 한 줄 소개는 60자 이내로 입력해 주세요.";return}
+        ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines);ui.profile.introduction=ui.introduction;ui.profile.region=ui.region;ui.profile.photo=ui.photo;ui.save();ui.communityProfileEditing=false;ui.error=""
+    }
+    var communityOwnProfile:some View {
+        VStack(spacing:0){rootHeader("내 정보")
+            if ui.communityProfileEditing {
+                ScrollView{VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22)}
+                HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12)
+            } else {
+                ScrollView{VStack(alignment:.leading,spacing:18){communityRunnerCard(communityRunner(ui.communityViewerMemberID),photo:communityRunnerPhoto(ui.communityViewerMemberID),zoomable:false);let posts=communityProfilePosts(for:ui.communityViewerMemberID);communityProfileMetrics(ui.communityViewerMemberID,posts:posts);Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit");Text("작성한 글").font(W.font(17,.semibold));if posts.isEmpty{Text("아직 작성한 글이 없어요").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityProfilePostsEmpty")}else{ForEach(posts){post in communityPostCard(post)}}}.padding(.horizontal,22).padding(.top,16).padding(.bottom,24)}
+            }
+        }.background(W.paper).accessibilityElement(children:.contain).accessibilityIdentifier("communityOwnProfile")
+    }
+
+    var communityConnections:some View {
+        let id=ui.communitySelectedUserID,rows=(ui.communityConnectionsKind=="followers" ? communityFollowerIDs(for:id):communityFollowingIDs(for:id)).map(communityRunner)
+        return WPage(title:ui.communityConnectionsKind=="followers" ? "팔로워":"팔로잉",back:back){
+            if rows.isEmpty{Text("아직 연결된 러너가 없어요").font(W.font(15,.medium)).padding(.vertical,32).accessibilityIdentifier("communityConnectionsEmpty")}
+            else{ForEach(rows){runner in HStack(spacing:10){Button{openCommunityCard(for:runner.id,origin:"C30")}label:{HStack(spacing:10){communityAvatar(runner.name);Text(runner.name).font(W.font(14,.medium));Spacer()}.frame(minHeight:52)}.buttonStyle(.plain).accessibilityIdentifier("communityConnection-\(runner.id)");if runner.id != ui.communityViewerMemberID{Button(ui.communityFollowProvider.viewerFollows.contains(runner.id) ? "팔로우 취소":"팔로우"){toggleCommunityFollow(runner.id)}.font(W.font(12,.medium)).accessibilityIdentifier("communityConnectionFollow-\(runner.id)")}}.overlay(alignment:.bottom){W.line.frame(height:1)}}}
+        }actions:{}
+    }
+
+    var communityPhotoViewer:some View {
+        let runner=communityRunner(ui.communitySelectedUserID),photo=communityRunnerPhoto(ui.communitySelectedUserID).flatMap(UIImage.init(data:))
+        return ZStack{Color.black.opacity(0.52).ignoresSafeArea();VStack(spacing:14){HStack{Spacer();Button("닫기",action:back).font(W.font(13,.medium)).frame(minWidth:52,minHeight:44).accessibilityIdentifier("communityPhotoClose")}.padding(.horizontal,12)
+            if let photo{Image(uiImage:photo).resizable().scaledToFit().frame(maxWidth:.infinity,maxHeight:430).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityLabel("\(runner.name) 프로필 사진").accessibilityIdentifier("communityPhotoImage")}
+            else{VStack(spacing:12){communityAvatar(runner.name).frame(width:70,height:70);Text("등록된 사진이 없어요").font(W.font(13)).foregroundStyle(W.muted)}.frame(maxWidth:.infinity,minHeight:180).accessibilityIdentifier("communityPhotoEmpty")}
+        }.padding(12).background(W.paper,in:RoundedRectangle(cornerRadius:18)).padding(18)}.accessibilityElement(children:.contain).accessibilityIdentifier("communityPhotoViewer")
+    }
+
     var communityBoards:some View {
         WPage(title:"게시판",back:back){
             Text("게시판 바로가기").font(W.font(15,.semibold))
@@ -685,7 +883,7 @@ extension WireframeRoot {
     @ViewBuilder var communityPostDetail:some View {
         if let post=currentCommunityPost(){
             WPage(title:post.board,back:back){
-                HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}
+                Button{openCommunityCard(for:post.authorMemberID,origin:"C04")}label:{HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityDetailAuthorCard")
                 Text(post.title).font(W.font(23,.semibold)).lineSpacing(5).padding(.top,5).accessibilityIdentifier("communityDetailTitle")
                 Text(post.text).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityDetailBody")
                 if let imageName=post.imageName{Button{go("C04-IMAGE")}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:210).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 확대").accessibilityIdentifier("communityDetailImageOpen")}

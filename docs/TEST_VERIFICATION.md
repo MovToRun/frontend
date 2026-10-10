@@ -40,3 +40,17 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - Coverage: three-level reply chain, parent quote/connector accessibility node, author-only local deletion marker, and preserved descendants after deletion. All data remains in WireState memory.
 - `git diff --check` passed. Full pixel/motion QA remains open.
 - PR #26 follow-up regression: deleting a comment clears display name and member ID, while nested replies stay attached; tombstone row/quote expose only the deletion marker. The post-author badge is based on stable member ID and is hidden for tombstones.
+
+### Community runner profile slice
+
+- Focused iPhone 17 Pro / iOS 26.3.1 run passed 3/3: `testCommunityFollowProviderUpdatesFollowerAndFollowingCounts`, `testCommunityProfilePreviewVisitPhotoFollowAndProfileContent`, and `testCommunityOwnProfileEditsLocallyAndRendersRunningCard`.
+- Coverage includes C07 card preview and its two actions, empty-photo zoom/close at C31, visiting C08, local follow/unfollow count updates, C30 navigation, and editing/saving the viewer's own running card.
+- Follow edges use a local fixture provider; the viewer's profile uses the existing local profile store. No backend sync is included.
+- C08's original report/block menu and screens C23/C42 remain follow-up work and are not marked complete. Pixel/motion QA is not included.
+
+### PR #27 local profile discard confirmation
+
+- iPhone 17 Pro / iOS 26.3.1: the focused snapshot unit test and three UI regressions passed (4/4 total).
+- The draft comparison covers nickname, introduction, region, and profile photo, including reverting changed values to the saved state.
+- UI coverage verifies cancel → continue editing preserves text, discard leaves the saved profile unchanged, unchanged drafts close without an alert, settings/tab navigation requests confirmation, and successful save closes without another prompt.
+- `go` and `back` both guard profile-edit exits; root tab switching preserves its pending destination until confirmation. `git diff --check` passed.

@@ -260,6 +260,11 @@ enum WRootTab: Int, CaseIterable {
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
     var communitySelectedPostID="p1"
+    var communitySelectedUserID="fixture-member-ga-on"
+    var communityCardOriginScreen="C01"
+    var communityProfileEditing=false
+    var communityConnectionsKind="followers"
+    var communityFollowProvider=WLocalCommunityFollowProvider()
     let communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
@@ -385,6 +390,8 @@ struct WireframeRoot:View {
     @State var selectedPointCategory:WPointCategory = .image
     @State var selectedPointKind:WPointKind = .all
     @State var showingPointPurchaseConfirmation=false
+    @State var showingCommunityProfileDiscardConfirmation=false
+    @State var communityProfileExitDestination:String?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -397,7 +404,7 @@ struct WireframeRoot:View {
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
-    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen)}
+    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var body:some View {
         ZStack {
             VStack(spacing:0){
@@ -450,9 +457,32 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
+            .alert("변경사항을 버릴까요?",isPresented:$showingCommunityProfileDiscardConfirmation){
+                Button("계속 편집",role:.cancel){communityProfileExitDestination=nil}
+                Button("버리기",role:.destructive){discardCommunityProfileDraftAndExit()}
+            }message:{Text("저장하지 않은 프로필 변경사항이 있어요.")}
     }
-    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
-    func back(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};performNavigation(route)}
+    func performNavigation(_ route:String){if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
+    func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};performBack()}
+    func performBack(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
+    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
+    func requestCommunityProfileExit(destination:String){
+        guard ui.communityProfileEditing else{completeCommunityProfileExit(destination);return}
+        guard communityProfileDraftHasChanges() else{ui.communityProfileEditing=false;ui.error="";completeCommunityProfileExit(destination);return}
+        communityProfileExitDestination=destination;showingCommunityProfileDiscardConfirmation=true
+    }
+    func discardCommunityProfileDraftAndExit(){
+        ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo);ui.error="";ui.communityProfileEditing=false
+        let destination=communityProfileExitDestination;communityProfileExitDestination=nil
+        if let destination{completeCommunityProfileExit(destination)}
+    }
+    func completeCommunityProfileExit(_ destination:String){
+        if destination=="stay"{return}
+        if destination=="back"{performBack();return}
+        if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
+        if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
+    }
     func prepare(_ id:String){
         if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
         if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
@@ -464,7 +494,7 @@ struct WireframeRoot:View {
         HStack(spacing:0){
             ForEach(WRootTab.allCases,id:\.rawValue){tab in
                 let index=tab.rawValue
-                Button{ui.path=[];go(tab.route)}label:{
+                Button{selectRootTab(tab.route)}label:{
                     VStack(spacing:3){
                         ZStack{
                             Color.clear.frame(height:3)
@@ -500,7 +530,7 @@ struct WireframeRoot:View {
         .allowsHitTesting(isRoot && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true)->some View {let unread = ui.hasUnreadNotifications;return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true)->some View {let unread = ui.hasUnreadNotifications;return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier("communityOwnProfileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -538,6 +568,10 @@ struct WireframeRoot:View {
         case "A19","A20","A21","A22","A23":verification
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
+        case "C07":communityCardPreview
+        case "C08":communityRunnerProfile
+        case "C30":communityConnections
+        case "C31":communityPhotoViewer
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards
