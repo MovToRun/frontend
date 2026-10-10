@@ -4,7 +4,7 @@
 
 - 참조 기준: Review52, 140개 화면/상태, 제공된 원본 revision `commit645150b7f3a99a56279213e174ebb723baf40f7a`.
 - 사용자가 제공한 `running-app-source.zip`의 `dist/`를 로컬 기준 원본으로 사용합니다. CSS/JS와 해당 상태 화면을 확인하고, 390×790 viewport로 렌더해 앱 캡처와 대조합니다. Mac Safari의 사용자가 열어 둔 탭 자체는 세션에서 읽을 수 없으므로 탭 화면을 직접 촬영한 것으로 표현하지 않습니다.
-- 현재 구현 경로는 기준점 커밋 `0201a5a1ae90ca1cdd356ec243077b75ecf47995`의 `WireframeCore.screenView` 분기와 대상 파일을 기준으로 기록했습니다. 전용 분기가 없는 상태는 `informationPage` 기본 분기로 표시했습니다. ID 문자열이 코드/테스트에 있더라도 전용 UI 구현으로 간주하지 않습니다.
+- 구현 상태는 실제 렌더된 내용, 동작 전이와 확인 근거를 기준으로 기록합니다. 전용 `screenView` 분기가 없다는 이유만으로 구현을 미완료 처리하지 않습니다.
 - 140개 모두 체크리스트에 남깁니다. `L06`처럼 개발 참고용인 상태, 오류·빈 화면, 예시·전이 전용 상태는 회귀 점검 대상으로 유지하되 일반 사용자 메뉴에 노출하지 않습니다.
 
 ### 시각 대조 coverage
@@ -19,18 +19,18 @@
 | 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
 | 대조 완료 | `H03` | 390×790 원본 화면과 SwiftUI distance/time 캡처 비교. 목표 카드/휠 배치와 행 치수 확인, 휠 테두리·선택 띠·보조 문구 색상 보정 |
 | 대조 완료 | `H08`, `H09` | Review52 ZIP dist 원본을 로컬 WKWebView로 390×790 CSS/2× 렌더하고, PR #14 병합 SHA의 SwiftUI를 새 임시 iPhone 17 Pro Max 한 대에서 순차 캡처. 고정 fixture에서 거리 소수점과 주간 날짜 설명 정합. [원본/앱 캡처와 렌더 설정](REVIEW52_H08_H09_CAPTURE.md) |
-| 남음 | 인증 `E01–E02`, `A02–A23` | `A01`, `A02`, `A03`, `A04` 로컬 구현 제외; A02/A03 캡처 대조는 남음 |
+| 일부 대조 완료 | 인증 `E01–E02`, `A02–A23` | E01/E02는 이번 PR에서 구현 및 focused 검증; PR20에서 A02/A03/A15 내용·구조 대조 완료. 이 세 화면의 종합 픽셀/모션 QA 및 나머지 상태는 남음 |
 | 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H10–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07–H09 제외 |
 | 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
 | 제외 | 커뮤니티 `C01–C43` | 사용자가 이번 작업에서 신규 커뮤니티 기능을 제외함 |
 
-전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
+전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. PR20에서 A02/A03/A15의 내용·구조 대조는 완료했지만, 이들을 포함한 종합 픽셀·모션 QA는 남아 있습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`의 신규 구현은 현재 범위에서 제외합니다. 라우트 표시는 전용 UI 구현과 미구현 상태를 구분하는 기준입니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`의 신규 구현은 현재 범위에서 제외합니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -47,6 +47,8 @@
 
 PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책)가 main에 병합했습니다. H07–H09는 같은 source/app 비교 viewport를 사용합니다. 로컬 시뮬레이션의 GPS·구매·인증·동기화 예시는 백엔드에 연결하지 않으며 서버 성공으로 오인시키지 않습니다. 기능 브랜치마다 화면을 대조하고 테스트·diff 검토 후 커밋·푸시·draft PR로 제출합니다. 다음 merge는 사용자 승인 후 진행합니다.
 
+이번 launch 작업은 E01 정적 OS 시작 화면(라이트/다크 적응형 배경과 원본 마크)과 E02 콜드 시작 스플래시/저장된 로그인 상태별 라우팅을 구현합니다. E02는 1.04초 후 이동하며 앱 재개 시 다시 재생하지 않습니다. iOS OS 소유 시작 화면은 표시 시간을 앱에서 제어하지 않습니다. 검증은 단일 iPhone 17 Pro 시뮬레이터의 focused 테스트로 한정하며 종합 픽셀/모션 QA로 간주하지 않습니다.
+
 반응형 기준은 320pt 안팎부터 큰 iPhone 폭, 세로 공간, safe area, 키보드, 긴 문구/줄바꿈, Dynamic Type을 포함합니다. 고정 좌표로 전체 화면을 늘리지 않고 디자인 계층을 유지합니다. 러닝 지도/접이식 패널, 커뮤니티 피드/하단바/FAB, 공유 이미지 편집기는 전용 적응형 점검을 둡니다.
 
 
@@ -54,11 +56,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `E01` | 네이티브 시작 | `BrandMark` — WireframeCore.swift |
-| [ ] | `E02` | 앱 스플래시 | `WSplash` — WireframeCore.swift |
+| [x] | `E01` | 네이티브 시작 | `UILaunchScreen` 정적 adaptive asset; iOS가 표시 시점을 관리 |
+| [x] | `E02` | 앱 스플래시 | `WSplash` — 원본 마크/워드마크/태그라인, 로그인 저장 상태에 따른 라우팅; focused cold-start 테스트 |
 | [ ] | `A01` | 로그인 | `authForm` — WireframeAuth.swift |
-| [x] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift; 각 내용 확인 후 해당 항목 체크, 일부 동의 차단, 전체 동의 순차 모션/취소 복구 |
-| [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 닉네임 필수/길이 검증, 검토모드 전용 fixture 충돌 점검, 선택 체중, 원본 완료 문구 |
+| [x] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift; 각 내용 확인 후 해당 항목 체크, 일부 동의 차단, 전체 동의 순차 모션/취소 복구; PR20 내용·구조 비교 완료, 종합 픽셀/모션 QA 남음 |
+| [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 닉네임 필수/길이 검증, 검토모드 전용 fixture 충돌 점검, 선택 체중, 원본 완료 문구; PR20 내용·구조 비교 완료, 종합 픽셀/모션 QA 남음 |
 | [x] | `A04` | 로그인 실패 | `loginFailure` — WireframeAuth.swift; 취소·연결 끊김 문구 및 A01 재시도 로컬 흐름 |
 | [x] | `A06` | 약관·개인정보 검토 | `consentReview` — 주제별 내용 확인 후 해당 필수 동의만 반영 |
 | [x] | `A07` | 이메일 회원가입 | `authForm` — 8~20자 ASCII 영문·숫자 필수, 기호 선택 |
@@ -67,7 +69,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `A12` | 새 비밀번호 예시 | A24 코드 증명 필수, 공통 영문·숫자 정책과 확인값 일치, 실제 비밀번호 미변경 — WireframeAuth.swift |
 | [x] | `A13` | 재설정 완료 화면 | 로컬 완료 안내, 계정 로그인 상태/비밀번호 변경 없음 — WireframeInfo.swift |
 | [ ] | `A14` | 소셜 인증 결과 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `A15` | 회원가입 완료 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `A15` | 회원가입 완료 예시 | `informationPage` — PR20 내용·구조 비교 완료, 종합 픽셀/모션 QA 남음 |
 | [ ] | `A16` | 이메일 로그인 연결 | `authForm` — WireframeAuth.swift |
 | [ ] | `A17` | 이메일 비밀번호 관리 | `authForm` — WireframeAuth.swift |
 | [ ] | `A18` | 이메일 설정 완료 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |

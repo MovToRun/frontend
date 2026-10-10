@@ -191,7 +191,7 @@ struct WMap:View {
 struct WLocalProfile:Codable {
     var nickname="새벽러너";var introduction="조금씩, 멀리 가는 중";var region="모브시 중부권";var weight=""
     var photo:Data? = nil
-    var providers=["카카오"];var logged=true;var notificationRead:[Int]=[]
+    var providers=["카카오"];var logged=false;var notificationRead:[Int]=[]
 }
 enum WProfileValidation {
     static func isValid(nickname:String,introduction:String)->Bool {
@@ -362,7 +362,7 @@ struct WireframeRoot:View {
                 model.persist()
             }
         }
-        let state=WireState();if resetFixture{state.profile=WLocalProfile();state.save()}
+        let state=WireState();if resetFixture{state.profile=WLocalProfile();state.profile.logged=true;state.save()}
         _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
     }
     @State var ui=WireState()
@@ -429,7 +429,7 @@ struct WireframeRoot:View {
 
                     }
                     if ui.screen=="S05"{var record=current;record.kilometers=0;record.seconds=312;record.segments=[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")];store.records=[record];ui.selected=record.id}
-                }else{try? await Task.sleep(for:.milliseconds(1040));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
+                }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
     }
     func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
@@ -649,9 +649,9 @@ struct WSplash:View {
         let word=reduced ? 1:WOriginalMotion.interpolate(WOriginalMotion.settle(min(1,t/0.88)),[(0,0),(0.4,0),(1,1)])
         let tagline=reduced ? 1:WOriginalMotion.interpolate(WOriginalMotion.settle(min(1,t/1.04)),[(0,0),(0.5,0),(1,1)])
         VStack(spacing:0){BrandMark(size:84).scaleEffect(0.96+0.04*symbol).opacity(0.75+0.25*symbol)
-            Text("모브").font(.custom("Cafe24Ssurround",size:28)).kerning(-1.4).frame(height:36.4).padding(.top,22).opacity(word).offset(y:7*(1-word))
-            Text("오늘의 달리기를 나의 기록으로").font(W.font(14)).kerning(-0.21).foregroundStyle(W.muted).frame(height:21).padding(.top,9).opacity(tagline).offset(y:6*(1-tagline))
-        }.offset(y:-26)
+            Text("모브").font(.custom("Cafe24Ssurround",size:28)).kerning(-1.4).frame(height:36.4).padding(.top,22).opacity(word).offset(y:7*(1-word)).accessibilityIdentifier("splashWordmark")
+            Text("오늘의 달리기를 나의 기록으로").font(W.font(14)).kerning(-0.21).foregroundStyle(W.muted).frame(height:21).padding(.top,9).opacity(tagline).offset(y:6*(1-tagline)).accessibilityIdentifier("splashTagline")
+        }.offset(y:-26).accessibilityElement(children:.contain).accessibilityIdentifier("screen-E02")
     }.task{began=Date();settled=false;do{try await Task.sleep(for:.milliseconds(1040));settled=true}catch{}}}
 }
 

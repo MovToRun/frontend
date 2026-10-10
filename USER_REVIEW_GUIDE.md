@@ -184,8 +184,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun simctl launch 405
 
 | ID | 원본 상태 | 현재 확인 경로·한계 |
 |---|---|---|
-| E01 | 네이티브 시작 | OS 시작 화면 / 개발 진입은 중앙 심벌 뷰. OS 콜드런치 동일성 미인증. |
-| E02 | 앱 스플래시 | 일반 실행 소개. 개발 진입 시 정적 검토 상태. |
+| E01 | 네이티브 시작 | `UILaunchScreen` 정적 화면. 원본 마크와 라이트/다크 배경 asset을 사용하며 iOS가 표시 시점을 관리합니다. iPhone 17 Pro simulator의 launch config/unit 검증 완료. |
+| E02 | 앱 스플래시 | 실제 콜드 시작에서 원본 마크·모브 워드마크·태그라인을 약 1.04초 표시한 뒤 저장된 로그인 상태에 따라 홈/로그인으로 이동합니다. Reduce Motion·작은 viewport·양 테마 focused UI 검증 및 resume 시 재생 안 함을 확인합니다. 종합 픽셀/모션 QA는 남아 있습니다. |
 | A01 | 로그인 | 설정 → 로그아웃 또는 fixture 로그인 진입. |
 | A02 | 필수 동의 | 가입 → OTP 성공 / 미연결 소셜 성공. |
 | A03 | 첫 프로필 | 필수 동의 완료. 별도 계정 분리·중단 복구 미완료. |
