@@ -78,6 +78,18 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
     }
 
+    func testDefaultSessionUsesConfiguredTimeouts() throws {
+        let configuration = try APIClientConfiguration(
+            environment: .development,
+            baseURLString: "https://api-dev.example.invalid/v1/",
+            requestTimeout: 4,
+            resourceTimeout: 9
+        )
+        let sessionConfiguration = APIClient.defaultSessionConfiguration(for: configuration)
+        XCTAssertEqual(sessionConfiguration.timeoutIntervalForRequest, 4)
+        XCTAssertEqual(sessionConfiguration.timeoutIntervalForResource, 9)
+    }
+
     func testNormalizesBaseURLWithoutTrailingSlash() throws {
         let configuration = try APIClientConfiguration(environment: .production, baseURLString: "https://api.example.invalid/v2", requestTimeout: 5, resourceTimeout: 10)
         XCTAssertEqual(configuration.baseURL.absoluteString, "https://api.example.invalid/v2/")
@@ -94,6 +106,11 @@ final class APIClientTests: XCTestCase {
         let client = try makeClient()
         XCTAssertThrowsError(try client.makeRequest(path: "/outside")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
         XCTAssertThrowsError(try client.makeRequest(path: "../outside")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "%2e%2e/admin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "%2E%2E/admin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "%2fadmin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "users?admin=true")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "users//admin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
     }
 
     func testReturnsSuccessBodyFromMockedNetwork() async throws {

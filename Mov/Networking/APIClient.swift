@@ -85,19 +85,29 @@ final class APIClient: @unchecked Sendable {
         if let session {
             self.session = session
         } else {
-            let sessionConfiguration = URLSessionConfiguration.ephemeral
-            sessionConfiguration.timeoutIntervalForRequest = configuration.requestTimeout
-            sessionConfiguration.timeoutIntervalForResource = configuration.resourceTimeout
-            self.session = URLSession(configuration: sessionConfiguration)
+            self.session = URLSession(configuration: Self.defaultSessionConfiguration(for: configuration))
         }
     }
 
+    static func defaultSessionConfiguration(for configuration: APIClientConfiguration) -> URLSessionConfiguration {
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.timeoutIntervalForRequest = configuration.requestTimeout
+        sessionConfiguration.timeoutIntervalForResource = configuration.resourceTimeout
+        return sessionConfiguration
+    }
+
     func makeRequest(path: String, method: String = "GET", body: Data? = nil, headers: [String: String] = [:]) throws -> URLRequest {
+        let allowedPathCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        let pathSegments = path.split(separator: "/", omittingEmptySubsequences: false)
         guard !path.isEmpty, !path.hasPrefix("/"),
-              !path.split(separator: "/").contains(".."),
+              pathSegments.allSatisfy({ segment in
+                  !segment.isEmpty && segment != "." && segment != ".."
+                      && segment.unicodeScalars.allSatisfy(allowedPathCharacters.contains)
+              }),
               let url = URL(string: path, relativeTo: configuration.baseURL)?.absoluteURL,
               url.host == configuration.baseURL.host,
-              url.scheme == "https" else {
+              url.scheme == "https",
+              url.path.hasPrefix(configuration.baseURL.path) else {
             throw APIClientError.invalidPath
         }
 
