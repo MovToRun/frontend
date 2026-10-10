@@ -519,6 +519,59 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
+    func testCommunityFeedOpensPostAndAddsLocalComment() {
+        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["지금 많이 보는 글"].exists)
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"오늘은 강변을 따라 5 km")
+        let like=app.buttons["communityDetailLike"]
+        XCTAssertTrue(like.waitForExistence(timeout:5))
+        like.tap()
+        XCTAssertTrue(like.label.contains("25"),like.label)
+        let comment=app.textFields["communityCommentInput"]
+        XCTAssertTrue(comment.waitForExistence(timeout:5))
+        comment.tap();comment.typeText("오늘도 함께 달려요!")
+        tap("communityCommentSubmit")
+        XCTAssertTrue(app.staticTexts["오늘도 함께 달려요!"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["댓글 2"].exists)
+    }
+
+    func testCommunityBoardRouteAndLocalPostPreviewPublish() {
+        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:10))
+        tap("communityAllBoards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communityBrowseAllBoards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5))
+        tap("communityBoard-러닝 질문")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communityBoardShortcut-러닝 질문")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["비 오는 날에는 어떻게 달리세요?"].exists)
+        tap("communityBoardCompose")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        let title=app.textFields["communityComposeTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout:5))
+        title.tap();title.typeText("주말 러닝 메모")
+        let body=app.textViews["communityComposeBody"]
+        XCTAssertTrue(body.waitForExistence(timeout:5))
+        body.tap();body.typeText("강변 코스를 천천히 달렸어요.")
+        tap("communityPreviewButton")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"주말 러닝 메모")
+        XCTAssertEqual(app.staticTexts["communityPreviewBoard"].label,"러닝 질문")
+        tap("communityPublishButton")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","주말 러닝 메모")).firstMatch.waitForExistence(timeout:5))
+    }
+
     func testPaceChartReflowsOnCompactDarkViewport() {
         app.launchArguments=["-wire-screen","L05","-wire-fixture","-wire-reset","-wire-test-store-suite","mov.records.splits.compact.\(UUID().uuidString)","-wire-compact-review","-wire-reduced","-appearance","dark"]
         app.launch()

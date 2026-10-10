@@ -258,6 +258,15 @@ enum WRootTab: Int, CaseIterable {
     var calendarMonth=Date();var calendarDay:Date?
     var path:[String]=[]
     var selected:UUID?
+    var communityPosts=WCommunityFixtures.posts
+    var communitySelectedPostID="p1"
+    var communityBoard="러닝 인증"
+    var communityDraftBoard="러닝 인증"
+    var communityDraftTitle=""
+    var communityDraftBody=""
+    var communityComment=""
+    var communityError=""
+    var communityLikedPosts:Set<String>=[]
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -523,6 +532,12 @@ struct WireframeRoot:View {
         case "A19","A20","A21","A22","A23":verification
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
+        case "C02":communityBoards
+        case "C03":communityBoardPosts
+        case "C27":communityAllBoards
+        case "C04":communityPostDetail
+        case "C05":communityCompose
+        case "C09":communityPreview
         default:informationPage
         }
     }
