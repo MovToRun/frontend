@@ -331,8 +331,20 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewBoardID="dawn-board-0"
     var communityCrewJoinMemo=""
     var communityCrewJoinError=""
-    var communityCrewApplications:[WCommunityCrewApplication]=[]
+    var communityCrewApplications=WCommunityCrewFixtures.applications
     var communityJoinedCrewIDs:Set<String>=["dawn"]
+    var communityCrewOverrides:[String:WCommunityCrew]=[:]
+    var communityLocalCrews:[WCommunityCrew]=[]
+    var communityCrewDraftID:String?
+    var communityCrewDraftName=""
+    var communityCrewDraftIntroduction=""
+    var communityCrewDraftRegion="모브시 중앙"
+    var communityCrewDraftRank=0
+    var communityCrewDraftPhoto:Data?
+    var communityCrewDraftError=""
+    var communityCrewNameCheck=""
+    var communityCrewReviewApplicationID="fixture-request-dawn-early"
+    var communityCrewReviewError=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -532,6 +544,8 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
             .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
+            .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
+            .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
             .alert("변경사항을 버릴까요?",isPresented:$showingCommunityProfileDiscardConfirmation){
                 Button("계속 편집",role:.cancel){communityProfileExitDestination=nil}
                 Button("버리기",role:.destructive){discardCommunityProfileDraftAndExit()}
@@ -656,6 +670,9 @@ struct WireframeRoot:View {
         case "C17":communityCrewJoinForm
         case "C18":communityCrewApplicationStatus
         case "C19":communityCrewBoard
+        case "C20":communityCrewEditor
+        case "C21":communityCrewManagement
+        case "C22":communityCrewApplicationReview
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections

@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 struct WCommunityComment:Identifiable {
     let id:String
@@ -62,11 +63,13 @@ struct WCommunityCrew:Identifiable,Equatable {
     let region:String
     let guidance:String
     let ownerMemberID:String
-    let memberIDs:[String]
+    var memberIDs:[String]
     let minimumRank:Int
     let tags:[String]
     let boards:[WCommunityCrewBoard]
     let posts:[WCommunityCrewPost]
+    var photoData:Data?=nil
+    var operatorMemberIDs:Set<String>=[]
 }
 
 enum WCommunityCrewApplicationStatus:String,Codable {case pending,approved,rejected,cancelled}
@@ -78,6 +81,9 @@ struct WCommunityCrewApplication:Identifiable,Equatable {
     let memo:String
     var status:WCommunityCrewApplicationStatus
 }
+
+enum WCommunityCrewSaveResult:Equatable {case ready,invalidName,duplicateName,invalidIntroduction,invalidRegion,invalidRank,unauthorized}
+enum WCommunityCrewReviewResult:Equatable {case approved,rejected,missingApplication,notPending,unauthorized,full,rankRequired}
 
 enum WCommunityCrewFixtures {
     static func boards(for id:String)->[WCommunityCrewBoard] {
@@ -95,16 +101,56 @@ enum WCommunityCrewFixtures {
             WCommunityCrew(id:"full",name:"모브 20 러너스",introduction:"함께 달리는 크루예요. 현재 예시 정원이 찼어요.",region:"모브시 북부",guidance:"서로를 배려하며 달려요.",ownerMemberID:"fixture-member-no-eul",memberIDs:(0..<20).map{"fixture-full-\($0)"},minimumRank:3,tags:["입문 환영"],boards:fullBoards,posts:[])
         ]
     }()
+    static let applications=[
+        WCommunityCrewApplication(id:"fixture-request-dawn-early",crewID:"dawn",applicantMemberID:"fixture-member-early",memo:"주 1회 함께 달리고 싶어요.",status:.pending),
+        WCommunityCrewApplication(id:"fixture-request-dawn-ga-on",crewID:"dawn",applicantMemberID:"fixture-member-ga-on",memo:"서로의 속도를 존중하며 함께 달리고 싶어요.",status:.pending)
+    ]
 }
 
 enum WCommunityCrewApplicationResult:Equatable {case ready,missingCrew,alreadyMember,alreadyPending,full,rankRequired,invalidMemo}
 
 enum WCommunityCrewPolicy {
+    static let memberCapacity=20
+    static let boardCapacity=5
+    static let nameLimit=30
+    static let introductionLimit=300
+    static let regions=["모브시 강변","모브시 중앙","모브시 북부"]
+    static let ranks=["제한 없음","시작러너","새싹러너","열정러너","도전러너","러닝마스터"]
+    static func canManage(_ crew:WCommunityCrew?,viewerID:String)->Bool {
+        guard let crew else{return false}
+        return crew.ownerMemberID==viewerID || crew.operatorMemberIDs.contains(viewerID)
+    }
+    static func canonicalName(_ value:String)->String {
+        value.precomposedStringWithCanonicalMapping.trimmingCharacters(in:.whitespacesAndNewlines).split(whereSeparator:\.isWhitespace).joined(separator:" ").lowercased()
+    }
+    static func saveResult(name:String,introduction:String,region:String,minimumRank:Int,existing:[WCommunityCrew],editingID:String?,viewerID:String)->WCommunityCrewSaveResult {
+        let value=name.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.isEmpty,value.count<=nameLimit else{return .invalidName}
+        if existing.contains(where:{$0.id != editingID && canonicalName($0.name)==canonicalName(value)}){return .duplicateName}
+        let intro=introduction.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !intro.isEmpty,intro.count<=introductionLimit else{return .invalidIntroduction}
+        guard regions.contains(region) else{return .invalidRegion}
+        guard ranks.indices.contains(minimumRank) else{return .invalidRank}
+        if let editingID {
+            guard canManage(existing.first{$0.id==editingID},viewerID:viewerID) else{return .unauthorized}
+        }
+        return .ready
+    }
+    static func reviewResult(application:WCommunityCrewApplication?,crew:WCommunityCrew?,applicantRank:Int,viewerID:String,approve:Bool)->WCommunityCrewReviewResult {
+        guard let application,let crew,application.crewID==crew.id else{return .missingApplication}
+        guard canManage(crew,viewerID:viewerID) else{return .unauthorized}
+        guard application.status == .pending else{return .notPending}
+        if approve {
+            guard crew.memberIDs.count<memberCapacity else{return .full}
+            guard applicantRank>=crew.minimumRank else{return .rankRequired}
+        }
+        return approve ? .approved:.rejected
+    }
     static func applicationResult(crew:WCommunityCrew?,viewerID:String,rank:Int,memo:String,current:WCommunityCrewApplication?)->WCommunityCrewApplicationResult {
         guard let crew else{return .missingCrew}
         guard !crew.memberIDs.contains(viewerID) else{return .alreadyMember}
         guard current?.status != .pending else{return .alreadyPending}
-        guard crew.memberIDs.count<20 else{return .full}
+        guard crew.memberIDs.count<memberCapacity else{return .full}
         guard rank>=crew.minimumRank else{return .rankRequired}
         guard memo.count<=300 else{return .invalidMemo}
         return .ready
@@ -877,7 +923,13 @@ extension WireframeRoot {
     }
 
     func communityCrew(_ id:String? = nil)->WCommunityCrew? {
-        WCommunityCrewFixtures.values.first{$0.id==(id ?? ui.communitySelectedCrewID)}
+        let key=id ?? ui.communitySelectedCrewID
+        return ui.communityCrewOverrides[key] ?? ui.communityLocalCrews.first{$0.id==key} ?? WCommunityCrewFixtures.values.first{$0.id==key}
+    }
+    func communityAllCrews()->[WCommunityCrew] {
+        var crews=WCommunityCrewFixtures.values.map{ui.communityCrewOverrides[$0.id] ?? $0}
+        crews.append(contentsOf:ui.communityLocalCrews.map{ui.communityCrewOverrides[$0.id] ?? $0})
+        return crews
     }
     func communityCrewIsMember(_ crew:WCommunityCrew)->Bool {
         WCommunityCrewPolicy.canReadBoard(crew:crew,memberIDs:ui.communityJoinedCrewIDs,viewerID:ui.communityViewerMemberID)
@@ -890,6 +942,73 @@ extension WireframeRoot {
         case "도전러너":4
         case "러닝마스터":5
         default:0
+        }
+    }
+    func communityCrewRankLevel(for memberID:String)->Int {
+        switch communityRunner(memberID).rank {
+        case "시작러너":1
+        case "새싹러너":2
+        case "열정러너":3
+        case "도전러너":4
+        case "러닝마스터":5
+        default:0
+        }
+    }
+    func communityCrewCanManage(_ crew:WCommunityCrew)->Bool {
+        WCommunityCrewPolicy.canManage(crew,viewerID:ui.communityViewerMemberID)
+    }
+    func startCommunityCrewCreation(){
+        ui.communityCrewDraftID=nil;ui.communityCrewDraftName="";ui.communityCrewDraftIntroduction="";ui.communityCrewDraftRegion="모브시 중앙";ui.communityCrewDraftRank=0;ui.communityCrewDraftPhoto=nil;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";go("C20")
+    }
+    func startCommunityCrewEditing(_ crew:WCommunityCrew){
+        guard communityCrewCanManage(crew) else{return}
+        ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftID=crew.id;ui.communityCrewDraftName=crew.name;ui.communityCrewDraftIntroduction=crew.introduction;ui.communityCrewDraftRegion=crew.region;ui.communityCrewDraftRank=crew.minimumRank;ui.communityCrewDraftPhoto=crew.photoData;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";performNavigation("C20")
+    }
+    func checkCommunityCrewDraftName(){
+        let candidate=ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !candidate.isEmpty,candidate.count<=WCommunityCrewPolicy.nameLimit else{ui.communityCrewNameCheck="크루 이름을 30자 안으로 입력해 주세요.";return}
+        let duplicate=communityAllCrews().contains{$0.id != ui.communityCrewDraftID && WCommunityCrewPolicy.canonicalName($0.name)==WCommunityCrewPolicy.canonicalName(candidate)}
+        ui.communityCrewNameCheck=duplicate ? "이미 사용 중인 크루 이름이에요.":"사용할 수 있는 크루 이름이에요."
+    }
+    func saveCommunityCrewDraft(){
+        let crews=communityAllCrews()
+        let result=WCommunityCrewPolicy.saveResult(name:ui.communityCrewDraftName,introduction:ui.communityCrewDraftIntroduction,region:ui.communityCrewDraftRegion,minimumRank:ui.communityCrewDraftRank,existing:crews,editingID:ui.communityCrewDraftID,viewerID:ui.communityViewerMemberID)
+        switch result {
+        case .invalidName:ui.communityCrewDraftError="크루 이름을 30자 안으로 입력해 주세요."
+        case .duplicateName:ui.communityCrewDraftError="이미 사용 중인 크루 이름이에요."
+        case .invalidIntroduction:ui.communityCrewDraftError="소개를 입력해 주세요. 300자 이내로 작성해 주세요."
+        case .invalidRegion:ui.communityCrewDraftError="주 활동 지역을 선택해 주세요."
+        case .invalidRank:ui.communityCrewDraftError="가입 가능한 러닝 등급을 선택해 주세요."
+        case .unauthorized:ui.communityCrewDraftError="크루장·운영자만 크루를 수정할 수 있어요."
+        case .ready:
+            let crew:WCommunityCrew
+            if let id=ui.communityCrewDraftID,let existing=communityCrew(id){
+                crew=WCommunityCrew(id:existing.id,name:ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines),introduction:ui.communityCrewDraftIntroduction.trimmingCharacters(in:.whitespacesAndNewlines),region:ui.communityCrewDraftRegion,guidance:existing.guidance,ownerMemberID:existing.ownerMemberID,memberIDs:existing.memberIDs,minimumRank:ui.communityCrewDraftRank,tags:existing.tags,boards:existing.boards,posts:existing.posts,photoData:ui.communityCrewDraftPhoto,operatorMemberIDs:existing.operatorMemberIDs)
+                ui.communityCrewOverrides[id]=crew
+            }else{
+                let id="local-crew-\(UUID().uuidString)"
+                let boards=WCommunityCrewFixtures.boards(for:id)
+                crew=WCommunityCrew(id:id,name:ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines),introduction:ui.communityCrewDraftIntroduction.trimmingCharacters(in:.whitespacesAndNewlines),region:ui.communityCrewDraftRegion,guidance:"",ownerMemberID:ui.communityViewerMemberID,memberIDs:[ui.communityViewerMemberID],minimumRank:ui.communityCrewDraftRank,tags:["내 주변"],boards:boards,posts:[],photoData:ui.communityCrewDraftPhoto)
+                ui.communityLocalCrews.insert(crew,at:0);ui.communityJoinedCrewIDs.insert(id)
+            }
+            ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftError="";ui.communityCrewDraftID=nil;go("C21")
+        }
+    }
+    func reviewCommunityCrewApplication(approve:Bool){
+        guard let index=ui.communityCrewApplications.firstIndex(where:{$0.id==ui.communityCrewReviewApplicationID}),let crew=communityCrew(ui.communityCrewApplications[index].crewID) else{ui.communityCrewReviewError="신청을 찾을 수 없어요.";return}
+        let result=WCommunityCrewPolicy.reviewResult(application:ui.communityCrewApplications[index],crew:crew,applicantRank:communityCrewRankLevel(for:ui.communityCrewApplications[index].applicantMemberID),viewerID:ui.communityViewerMemberID,approve:approve)
+        switch result {
+        case .missingApplication:ui.communityCrewReviewError="신청을 찾을 수 없어요."
+        case .notPending:ui.communityCrewReviewError="이미 처리한 신청이에요."
+        case .unauthorized:ui.communityCrewReviewError="크루장·운영자만 신청을 검토할 수 있어요."
+        case .full:ui.communityCrewReviewError="정원이 모두 찼어요."
+        case .rankRequired:ui.communityCrewReviewError="신청자의 러닝 등급이 가입 조건에 맞지 않아요."
+        case .approved,.rejected:
+            ui.communityCrewApplications[index].status=approve ? .approved:.rejected
+            if approve && !crew.memberIDs.contains(ui.communityCrewApplications[index].applicantMemberID){
+                var updated=crew;updated.memberIDs.append(ui.communityCrewApplications[index].applicantMemberID);ui.communityCrewOverrides[crew.id]=updated
+            }
+            ui.communityCrewReviewError="";go("C21")
         }
     }
     func communityCrewApplication(for crewID:String? = nil)->WCommunityCrewApplication? {
@@ -922,6 +1041,7 @@ extension WireframeRoot {
     var communityCrewOverviewContent:some View {
         VStack(alignment:.leading,spacing:18){communityCrewTabs
             if ui.communityCrewTab=="my"{communityCrewMine}else{communityCrewFind}
+            if ui.communityCrewTab=="my"{Button("새 크루 만들기",action:startCommunityCrewCreation).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewCreate")}
             WNotice(text:"크루와 신청 상태는 화면 확인용 로컬 예시예요. 실제 가입 신청은 전송되지 않아요.")
         }
     }
@@ -935,7 +1055,7 @@ extension WireframeRoot {
         Button{ui.communityCrewTab=key}label:{Text(title).font(W.font(14,.semibold)).foregroundStyle(ui.communityCrewTab==key ? W.ink:W.muted).frame(maxWidth:.infinity,minHeight:46).overlay(alignment:.bottom){if ui.communityCrewTab==key{W.lime.frame(height:3)}}}.buttonStyle(.plain).accessibilityIdentifier("communityCrewTab-\(key)")
     }
     var communityCrewMine:some View {
-        let mine=WCommunityCrewFixtures.values.filter{communityCrewIsMember($0)}
+        let mine=communityAllCrews().filter{communityCrewIsMember($0)}
         let pending=ui.communityCrewApplications.filter{$0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}.count
         return VStack(alignment:.leading,spacing:12){
             HStack{Text("나의 크루").font(W.font(18,.semibold));Text("\(mine.count)").font(W.font(12,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewCount");Spacer();Button{openCommunityCrewApplicationList()}label:{Text("신청중 \(pending)").font(W.font(12,.medium)).foregroundStyle(W.ink).padding(.horizontal,12).frame(height:34).background(W.soft,in:Capsule())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewPending")}
@@ -948,7 +1068,7 @@ extension WireframeRoot {
         ui.communitySelectedCrewID=application.crewID;go("C18")
     }
     var communityCrewFind:some View {
-        let available=WCommunityCrewFixtures.values.filter{!communityCrewIsMember($0) && ($0.tags.contains(ui.communityCrewFilter) || ui.communityCrewFilter=="모두")}
+        let available=communityAllCrews().filter{!communityCrewIsMember($0) && ($0.tags.contains(ui.communityCrewFilter) || ui.communityCrewFilter=="모두")}
         return VStack(alignment:.leading,spacing:12){
             Text("함께 달릴 크루 찾기").font(W.font(18,.semibold))
             communityCrewFilters
@@ -961,16 +1081,17 @@ extension WireframeRoot {
     }
 
     func communityCrewRow(_ crew:WCommunityCrew,joined:Bool)->some View {
-        Button{ui.communitySelectedCrewID=crew.id;ui.communityCrewJoinError="";go("C16")}label:{HStack(spacing:13){ZStack{RoundedRectangle(cornerRadius:15).fill(W.soft).frame(width:54,height:54);Image(systemName:"figure.run").font(.system(size:21,weight:.medium)).foregroundStyle(W.ink)};VStack(alignment:.leading,spacing:5){Text(crew.name).font(W.font(15,.semibold)).foregroundStyle(W.ink);Text("\(crew.region) · 멤버 \(crew.memberIDs.count)/20명").font(W.font(11)).foregroundStyle(W.muted);Text(crew.introduction).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)};Spacer(minLength:6);if joined{Text("가입 중").font(W.font(10,.medium)).foregroundStyle(W.muted)}else{Image(systemName:"chevron.right").font(.system(size:12,weight:.semibold)).foregroundStyle(W.muted)}}.padding(.vertical,12).contentShape(Rectangle())}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}.accessibilityIdentifier("communityCrewOpen-\(crew.id)")
+        Button{ui.communitySelectedCrewID=crew.id;ui.communityCrewJoinError="";go("C16")}label:{HStack(spacing:13){ZStack{RoundedRectangle(cornerRadius:15).fill(W.soft).frame(width:54,height:54);if let data=crew.photoData,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill().frame(width:54,height:54).clipped().clipShape(RoundedRectangle(cornerRadius:15))}else{Image(systemName:"figure.run").font(.system(size:21,weight:.medium)).foregroundStyle(W.ink)};};VStack(alignment:.leading,spacing:5){Text(crew.name).font(W.font(15,.semibold)).foregroundStyle(W.ink);Text("\(crew.region) · 멤버 \(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명").font(W.font(11)).foregroundStyle(W.muted);Text(crew.introduction).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)};Spacer(minLength:6);if joined{Text("가입 중").font(W.font(10,.medium)).foregroundStyle(W.muted)}else{Image(systemName:"chevron.right").font(.system(size:12,weight:.semibold)).foregroundStyle(W.muted)}}.padding(.vertical,12).contentShape(Rectangle())}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}.accessibilityIdentifier("communityCrewOpen-\(crew.id)")
     }
 
     var communityCrewDetail:some View {
         guard let crew=communityCrew() else{return AnyView(WPage(title:"크루 소개",back:back){WNotice(text:"크루 정보를 찾을 수 없어요.")}actions:{})}
         let member=communityCrewIsMember(crew),application=communityCrewApplication(for:crew.id),rank=communityCrewRankLevel()
         return AnyView(WPage(title:"크루 소개",back:back){
-            VStack(alignment:.leading,spacing:12){ZStack{RoundedRectangle(cornerRadius:16).fill(W.soft).frame(height:145);Image(systemName:"figure.run").font(.system(size:36,weight:.medium)).foregroundStyle(W.ink).accessibilityLabel("크루 예시 그림")};Text(crew.name).font(W.font(23,.semibold));Text(crew.introduction).font(W.font(14)).lineSpacing(5);Text("\(crew.region) · 멤버 \(crew.memberIDs.count)/20명").font(W.font(12)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewMemberCount")}
+            VStack(alignment:.leading,spacing:12){Group{if let data=crew.photoData,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}else{ZStack{RoundedRectangle(cornerRadius:16).fill(W.soft);Image(systemName:"figure.run").font(.system(size:36,weight:.medium)).foregroundStyle(W.ink).accessibilityLabel("크루 예시 그림")}}}.frame(maxWidth:.infinity).frame(height:145).clipped().clipShape(RoundedRectangle(cornerRadius:16));Text(crew.name).font(W.font(23,.semibold));Text(crew.introduction).font(W.font(14)).lineSpacing(5);Text("\(crew.region) · 멤버 \(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명").font(W.font(12)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewMemberCount")}
             VStack(alignment:.leading,spacing:7){Text("가입 안내").font(W.font(15,.semibold));Text(crew.guidance).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4)}.frame(maxWidth:.infinity,alignment:.leading).padding(15).background(W.soft,in:RoundedRectangle(cornerRadius:12))
-            if crew.minimumRank>0{WText(text:"가입 조건 · \(crew.minimumRank)등급 이상",small:true)}
+            if crew.minimumRank>0, WCommunityCrewPolicy.ranks.indices.contains(crew.minimumRank){WText(text:"가입 조건 · \(WCommunityCrewPolicy.ranks[crew.minimumRank]) 이상",small:true)}
+            if communityCrewCanManage(crew){Button("크루 관리"){go("C21")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewManage")}
             WNotice(text:"이 크루 정보는 로컬 예시이며 실제 크루·멤버 상태와 연결되어 있지 않아요.")
             if !ui.communityCrewJoinError.isEmpty{WNotice(text:ui.communityCrewJoinError,danger:true).accessibilityIdentifier("communityCrewJoinError")}
         }actions:{
@@ -1014,7 +1135,56 @@ extension WireframeRoot {
             WNotice(text:"회원 전용 예시 게시판 · 실제 크루 글은 불러오지 않아요.").accessibilityIdentifier("communityCrewBoardLocalNotice")
             if posts.isEmpty{Text("아직 등록된 글이 없어요").font(W.font(14,.medium)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,18).accessibilityIdentifier("communityCrewBoardEmpty")}
             else{ForEach(posts){post in VStack(alignment:.leading,spacing:8){HStack{Text(post.author).font(W.font(12,.medium));Spacer();Text(post.date).font(W.font(10)).foregroundStyle(W.muted)};Text(post.title).font(W.font(16,.semibold));Text(post.summary).font(W.font(13)).foregroundStyle(W.muted).lineSpacing(4)}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,13).overlay(alignment:.bottom){W.line.frame(height:1)}.accessibilityIdentifier("communityCrewPost-\(post.id)")}}
-        }actions:{if let selected,selected.id != crew.boards.first?.id || crew.ownerMemberID==ui.communityViewerMemberID{Button("글쓰기"){beginCommunityCrewCompose(crew,board:selected)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewComposePost")}})
+        }actions:{if communityCrewCanManage(crew){Button("크루 관리"){go("C21")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewManageFromBoard")};if let selected,selected.id != crew.boards.first?.id || communityCrewCanManage(crew){Button("글쓰기"){beginCommunityCrewCompose(crew,board:selected)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewComposePost")}})
+    }
+
+    var communityCrewEditor:some View {
+        let editing=ui.communityCrewDraftID != nil
+        let canEdit=ui.communityCrewDraftID.flatMap{communityCrew($0)}.map(communityCrewCanManage) ?? true
+        return WPage(title:editing ? "크루 수정":"크루 만들기",back:back){
+            if !canEdit{WNotice(text:"크루장·운영자만 크루를 수정할 수 있어요.",danger:true).accessibilityIdentifier("communityCrewEditRestricted")}
+            else{
+                WCommunityCrewPhotoPicker(data:$ui.communityCrewDraftPhoto)
+                VStack(alignment:.trailing,spacing:2){TextField("크루 이름",text:$ui.communityCrewDraftName).font(W.font(15)).padding(14).frame(minHeight:54).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier("communityCrewDraftName");Button("중복 확인",action:checkCommunityCrewDraftName).font(W.font(12,.medium)).frame(minHeight:40).accessibilityIdentifier("communityCrewCheckName")}
+                if !ui.communityCrewNameCheck.isEmpty{Text(ui.communityCrewNameCheck).font(W.font(12)).foregroundStyle(ui.communityCrewNameCheck.contains("이미") || ui.communityCrewNameCheck.contains("입력") ? Color.wire(0xA92D32,0xFF9CA3):W.muted).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityCrewNameCheckResult")}
+                WField(label:"소개",text:$ui.communityCrewDraftIntroduction,limit:WCommunityCrewPolicy.introductionLimit,multiline:true,multilineHeight:145,textSize:14,labelSize:13,accessibilityID:"communityCrewDraftIntroduction")
+                VStack(alignment:.leading,spacing:8){Text("주 활동 지역").font(W.font(13,.medium));Picker("주 활동 지역",selection:$ui.communityCrewDraftRegion){ForEach(WCommunityCrewPolicy.regions,id:\.self){Text($0).tag($0)}}.pickerStyle(.segmented).accessibilityIdentifier("communityCrewDraftRegion")}
+                VStack(alignment:.leading,spacing:8){Text("가입 가능한 러닝 등급").font(W.font(13,.medium));Picker("가입 가능한 러닝 등급",selection:$ui.communityCrewDraftRank){ForEach(WCommunityCrewPolicy.ranks.indices,id:\.self){index in Text(WCommunityCrewPolicy.ranks[index]).tag(index)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityCrewDraftRank")}
+                WNotice(text:"크루 정보와 사진은 이 화면의 로컬 예시에만 저장돼요. 실제 크루 생성·수정이나 사진 업로드는 하지 않아요.").accessibilityIdentifier("communityCrewDraftLocalNotice")
+                if !ui.communityCrewDraftError.isEmpty{WNotice(text:ui.communityCrewDraftError,danger:true).accessibilityIdentifier("communityCrewDraftError")}
+            }
+        }actions:{
+            Button(editing ? "수정 저장":"크루 만들기",action:saveCommunityCrewDraft).buttonStyle(WButtonStyle()).disabled(!canEdit).accessibilityIdentifier("communityCrewSave")
+            Button("취소",action:back).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewCancelEdit")
+        }
+    }
+
+    var communityCrewManagement:some View {
+        guard let crew=communityCrew(),communityCrewCanManage(crew) else{return AnyView(WPage(title:"크루 관리",back:back){WNotice(text:"크루장·운영자만 관리할 수 있어요.",danger:true).accessibilityIdentifier("communityCrewManageRestricted")}actions:{Button("크루 소개 보기"){go("C16")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewManageReturn")})}
+        let pending=ui.communityCrewApplications.filter{$0.crewID==crew.id && $0.status == .pending}
+        return AnyView(WPage(title:"크루 관리",back:back){
+            VStack(alignment:.leading,spacing:6){Text(crew.name).font(W.font(21,.semibold)).accessibilityIdentifier("communityCrewManagementName");Text("멤버 \(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명 · 게시판 \(crew.boards.count)/\(WCommunityCrewPolicy.boardCapacity)개").font(W.font(12)).foregroundStyle(W.muted);WNotice(text:"크루 관리 예시는 이 기기에서만 동작해요. 실제 역할·멤버 권한은 서버에서 확인하지 않아요.").accessibilityIdentifier("communityCrewManageLocalNotice")}
+            VStack(alignment:.leading,spacing:0){Text("크루 관리").font(W.font(12,.medium)).foregroundStyle(W.muted).padding(.bottom,7);Button{startCommunityCrewEditing(crew)}label:{HStack{Text("이름·소개 수정");Spacer();WChevron().stroke(W.muted,style:StrokeStyle(lineWidth:1.5,lineCap:.round,lineJoin:.round)).frame(width:9,height:15)}.font(W.font(14)).frame(maxWidth:.infinity,minHeight:56,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewEdit");W.line.frame(height:1);Button{}label:{HStack{Text("가입 안내");Spacer();Text("다음 묶음").font(W.font(10)).foregroundStyle(W.muted)}.font(W.font(14)).frame(minHeight:56)}.buttonStyle(.plain).disabled(true).accessibilityIdentifier("communityCrewGuidancePending");W.line.frame(height:1);Button{}label:{HStack{Text("게시판 관리");Spacer();Text("다음 묶음").font(W.font(10)).foregroundStyle(W.muted)}.font(W.font(14)).frame(minHeight:56)}.buttonStyle(.plain).disabled(true).accessibilityIdentifier("communityCrewBoardsPending")}.padding(.vertical,8)
+            VStack(alignment:.leading,spacing:0){Text("멤버 관리").font(W.font(12,.medium)).foregroundStyle(W.muted).padding(.bottom,7);Button{}label:{HStack{Text("멤버 목록·권한");Spacer();Text("다음 묶음").font(W.font(10)).foregroundStyle(W.muted)}.font(W.font(14)).frame(minHeight:56)}.buttonStyle(.plain).disabled(true).accessibilityIdentifier("communityCrewMembersPending")}.padding(.vertical,8)
+            VStack(alignment:.leading,spacing:0){Text("가입 신청").font(W.font(12,.medium)).foregroundStyle(W.muted).padding(.bottom,7);if pending.isEmpty{Text("대기 중인 신청이 없어요").font(W.font(13)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading).frame(minHeight:52)}else{ForEach(pending){application in Button{ui.communityCrewReviewApplicationID=application.id;ui.communityCrewReviewError="";performNavigation("C22")}label:{HStack{VStack(alignment:.leading,spacing:4){Text(communityRunner(application.applicantMemberID).name).font(W.font(14,.medium));Text("신청 메모와 조건 검토").font(W.font(11)).foregroundStyle(W.muted)};Spacer();Text("검토").font(W.font(12,.medium));WChevron().stroke(W.muted,style:StrokeStyle(lineWidth:1.5,lineCap:.round,lineJoin:.round)).frame(width:9,height:15)}.frame(maxWidth:.infinity,minHeight:60,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewReview-\(application.id)")}}}
+            VStack(alignment:.leading,spacing:0){Text("알림 관리").font(W.font(12,.medium)).foregroundStyle(W.muted).padding(.bottom,7);Button{}label:{HStack{Text("크루 알림 보내기");Spacer();Text("다음 묶음").font(W.font(10)).foregroundStyle(W.muted)}.font(W.font(14)).frame(minHeight:56)}.buttonStyle(.plain).disabled(true).accessibilityIdentifier("communityCrewAnnouncementsPending")}
+        }actions:{Button("크루 게시판 보기"){ui.communityCrewBoardID=crew.boards.first?.id ?? "";go("C19")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewManageBoard")})
+    }
+
+    var communityCrewApplicationReview:some View {
+        guard let application=ui.communityCrewApplications.first(where:{$0.id==ui.communityCrewReviewApplicationID}),let crew=communityCrew(application.crewID),communityCrewCanManage(crew) else{return AnyView(WPage(title:"가입 신청",back:back){WNotice(text:"이 크루의 가입 신청을 볼 수 없어요.",danger:true).accessibilityIdentifier("communityCrewReviewRestricted")}actions:{Button("크루 관리"){go("C21")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewReviewReturn")})}
+        let member=communityRunner(application.applicantMemberID),pending=application.status == .pending
+        return AnyView(WPage(title:"가입 신청",back:back){
+            HStack(spacing:12){communityAvatar(member.name);VStack(alignment:.leading,spacing:5){Text(member.name).font(W.font(16,.semibold)).accessibilityIdentifier("communityCrewApplicantName");Text(member.rank).font(W.font(12)).foregroundStyle(W.muted)};Spacer()}.frame(maxWidth:.infinity,minHeight:54)
+            VStack(alignment:.leading,spacing:9){Text("가입 메모").font(W.font(14,.semibold));Text(application.memo.isEmpty ? "작성한 메모가 없어요.":application.memo).font(W.font(14)).lineSpacing(6).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityCrewReviewMemo")}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:12))
+            VStack(spacing:0){HStack{Text("현재 인원");Spacer();Text("\(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명")};W.line.frame(height:1);HStack{Text("가입 등급");Spacer();Text(crew.minimumRank==0 ? "제한 없음":"\(WCommunityCrewPolicy.ranks[crew.minimumRank]) 이상")};W.line.frame(height:1);HStack{Text("신청자 등급");Spacer();Text(member.rank)}.accessibilityIdentifier("communityCrewReviewConditions")}.font(W.font(13)).foregroundStyle(W.ink).padding(.vertical,8)
+            WNotice(text:"신청 정보와 검토 결과는 로컬 예시입니다. 실제 승인·거절 통지는 전송되지 않아요.").accessibilityIdentifier("communityCrewReviewLocalNotice")
+            if !pending{Text(application.status == .approved ? "이 신청은 승인된 로컬 예시예요.":application.status == .rejected ? "이 신청은 거절된 로컬 예시예요.":"이 신청은 취소된 로컬 예시예요.").font(W.font(13)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewReviewStatus")}
+            if !ui.communityCrewReviewError.isEmpty{WNotice(text:ui.communityCrewReviewError,danger:true).accessibilityIdentifier("communityCrewReviewError")}
+        }actions:{
+            if pending{HStack(spacing:10){Button("거절"){reviewCommunityCrewApplication(approve:false)}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewRejectApplication");Button("승인"){reviewCommunityCrewApplication(approve:true)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewApproveApplication")}}
+            else{Button("크루 관리",action:back).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewReviewBackToManage")}
+        })
     }
 
     func communityPostCard(_ post:WCommunityPost)->some View {
@@ -1081,7 +1251,7 @@ extension WireframeRoot {
     }
     func beginCommunityCompose(board:String?=nil){ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";go("C05")}
     func beginCommunityCrewCompose(_ crew:WCommunityCrew,board:WCommunityCrewBoard){
-        guard communityCrewIsMember(crew),board.id != crew.boards.first?.id || crew.ownerMemberID==ui.communityViewerMemberID else{return}
+        guard communityCrewIsMember(crew),board.id != crew.boards.first?.id || communityCrewCanManage(crew) else{return}
         ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C05")
     }
     func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID && communityCanSeeMember($0.authorMemberID)}}
@@ -1097,7 +1267,7 @@ extension WireframeRoot {
         guard !body.isEmpty else{ui.communityError="내용을 입력해 주세요.";return}
         guard title.count<=60,body.count<=2000 else{ui.communityError="제목은 60자, 내용은 2,000자 이내로 입력해 주세요.";return}
         if let crewID=ui.communityDraftCrewID {
-            guard let crew=communityCrew(crewID),communityCrewIsMember(crew),let board=crew.boards.first(where:{$0.id==ui.communityCrewBoardID}),board.title==ui.communityDraftBoard,board.id != crew.boards.first?.id || crew.ownerMemberID==ui.communityViewerMemberID else{ui.communityError="이 크루 게시판에 글을 쓸 수 없어요.";return}
+            guard let crew=communityCrew(crewID),communityCrewIsMember(crew),let board=crew.boards.first(where:{$0.id==ui.communityCrewBoardID}),board.title==ui.communityDraftBoard,board.id != crew.boards.first?.id || communityCrewCanManage(crew) else{ui.communityError="이 크루 게시판에 글을 쓸 수 없어요.";return}
             let post=WCommunityCrewPost(id:UUID().uuidString,boardID:board.id,title:title,summary:body,author:communityRunner(ui.communityViewerMemberID).name,date:"방금 전")
             ui.communityLocalCrewPosts[crewID,default:[]].insert(post,at:0)
             let targetIndex=ui.path.lastIndex(of:"C19");ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C19");if let targetIndex{ui.path=Array(ui.path.prefix(targetIndex))};return
