@@ -519,12 +519,13 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
         if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
         if twoCourseRecords{app.launchArguments.append("-wire-community-course-two-records")}
+        if let viewerID{app.launchArguments += ["-wire-community-viewer",viewerID]}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
@@ -639,6 +640,62 @@ import UIKit
         app.buttons["communityCrewRejectApplication"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityCrewReview-fixture-request-dawn-ga-on"].exists,"Resolved requests leave the pending list")
+    }
+
+    func testCommunityCrewEditDiscardPromptTracksActualChangesAndTabExit() {
+        launchCommunity("C15")
+        app.buttons["communityCrewOpen-dawn"].tap()
+        app.buttons["communityCrewManage"].tap()
+        app.buttons["communityCrewEdit"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C20"].waitForExistence(timeout:5))
+        app.buttons["communityCrewCancelEdit"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"An unchanged edit exits immediately")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+
+        app.buttons["communityCrewEdit"].tap()
+        let name=app.textFields["communityCrewDraftName"]
+        replaceInput(name,"임시 이름")
+        replaceInput(name,"모브 새벽 크루")
+        app.buttons["communityCrewCancelEdit"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Restoring the original values clears the dirty state")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+
+        app.buttons["communityCrewEdit"].tap()
+        replaceInput(app.textFields["communityCrewDraftName"],"버릴 이름")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["계속 편집"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C20"].exists)
+        app.buttons["communityCrewCancelEdit"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewManagementName"].label,"모브 새벽 크루","Discard leaves saved crew data unchanged")
+
+        app.buttons["communityCrewEdit"].tap()
+        app.segmentedControls["communityCrewDraftRegion"].buttons["모브시 강변"].tap()
+        app.buttons.matching(identifier:"tab-0").element(boundBy:1).coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5),"Discard completes the pending tab change")
+        XCTAssertFalse(app.descendants(matching:.any)["screen-C20"].isHittable)
+
+        app.buttons["tab-3"].tap()
+        app.buttons["communityOpenCrews"].tap()
+        app.buttons["communityCrewOpen-dawn"].tap()
+        app.buttons["communityCrewManage"].tap()
+        app.buttons["communityCrewEdit"].tap()
+        replaceInput(app.textFields["communityCrewDraftName"],"저장한 새벽 크루")
+        app.buttons["communityCrewSave"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Saving clears the dirty state")
+    }
+
+    func testOrdinaryMemberCannotOpenCrewManagementOrApplicationReview() {
+        launchCommunity("C21",viewerID:"fixture-member-no-eul")
+        XCTAssertTrue(app.staticTexts["communityCrewManageRestricted"].exists || app.descendants(matching:.any)["communityCrewManageRestricted"].exists)
+        launchCommunity("C22",viewerID:"fixture-member-no-eul")
+        XCTAssertTrue(app.staticTexts["communityCrewReviewRestricted"].exists || app.descendants(matching:.any)["communityCrewReviewRestricted"].exists)
     }
 
     func testCommunityCourseWritingAndFollowPreviewStayLocal() {
@@ -1187,7 +1244,7 @@ import UIKit
         nickname.tap()
         for _ in 0..<5 { nickname.typeText(XCUIKeyboardKey.delete.rawValue) }
         nickname.typeText("저녁러너")
-        app.buttons.matching(identifier:"communityOwnProfileSettings").firstMatch.tap()
+        app.buttons.matching(identifier:"communityOwnProfileSettings").firstMatch.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
         let settingsPrompt=app.alerts["변경사항을 버릴까요?"]
         XCTAssertTrue(settingsPrompt.waitForExistence(timeout:3))
         settingsPrompt.buttons["계속 편집"].tap()

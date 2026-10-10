@@ -80,6 +80,7 @@ struct WCommunityCrewApplication:Identifiable,Equatable {
     let applicantMemberID:String
     let memo:String
     var status:WCommunityCrewApplicationStatus
+    var rejectedAt:Date?=nil
 }
 
 enum WCommunityCrewSaveResult:Equatable {case ready,invalidName,duplicateName,invalidIntroduction,invalidRegion,invalidRank,unauthorized}
@@ -98,7 +99,7 @@ enum WCommunityCrewFixtures {
                 WCommunityCrewPost(id:"dawn-free-1",boardID:dawnBoards[3].id,title:"오늘도 함께 완료",summary:"회원에게만 보이는 예시 게시물이에요.",author:"가온러너",date:"10.05 08:16")
             ]),
             WCommunityCrew(id:"river",name:"모브 강변 크루",introduction:"주말 아침, 같은 길을 편하게 달리는 크루예요.",region:"모브시 강변",guidance:"서로의 속도를 존중해요. 일정 변경은 게시판에서 알려 주세요.",ownerMemberID:"fixture-member-ga-on",memberIDs:["fixture-member-ga-on","fixture-member-no-eul"],minimumRank:0,tags:["내 주변","주말 러닝"],boards:riverBoards,posts:[WCommunityCrewPost(id:"river-run-1",boardID:riverBoards[2].id,title:"오늘도 함께 완료",summary:"회원에게만 공개되는 러닝 인증 예시예요.",author:"가온러너",date:"오늘 07:40")]),
-            WCommunityCrew(id:"full",name:"모브 20 러너스",introduction:"함께 달리는 크루예요. 현재 예시 정원이 찼어요.",region:"모브시 북부",guidance:"서로를 배려하며 달려요.",ownerMemberID:"fixture-member-no-eul",memberIDs:(0..<20).map{"fixture-full-\($0)"},minimumRank:3,tags:["입문 환영"],boards:fullBoards,posts:[])
+            WCommunityCrew(id:"full",name:"모브 20 러너스",introduction:"함께 달리는 크루예요. 현재 예시 정원이 찼어요.",region:"모브시 북부",guidance:"서로를 배려하며 달려요.",ownerMemberID:"fixture-member-no-eul",memberIDs:["fixture-member-no-eul"] + (1..<20).map{"fixture-full-\($0)"},minimumRank:3,tags:["입문 환영"],boards:fullBoards,posts:[])
         ]
     }()
     static let applications=[
@@ -107,11 +108,20 @@ enum WCommunityCrewFixtures {
     ]
 }
 
-enum WCommunityCrewApplicationResult:Equatable {case ready,missingCrew,alreadyMember,alreadyPending,full,rankRequired,invalidMemo}
+enum WCommunityCrewApplicationResult:Equatable {case ready,missingCrew,alreadyMember,alreadyPending,rejectedRecently,full,rankRequired,invalidMemo}
+
+struct WCommunityCrewDraftSnapshot:Equatable {
+    var name:String
+    var introduction:String
+    var region:String
+    var minimumRank:Int
+    var photoData:Data?
+}
 
 enum WCommunityCrewPolicy {
     static let memberCapacity=20
     static let boardCapacity=5
+    static let rejectionCooldown:TimeInterval=24*60*60
     static let nameLimit=30
     static let introductionLimit=300
     static let regions=["모브시 강변","모브시 중앙","모브시 북부"]
@@ -121,7 +131,7 @@ enum WCommunityCrewPolicy {
         return crew.ownerMemberID==viewerID || crew.operatorMemberIDs.contains(viewerID)
     }
     static func canonicalName(_ value:String)->String {
-        value.precomposedStringWithCanonicalMapping.trimmingCharacters(in:.whitespacesAndNewlines).split(whereSeparator:\.isWhitespace).joined(separator:" ").lowercased()
+        value.precomposedStringWithCanonicalMapping.trimmingCharacters(in:.whitespacesAndNewlines).split(whereSeparator:\.isWhitespace).joined(separator:" ").lowercased().precomposedStringWithCanonicalMapping
     }
     static func saveResult(name:String,introduction:String,region:String,minimumRank:Int,existing:[WCommunityCrew],editingID:String?,viewerID:String)->WCommunityCrewSaveResult {
         let value=name.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -146,14 +156,19 @@ enum WCommunityCrewPolicy {
         }
         return approve ? .approved:.rejected
     }
-    static func applicationResult(crew:WCommunityCrew?,viewerID:String,rank:Int,memo:String,current:WCommunityCrewApplication?)->WCommunityCrewApplicationResult {
+    static func applicationResult(crew:WCommunityCrew?,viewerID:String,rank:Int,memo:String,current:WCommunityCrewApplication?,now:Date=Date())->WCommunityCrewApplicationResult {
         guard let crew else{return .missingCrew}
         guard !crew.memberIDs.contains(viewerID) else{return .alreadyMember}
         guard current?.status != .pending else{return .alreadyPending}
+        if let rejectedAt=current?.rejectedAt,current?.status == .rejected,now.timeIntervalSince(rejectedAt)<rejectionCooldown{return .rejectedRecently}
         guard crew.memberIDs.count<memberCapacity else{return .full}
         guard rank>=crew.minimumRank else{return .rankRequired}
         guard memo.count<=300 else{return .invalidMemo}
         return .ready
+    }
+    static func draftHasChanges(_ snapshot:WCommunityCrewDraftSnapshot?,name:String,introduction:String,region:String,minimumRank:Int,photoData:Data?)->Bool {
+        guard let snapshot else{return false}
+        return snapshot != WCommunityCrewDraftSnapshot(name:name,introduction:introduction,region:region,minimumRank:minimumRank,photoData:photoData)
     }
     static func canReadBoard(crew:WCommunityCrew?,memberIDs:Set<String>,viewerID:String)->Bool {
         guard let crew else{return false}
@@ -958,11 +973,12 @@ extension WireframeRoot {
         WCommunityCrewPolicy.canManage(crew,viewerID:ui.communityViewerMemberID)
     }
     func startCommunityCrewCreation(){
-        ui.communityCrewDraftID=nil;ui.communityCrewDraftName="";ui.communityCrewDraftIntroduction="";ui.communityCrewDraftRegion="모브시 중앙";ui.communityCrewDraftRank=0;ui.communityCrewDraftPhoto=nil;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";go("C20")
+        communityCrewDraftOriginal=nil;ui.communityCrewDraftID=nil;ui.communityCrewDraftName="";ui.communityCrewDraftIntroduction="";ui.communityCrewDraftRegion="모브시 중앙";ui.communityCrewDraftRank=0;ui.communityCrewDraftPhoto=nil;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";go("C20")
     }
     func startCommunityCrewEditing(_ crew:WCommunityCrew){
         guard communityCrewCanManage(crew) else{return}
-        ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftID=crew.id;ui.communityCrewDraftName=crew.name;ui.communityCrewDraftIntroduction=crew.introduction;ui.communityCrewDraftRegion=crew.region;ui.communityCrewDraftRank=crew.minimumRank;ui.communityCrewDraftPhoto=crew.photoData;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";performNavigation("C20")
+        let snapshot=WCommunityCrewDraftSnapshot(name:crew.name,introduction:crew.introduction,region:crew.region,minimumRank:crew.minimumRank,photoData:crew.photoData)
+        communityCrewDraftOriginal=snapshot;ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftID=crew.id;ui.communityCrewDraftName=crew.name;ui.communityCrewDraftIntroduction=crew.introduction;ui.communityCrewDraftRegion=crew.region;ui.communityCrewDraftRank=crew.minimumRank;ui.communityCrewDraftPhoto=crew.photoData;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";performNavigation("C20")
     }
     func checkCommunityCrewDraftName(){
         let candidate=ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -991,7 +1007,7 @@ extension WireframeRoot {
                 crew=WCommunityCrew(id:id,name:ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines),introduction:ui.communityCrewDraftIntroduction.trimmingCharacters(in:.whitespacesAndNewlines),region:ui.communityCrewDraftRegion,guidance:"",ownerMemberID:ui.communityViewerMemberID,memberIDs:[ui.communityViewerMemberID],minimumRank:ui.communityCrewDraftRank,tags:["내 주변"],boards:boards,posts:[],photoData:ui.communityCrewDraftPhoto)
                 ui.communityLocalCrews.insert(crew,at:0);ui.communityJoinedCrewIDs.insert(id)
             }
-            ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftError="";ui.communityCrewDraftID=nil;go("C21")
+            ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftError="";ui.communityCrewDraftID=nil;communityCrewDraftOriginal=nil;go("C21")
         }
     }
     func reviewCommunityCrewApplication(approve:Bool){
@@ -1005,6 +1021,7 @@ extension WireframeRoot {
         case .rankRequired:ui.communityCrewReviewError="신청자의 러닝 등급이 가입 조건에 맞지 않아요."
         case .approved,.rejected:
             ui.communityCrewApplications[index].status=approve ? .approved:.rejected
+            ui.communityCrewApplications[index].rejectedAt=approve ? nil:Date()
             if approve && !crew.memberIDs.contains(ui.communityCrewApplications[index].applicantMemberID){
                 var updated=crew;updated.memberIDs.append(ui.communityCrewApplications[index].applicantMemberID);ui.communityCrewOverrides[crew.id]=updated
             }
@@ -1021,6 +1038,7 @@ extension WireframeRoot {
         case .missingCrew:ui.communityCrewJoinError="크루 정보를 찾을 수 없어요."
         case .alreadyMember:ui.communityCrewJoinError="이미 가입한 크루예요."
         case .alreadyPending:ui.communityCrewJoinError="이미 신청했어요. 결과를 기다려 주세요."
+        case .rejectedRecently:ui.communityCrewJoinError="가입 신청이 거절되어 24시간 후 다시 신청할 수 있어요."
         case .full:ui.communityCrewJoinError="정원이 모두 찼어요."
         case .rankRequired:ui.communityCrewJoinError="가입에 필요한 러닝 등급을 확인해 주세요."
         case .invalidMemo:ui.communityCrewJoinError="메모는 300자 안으로 적어 주세요."
