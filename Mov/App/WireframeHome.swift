@@ -1127,7 +1127,7 @@ extension WireframeRoot {
                     HStack(spacing:9){Text("지금 많이 보는 글").font(W.font(17,.semibold));Text("HOT").font(W.font(10,.bold)).foregroundStyle(Color(red:0.92,green:0.30,blue:0.32));Spacer();Button("더 보기"){go("C41")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityHotMore")}
                         .padding(.top,16).padding(.bottom,8)
                     Button { ui.communitySelectedCourse=WCommunityCourseFixtures.sample;go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 예시");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenSampleCourse")
-                    if ui.communityAccountVerified{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseError="";go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
+                    if ui.communityAccountVerified{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true;ui.communityCourseError="";communityComposerOriginal=nil;go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
                     ForEach(Array(topHotPosts.enumerated()),id:\.element.id){rank,post in
                         Button { openCommunityPost(post) } label:{
                             HStack(spacing:12){Text("\(rank+1)").font(W.font(13,.medium)).foregroundStyle(W.muted).frame(width:18);Text(post.title).font(W.font(14,.medium)).lineLimit(1);Spacer(minLength:4);Text("♡ \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").font(W.font(11)).foregroundStyle(W.muted)}
@@ -1846,10 +1846,10 @@ extension WireframeRoot {
             }.padding(.top,8).padding(.bottom,12)
         }.overlay(alignment:.bottom){W.line.frame(height:1)}
     }
-    func beginCommunityCompose(board:String?=nil){ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";go("C05")}
+    func beginCommunityCompose(board:String?=nil){ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")}
     func beginCommunityCrewCompose(_ crew:WCommunityCrew,board:WCommunityCrewBoard){
         guard communityCrewIsMember(crew),board.status == .active,board.kind != .notice || communityCrewCanManage(crew) else{return}
-        ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C05")
+        ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")
     }
     func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID && communityCanSeeMember($0.authorMemberID)}}
     func openCommunityPost(_ post:WCommunityPost){guard communityCanSeeMember(post.authorMemberID) else{return};ui.communitySelectedPostID=post.id;ui.communityCardOriginAnonymous=post.board=="익명게시판";ui.communityCardOriginScreen="C04";go("C04")}
@@ -1867,10 +1867,10 @@ extension WireframeRoot {
             guard let crew=communityCrew(crewID),communityCrewIsMember(crew),let board=crew.boards.first(where:{$0.id==ui.communityCrewBoardID}),board.status == .active,board.title==ui.communityDraftBoard,board.kind != .notice || communityCrewCanManage(crew) else{ui.communityError="이 크루 게시판에 글을 쓸 수 없어요.";return}
             let post=WCommunityCrewPost(id:UUID().uuidString,boardID:board.id,title:title,summary:body,author:communityRunner(ui.communityViewerMemberID).name,date:"방금 전")
             ui.communityLocalCrewPosts[crewID,default:[]].insert(post,at:0)
-            let targetIndex=ui.path.lastIndex(of:"C19");ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C19");if let targetIndex{ui.path=Array(ui.path.prefix(targetIndex))};return
+            let targetIndex=ui.path.lastIndex(of:"C19");ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=nil;go("C19");if let targetIndex{ui.path=Array(ui.path.prefix(targetIndex))};return
         }
         ui.communityPosts.insert(WCommunityPost(id:UUID().uuidString,authorMemberID:ui.communityViewerMemberID,author:"나",rank:"시작러너",board:ui.communityDraftBoard,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[]),at:0)
-        ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C01")
+        ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=nil;go("C01")
     }
     func publishCommunityCourse(){
         guard ui.communityCourseDraft else{return}
@@ -1888,7 +1888,7 @@ extension WireframeRoot {
         let author=communityRunner(ui.communityViewerMemberID),course=WCommunityCoursePolicy.makeCourse(id:UUID().uuidString,authorMemberID:ui.communityViewerMemberID,authorName:author.name,authorRank:author.rank,title:title,introduction:body,hideEnds:ui.communityCourseHideEnds,record:record)
         ui.communitySelectedCourse=course
         ui.communityPosts.insert(WCommunityPost(id:UUID().uuidString,authorMemberID:course.authorMemberID,author:course.authorName,rank:course.authorRank,board:"러닝 인증",title:course.title,text:course.introduction,date:"방금 전",likes:0,views:0,comments:[],course:course),at:0)
-        ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCoursePlaying=false;selectRootTab("C01");ui.path=[]
+        ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCoursePlaying=false;communityComposerOriginal=nil;selectRootTab("C01");ui.path=[]
     }
     func submitCommunityComment(){
         guard let index=ui.communityPosts.firstIndex(where:{$0.id==ui.communitySelectedPostID}),
@@ -2224,10 +2224,10 @@ extension WireframeRoot {
             else{Button("계정 인증 확인"){ui.communityCourseDraft=false;go("C11")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCourseVerify");Button("취소"){cancelCommunityCourseDraft()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCourseCancel")}
         }.onChange(of:ui.communityCourseTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:60);if limited != value{ui.communityCourseTitle=limited}}
          .onChange(of:ui.communityCourseIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:2000);if limited != value{ui.communityCourseIntroduction=limited}}
-         .onAppear{if ui.communityCourseRecordID.isEmpty,let record=eligible.first{ui.communityCourseRecordID=record.id.uuidString}}
+         .onAppear{if ui.communityCourseRecordID.isEmpty,let record=eligible.first{ui.communityCourseRecordID=record.id.uuidString};captureCommunityComposerBaseline(for:"C13")}
     }
 
-    func cancelCommunityCourseDraft(){ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";selectRootTab("C01");ui.path=[]}
+    func cancelCommunityCourseDraft(){selectRootTab("C01")}
 
     var communityGhostRun:some View {
         let course=ui.communitySelectedCourse ?? WCommunityCourseFixtures.sample,duration=ui.communitySelectedCourse?.record.seconds ?? WCommunityCourseFixtures.sample.record.seconds
@@ -2363,6 +2363,7 @@ extension WireframeRoot {
         }
         .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
         .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
+        .onAppear{captureCommunityComposerBaseline(for:"C05")}
     }
     var communityPreview:some View {WPage(title:"미리보기",back:back){Text("커뮤니티에 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody");if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{WNotice(text:ui.communityDraftCrewID == nil ? "게시물은 로컬 예시 데이터로만 추가돼요.":"크루 게시물은 이 기기의 예시 게시판에만 추가돼요.")};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityCourseDraft ? "코스 공유하기":"게시하기"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":"communityPublishButton");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1))}}
 }

@@ -1027,16 +1027,38 @@ import UIKit
     }
 
     func testCommunityCourseCancelAndBackPreserveOnlyUnpublishedDraft() {
-        launchCommunity("C01",verificationStatus:"approved")
+        launchCommunity("C01",verificationStatus:"approved",twoCourseRecords:true)
         app.buttons["communityStartCourseShare"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5))
+        app.buttons["communityCourseCancel"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"A fresh course composer exits without a confirmation")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+
+        app.buttons["communityStartCourseShare"].tap()
+        app.buttons["communityCourseRecordPicker"].tap()
+        app.buttons["저녁 공원 러닝 · 3.4 km"].tap()
         courseReplace("취소할 코스",into:app.textFields["communityCourseName"])
         courseReplace("게시하지 않을 초안",into:app.textViews["communityCourseIntroduction"])
+        let hideEnds=app.switches["communityCourseHideEnds"]
+        XCTAssertTrue(hideEnds.waitForExistence(timeout:5),app.debugDescription)
+        hideEnds.tap()
         app.buttons["communityCoursePreview"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-거리"].label.contains("3.4 km"),"The selected run record supplies the course preview facts")
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Entering preview is part of the composer flow")
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5))
         XCTAssertEqual(app.textFields["communityCourseName"].value as? String,"취소할 코스")
+        XCTAssertEqual(app.textViews["communityCourseIntroduction"].value as? String,"게시하지 않을 초안")
+        XCTAssertEqual(app.switches["communityCourseHideEnds"].value as? String,"0","The course privacy setting survives a preview round trip")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["계속 편집"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].exists)
+        XCTAssertEqual(app.textFields["communityCourseName"].value as? String,"취소할 코스","Continue editing keeps the draft intact")
         app.buttons["communityCourseCancel"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["버리기"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertEqual(app.buttons.matching(identifier:"communityPostOpen-local").count,0,"Cancelling never publishes a post")
         app.buttons["communityStartCourseShare"].tap()
@@ -1331,6 +1353,50 @@ import UIKit
         XCTAssertEqual((app.textFields["communityComposeTitle"].value as? String)?.count,60)
         XCTAssertEqual((app.textViews["communityComposeBody"].value as? String)?.count,2000)
     }
+
+    func testCommunityPostComposerDiscardPromptTracksReversionPreviewAndDestination() {
+        launchCommunity("C01")
+        app.buttons["communityCompose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"An unchanged post composer exits immediately")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+
+        app.buttons["communityCompose"].tap()
+        let title=app.textFields["communityComposeTitle"]
+        replaceInput(title,"초안 제목")
+        let body=app.textViews["communityComposeBody"]
+        body.tap();body.typeText("저장 전 초안")
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Preview does not count as leaving the draft")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.textFields["communityComposeTitle"].value as? String,"초안 제목")
+        XCTAssertEqual(app.textViews["communityComposeBody"].value as? String,"저장 전 초안")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["계속 편집"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].exists)
+        XCTAssertEqual(app.textFields["communityComposeTitle"].value as? String,"초안 제목","Continue editing retains the post draft")
+
+        replaceInput(app.textFields["communityComposeTitle"],"")
+        let postBody=app.textViews["communityComposeBody"]
+        courseReplace("",into:postBody)
+        XCTAssertFalse(app.buttons["communityPreviewButton"].isEnabled,"The reverted title and body leave no publishable draft")
+        app.buttons["뒤로"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Reverting all fields clears the dirty state")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+
+        app.buttons["communityCompose"].tap()
+        replaceInput(app.textFields["communityComposeTitle"],"버릴 초안")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),"Discard follows the original feed destination")
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"The confirmed exit does not reopen the modal")
+    }
+
 
     func testCommunityFeedOpensPostAndAddsLocalComment() {
         launchCommunity("C01")
