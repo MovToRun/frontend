@@ -358,13 +358,34 @@ struct WLocalOTPCodeIssuer {
 }
 enum WPasswordResetCodeResult:Equatable {case accepted,rejected,expired,locked,missing,duplicate}
 struct WPasswordResetCompletionToken:Equatable {let flowID:UUID;let proofID:UUID;let completionID:UUID}
+/// In-process fixture only: avoids reusing demo codes between reset sessions while the app runs.
+/// It is not a security control or a replacement for server-issued OTPs.
+final class WLocalPasswordResetCodeIssuer {
+    private static let codeSpace=1_000_000
+    private var nextValue:Int
+    private var issuedCodes=Set<String>()
+    private var currentCode:String?
+    init(startingAt:Int){nextValue=((startingAt%Self.codeSpace)+Self.codeSpace)%Self.codeSpace}
+    func revokeCurrent(){currentCode=nil}
+    func issueNext()->String?{
+        for _ in 0..<Self.codeSpace {
+            let code=String(format:"%06d",nextValue)
+            nextValue=(nextValue+1)%Self.codeSpace
+            if issuedCodes.insert(code).inserted{currentCode=code;return code}
+        }
+        return nil
+    }
+    func matches(_ candidate:String)->Bool{
+        candidate.count==6 && WEmailChallengePolicy.digits(candidate)==candidate && candidate==currentCode
+    }
+}
 struct WPasswordResetSession {
     private(set) var flowID=UUID()
     var email=""
     var code=""
     private(set) var issuedCode=""
     private(set) var issuedAt:Date?
-    private var issuer=WLocalOTPCodeIssuer(startingAt:700_000)
+    private let issuer:WLocalPasswordResetCodeIssuer
     private(set) var attempts=0
     private var lastAttemptedCode:String?
     private(set) var proofID:UUID?
@@ -377,6 +398,8 @@ struct WPasswordResetSession {
     var error=""
     var errorField=""
     var hasProof:Bool{proofID != nil}
+
+    init(issuer:WLocalPasswordResetCodeIssuer){self.issuer=issuer}
 
     mutating func begin(email:String,now:Date=Date())->Bool {
         invalidate();self.email=email.trimmingCharacters(in:.whitespacesAndNewlines)

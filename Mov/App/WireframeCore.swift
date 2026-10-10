@@ -273,12 +273,12 @@ enum WRootTab: Int, CaseIterable {
     var consentTopic="이용약관"
     var nickname="";var introduction="";var region="";var weight=""
     var title="";var memo="";var photo:Data?
-    var challengeIssued:Date?;var challengeCode="482619";var otpCodeIssuer=WLocalOTPCodeIssuer();var passwordReset=WPasswordResetSession()
+    var challengeIssued:Date?;var challengeCode="482619";var otpCodeIssuer=WLocalOTPCodeIssuer();var passwordReset:WPasswordResetSession
     var authErrorField="";var authFilled=false;var authEmail="";var authPassword="";var authConfirm="";var authCurrent="";var revealedFields:Set<String>=[];var settingsGrant=false;var otpSuccess=false;var otpFocused=false;var otpVerifying=false;var otpVerificationID:UUID?;var lastAttemptedOTP:String?;var code="";var codeAttempts=0;var verified=false
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
-    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile()}
+    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
     var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
@@ -298,6 +298,7 @@ enum WRootTab: Int, CaseIterable {
     }
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
     static let passwordResetScreens:Set<String>=["A10","A11","A12","A13","A24","A25","A26","A27","A28"]
+    static let passwordResetCodeIssuer=WLocalPasswordResetCodeIssuer(startingAt:700_000)
     func clearAuthSecrets(preservingOTP:Bool=false){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];if !preservingOTP{code="";otpFocused=false;lastAttemptedOTP=nil}}
     func leaveAuth(for next:String){
         if screen=="A02" && next != "A02",consentSequenceID != nil{consentTerms=consentSequenceOriginalTerms;consentPrivacy=consentSequenceOriginalPrivacy;consentSequenceID=nil;consentBusy=false}

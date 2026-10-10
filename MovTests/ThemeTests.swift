@@ -598,7 +598,7 @@ final class ThemeTests:XCTestCase {
 final class PasswordResetFlowTests:XCTestCase {
     func testResetResendRejectsOldCodeAndAcceptsOnlyCurrentCode() {
         let start=Date(timeIntervalSince1970:1_800_000_000)
-        var reset=WPasswordResetSession()
+        var reset=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000))
         XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
         XCTAssertEqual(reset.issuedCode,"700000")
         let oldCode=reset.issuedCode
@@ -616,23 +616,25 @@ final class PasswordResetFlowTests:XCTestCase {
         let signupCode=try! XCTUnwrap(signup.issueNext())
         XCTAssertEqual(signupCode,"482619")
 
-        var reset=WPasswordResetSession()
+        let issuer=WLocalPasswordResetCodeIssuer(startingAt:700_000)
+        var reset=WPasswordResetSession(issuer:issuer)
         XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
         let firstResetCode=reset.issuedCode
         XCTAssertNotEqual(firstResetCode,signupCode)
         XCTAssertEqual(reset.verify(signupCode,now:start.addingTimeInterval(1)),.rejected)
         XCTAssertEqual(reset.verify(firstResetCode,now:start.addingTimeInterval(2)),.accepted)
 
-        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start.addingTimeInterval(70)))
-        let latestResetCode=reset.issuedCode
-        XCTAssertNotEqual(latestResetCode,firstResetCode)
-        XCTAssertEqual(reset.verify(firstResetCode,now:start.addingTimeInterval(71)),.rejected)
-        XCTAssertEqual(reset.verify(latestResetCode,now:start.addingTimeInterval(72)),.accepted)
+        var nextReset=WPasswordResetSession(issuer:issuer)
+        XCTAssertTrue(nextReset.begin(email:"runner@example.test",now:start.addingTimeInterval(70)))
+        let latestResetCode=nextReset.issuedCode
+        XCTAssertEqual(latestResetCode,"700001")
+        XCTAssertEqual(nextReset.verify(firstResetCode,now:start.addingTimeInterval(71)),.rejected)
+        XCTAssertEqual(nextReset.verify(latestResetCode,now:start.addingTimeInterval(72)),.accepted)
     }
 
     func testResetEmailChangeAndCancellationInvalidateDelayedCompletion() {
         let start=Date(timeIntervalSince1970:1_800_000_000)
-        var reset=WPasswordResetSession()
+        var reset=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000))
         XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
         XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(1)),.accepted)
         let completion=try! XCTUnwrap(reset.beginCompletion())
@@ -653,10 +655,10 @@ final class PasswordResetFlowTests:XCTestCase {
 
     func testResetChallengeExpiryLockAndSharedPasswordPolicy() {
         let start=Date(timeIntervalSince1970:1_800_000_000)
-        var expired=WPasswordResetSession();XCTAssertTrue(expired.begin(email:"runner@example.test",now:start))
+        var expired=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000));XCTAssertTrue(expired.begin(email:"runner@example.test",now:start))
         XCTAssertEqual(expired.verify(expired.issuedCode,now:start.addingTimeInterval(300)),.expired)
         XCTAssertTrue(expired.resend(now:start.addingTimeInterval(300)),"Expired challenges can recover by resending after the cooldown")
-        var locked=WPasswordResetSession();XCTAssertTrue(locked.begin(email:"runner@example.test",now:start))
+        var locked=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000));XCTAssertTrue(locked.begin(email:"runner@example.test",now:start))
         for n in 0..<WEmailChallengePolicy.maximumAttempts {
             XCTAssertEqual(locked.verify(String(format:"%06d",100_000+n),now:start.addingTimeInterval(Double(n+1))),n==WEmailChallengePolicy.maximumAttempts-1 ? .locked:.rejected)
         }
