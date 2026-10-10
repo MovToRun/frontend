@@ -1,5 +1,7 @@
 import SwiftUI
 
+enum WCommunityDiscardContext:Equatable {case profile,crew}
+
 enum WWireDefaults {
     static func resolve(arguments:[String] = ProcessInfo.processInfo.arguments)->(defaults:UserDefaults,suiteName:String?) {
         if let index=arguments.firstIndex(of:"-wire-test-store-suite"),arguments.indices.contains(index+1),!arguments[index+1].isEmpty {
@@ -298,7 +300,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityReportError=""
     var communityMoreMenu:WCommunityMoreMenu?
     var communityModerationDialog:WCommunityModerationDialog?
-    let communityViewerMemberID="fixture-member-current"
+    var communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
     var communityDraftBoard="러닝 인증"
@@ -331,8 +333,20 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewBoardID="dawn-board-0"
     var communityCrewJoinMemo=""
     var communityCrewJoinError=""
-    var communityCrewApplications:[WCommunityCrewApplication]=[]
+    var communityCrewApplications=WCommunityCrewFixtures.applications
     var communityJoinedCrewIDs:Set<String>=["dawn"]
+    var communityCrewOverrides:[String:WCommunityCrew]=[:]
+    var communityLocalCrews:[WCommunityCrew]=[]
+    var communityCrewDraftID:String?
+    var communityCrewDraftName=""
+    var communityCrewDraftIntroduction=""
+    var communityCrewDraftRegion="모브시 중앙"
+    var communityCrewDraftRank=0
+    var communityCrewDraftPhoto:Data?
+    var communityCrewDraftError=""
+    var communityCrewNameCheck=""
+    var communityCrewReviewApplicationID="fixture-request-dawn-early"
+    var communityCrewReviewError=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -459,8 +473,11 @@ struct WireframeRoot:View {
     @State var selectedPointCategory:WPointCategory = .image
     @State var selectedPointKind:WPointKind = .all
     @State var showingPointPurchaseConfirmation=false
-    @State var showingCommunityProfileDiscardConfirmation=false
+    @State var showingCommunityDiscardConfirmation=false
+    @State var communityDiscardContext:WCommunityDiscardContext?
     @State var communityProfileExitDestination:String?
+    @State var communityCrewExitDestination:String?
+    @State var communityCrewDraftOriginal:WCommunityCrewDraftSnapshot?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -493,9 +510,19 @@ struct WireframeRoot:View {
                 nav
             }.opacity(isRoot && !splash ? 1:0).allowsHitTesting(isRoot && !splash).accessibilityHidden(!isRoot || splash).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
             if !isRoot && !splash {
-                screenView.id(["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen) ? "run-map":ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
-                    .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
-                    .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                if ui.screen=="C20" {
+                    VStack(spacing:0){
+                        screenView.id(ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
+                            .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
+                            .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                            .frame(maxHeight:.infinity)
+                        nav
+                    }.zIndex(10)
+                }else{
+                    screenView.id(["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen) ? "run-map":ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
+                        .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
+                        .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                }
             }
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}
             if splash {WSplash().frame(maxWidth:.infinity,maxHeight:.infinity).background(W.paper)}
@@ -504,6 +531,7 @@ struct WireframeRoot:View {
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
             .task{
                 let args=ProcessInfo.processInfo.arguments
+                if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
@@ -532,20 +560,29 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
             .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
-            .alert("변경사항을 버릴까요?",isPresented:$showingCommunityProfileDiscardConfirmation){
-                Button("계속 편집",role:.cancel){communityProfileExitDestination=nil}
-                Button("버리기",role:.destructive){discardCommunityProfileDraftAndExit()}
-            }message:{Text("저장하지 않은 프로필 변경사항이 있어요.")}
+            .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
+            .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
+            .alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
+                Button("계속 편집",role:.cancel){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityDiscardContext=nil}
+                Button("버리기",role:.destructive){
+                    switch communityDiscardContext {
+                    case .some(.profile):discardCommunityProfileDraftAndExit()
+                    case .some(.crew):discardCommunityCrewDraftAndExit()
+                    case nil:break
+                    }
+                    communityDiscardContext=nil
+                }
+            }message:{Text(communityDiscardContext == .profile ? "저장하지 않은 프로필 변경사항이 있어요.":"저장하지 않은 크루 수정사항이 있어요.")}
     }
-    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};performNavigation(route)}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};performNavigation(route)}
     func performNavigation(_ route:String){if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
-    func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};performBack()}
+    func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};performBack()}
     func performBack(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
-    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
+    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func requestCommunityProfileExit(destination:String){
         guard ui.communityProfileEditing else{completeCommunityProfileExit(destination);return}
         guard communityProfileDraftHasChanges() else{ui.communityProfileEditing=false;ui.error="";completeCommunityProfileExit(destination);return}
-        communityProfileExitDestination=destination;showingCommunityProfileDiscardConfirmation=true
+        communityProfileExitDestination=destination;communityDiscardContext = .profile;showingCommunityDiscardConfirmation=true
     }
     func discardCommunityProfileDraftAndExit(){
         ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo);ui.error="";ui.communityProfileEditing=false
@@ -553,6 +590,26 @@ struct WireframeRoot:View {
         if let destination{completeCommunityProfileExit(destination)}
     }
     func completeCommunityProfileExit(_ destination:String){
+        if destination=="stay"{return}
+        if destination=="back"{performBack();return}
+        if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
+        if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
+    }
+    func communityCrewDraftHasChanges()->Bool {
+        WCommunityCrewPolicy.draftHasChanges(communityCrewDraftOriginal,name:ui.communityCrewDraftName,introduction:ui.communityCrewDraftIntroduction,region:ui.communityCrewDraftRegion,minimumRank:ui.communityCrewDraftRank,photoData:ui.communityCrewDraftPhoto)
+    }
+    func requestCommunityCrewExit(destination:String){
+        guard ui.communityCrewDraftID != nil else{completeCommunityCrewExit(destination);return}
+        guard communityCrewDraftHasChanges() else{communityCrewDraftOriginal=nil;ui.communityCrewDraftID=nil;completeCommunityCrewExit(destination);return}
+        communityCrewExitDestination=destination;communityDiscardContext = .crew;showingCommunityDiscardConfirmation=true
+    }
+    func discardCommunityCrewDraftAndExit(){
+        if let original=communityCrewDraftOriginal{ui.communityCrewDraftName=original.name;ui.communityCrewDraftIntroduction=original.introduction;ui.communityCrewDraftRegion=original.region;ui.communityCrewDraftRank=original.minimumRank;ui.communityCrewDraftPhoto=original.photoData}
+        ui.communityCrewDraftError="";ui.communityCrewNameCheck="";ui.communityCrewDraftID=nil;communityCrewDraftOriginal=nil
+        let destination=communityCrewExitDestination;communityCrewExitDestination=nil
+        if let destination{Task{@MainActor in await Task.yield();completeCommunityCrewExit(destination)}}
+    }
+    func completeCommunityCrewExit(_ destination:String){
         if destination=="stay"{return}
         if destination=="back"{performBack();return}
         if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
@@ -568,14 +625,16 @@ struct WireframeRoot:View {
         if id=="C13"{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID}
     }
     var nav:some View {
-        HStack(spacing:0){
+        let tabsEnabled=isRoot || ui.screen=="C20"
+        return HStack(spacing:0){
             ForEach(WRootTab.allCases,id:\.rawValue){tab in
                 let index=tab.rawValue
+                let selected=isRoot ? ui.rootIndex==index:ui.screen=="C20" && tab == .community
                 Button{selectRootTab(tab.route)}label:{
                     VStack(spacing:3){
                         ZStack{
                             Color.clear.frame(height:3)
-                            if ui.screen==tab.route || (tab == .run && ["H02","H05"].contains(ui.screen)){
+                            if selected || ui.screen==tab.route || (tab == .run && ["H02","H05"].contains(ui.screen)){
                                 Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)
                             }
                         }
@@ -584,7 +643,7 @@ struct WireframeRoot:View {
                         else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
                         if let caption=tab.caption {
                             Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
-                                .foregroundStyle(isRoot && ui.rootIndex==index ? W.ink:W.muted)
+                                .foregroundStyle(selected ? W.ink:W.muted)
                                 .accessibilityIdentifier("tab-caption-\(index)")
                         } else {
                             Text("홈").font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
@@ -596,15 +655,15 @@ struct WireframeRoot:View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.title)
                 .accessibilityIdentifier("tab-\(index)")
-                .accessibilityAddTraits(isRoot && ui.rootIndex==index ? .isSelected:[])
+                .accessibilityAddTraits(selected ? .isSelected:[])
             }
         }
         .padding(.horizontal,8).background(W.paper).overlay(alignment:.top){W.line.frame(height:1)}
         // The run map takes over the full viewport. Keep the hidden tab bar out
         // of VoiceOver and hit testing while a run is active; otherwise its
         // invisible bottom hit region can cover the compact run controls.
-        .accessibilityHidden(!isRoot || splash)
-        .allowsHitTesting(isRoot && !splash)
+        .accessibilityHidden(!tabsEnabled || splash)
+        .allowsHitTesting(tabsEnabled && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
     func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil)->some View {let unread = ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
@@ -656,6 +715,9 @@ struct WireframeRoot:View {
         case "C17":communityCrewJoinForm
         case "C18":communityCrewApplicationStatus
         case "C19":communityCrewBoard
+        case "C20":communityCrewEditor
+        case "C21":communityCrewManagement
+        case "C22":communityCrewApplicationReview
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections

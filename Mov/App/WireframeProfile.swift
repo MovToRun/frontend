@@ -141,6 +141,24 @@ struct WAvatarEditor:View {
         if !message.isEmpty{WNotice(text:message,danger:true)}
     }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height)else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}.onAppear{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-photo-crop-fixture"){draft=WProfilePhotoPolicy.reviewCaptureFixture()}}}
 }
+struct WCommunityCrewPhotoPicker:View {
+    @Binding var data:Data?
+    @State private var item:PhotosPickerItem?
+    @State private var image:UIImage?
+    @State private var message=""
+    var body:some View {
+        VStack(alignment:.leading,spacing:10){
+            Group{
+                if let image{Image(uiImage:image).resizable().scaledToFill()}
+                else if let data,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}
+                else{ZStack{RoundedRectangle(cornerRadius:16).fill(W.soft);Image(systemName:"person.3.fill").font(.system(size:34)).foregroundStyle(W.muted)}}
+            }.frame(maxWidth:.infinity).frame(height:155).clipped().clipShape(RoundedRectangle(cornerRadius:16)).accessibilityIdentifier("communityCrewPhotoPreview")
+            PhotosPicker(selection:$item,matching:.images){Label(data == nil ? "크루 사진 선택":"사진 바꾸기",systemImage:"photo").font(W.font(13,.medium)).frame(maxWidth:.infinity,minHeight:46).background(W.soft,in:RoundedRectangle(cornerRadius:10))}.accessibilityIdentifier("communityCrewPhotoPicker")
+            Text("사진 원본 20 MB 이하 · 기기 안 예시로만 사용돼요.").font(W.font(11)).foregroundStyle(W.muted)
+            if !message.isEmpty{WNotice(text:message,danger:true).accessibilityIdentifier("communityCrewPhotoError")}
+        }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let decoded=UIImage(data:imported.data),let cgImage=decoded.cgImage,WProfilePhotoPolicy.accepts(width:cgImage.width,height:cgImage.height)else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return};data=imported.data;image=decoded;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}
+    }
+}
 struct WPhotoCrop:View {
     var image:UIImage
     var updatePhoto:(Data)->Void
@@ -260,7 +278,7 @@ enum WProfilePhotoPolicy {
     }
 }
 
-private struct WImportedProfilePhoto:Transferable {
+struct WImportedProfilePhoto:Transferable {
     let data:Data
     static var transferRepresentation:some TransferRepresentation {
         FileRepresentation(importedContentType:.image){received in

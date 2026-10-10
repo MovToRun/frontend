@@ -67,6 +67,14 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:dawn,viewerID:viewer,rank:1,memo:"",current:nil),.alreadyMember)
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:WCommunityCrewApplication(id:"pending",crewID:river.id,applicantMemberID:viewer,memo:"",status:.pending)),.alreadyPending)
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:full,viewerID:viewer,rank:4,memo:"",current:nil),.full)
+        XCTAssertEqual(full.memberIDs.count,WCommunityCrewPolicy.memberCapacity)
+        XCTAssertTrue(full.memberIDs.contains(full.ownerMemberID),"The owner is included in the 20-member limit")
+        let rejectedAt=Date(timeIntervalSince1970:1_000_000)
+        let rejected=WCommunityCrewApplication(id:"rejected",crewID:river.id,applicantMemberID:viewer,memo:"",status:.rejected,rejectedAt:rejectedAt)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:rejected,now:rejectedAt.addingTimeInterval(WCommunityCrewPolicy.rejectionCooldown-1)),.rejectedRecently)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:rejected,now:rejectedAt.addingTimeInterval(WCommunityCrewPolicy.rejectionCooldown)),.ready,"Exactly 24 hours has elapsed")
+        let cancelled=WCommunityCrewApplication(id:"cancelled",crewID:river.id,applicantMemberID:viewer,memo:"",status:.cancelled)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:cancelled,now:rejectedAt.addingTimeInterval(60)),.ready,"Cancellation allows an immediate new application")
         let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:3,tags:[],boards:[],posts:[])
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:rankLimited,viewerID:viewer,rank:1,memo:"",current:nil),.rankRequired)
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:String(repeating:"가",count:301),current:nil),.invalidMemo)
@@ -79,6 +87,47 @@ final class ThemeTests:XCTestCase {
         XCTAssertTrue(WCommunityCrewPolicy.canReadBoard(crew:river,memberIDs:[river.id],viewerID:viewer))
         XCTAssertTrue(dawn.posts.contains{$0.boardID==dawn.boards[0].id && $0.title=="이번 주 러닝 안내"})
         XCTAssertFalse(river.posts.contains{$0.boardID==dawn.boards[0].id},"Crew board content stays scoped to its own crew")
+    }
+
+    func testCommunityCrewCreateAndEditPolicyUsesLocalReviewRules() {
+        let dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,river=WCommunityCrewFixtures.values.first{$0.id=="river"}!,viewer="fixture-member-current"
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"새벽 크루",introduction:"함께 천천히 달려요.",region:"모브시 중앙",minimumRank:0,existing:[dawn,river],editingID:nil,viewerID:viewer),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"  모브   새벽 크루 ",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.duplicateName)
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"MÖVE RUN CLUB",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[WCommunityCrew(id:"english",name:"möve run club",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:0,tags:[],boards:[],posts:[])],editingID:nil,viewerID:viewer),.duplicateName,"NFC and English case variants share one canonical name")
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.invalidName)
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"새 크루",introduction:String(repeating:"가",count:301),region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.invalidIntroduction)
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"크루",introduction:"소개",region:"없는 지역",minimumRank:0,existing:[],editingID:nil,viewerID:viewer),.invalidRegion)
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"강변 크루",introduction:"소개",region:"모브시 강변",minimumRank:0,existing:[river],editingID:river.id,viewerID:viewer),.unauthorized)
+    }
+
+    func testCommunityCrewReviewEnforcesManagerCapacityAndApplicantRank() {
+        let dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,request=WCommunityCrewFixtures.applications[0],viewer="fixture-member-current"
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:dawn,applicantRank:1,viewerID:viewer,approve:true),.approved)
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:dawn,applicantRank:1,viewerID:"fixture-member-early",approve:true),.unauthorized)
+        var operatorManaged=dawn;operatorManaged.operatorMemberIDs.insert("fixture-operator")
+        XCTAssertTrue(WCommunityCrewPolicy.canManage(operatorManaged,viewerID:"fixture-operator"))
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:operatorManaged,applicantRank:1,viewerID:"fixture-operator",approve:false),.rejected)
+        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:3,tags:[],boards:[],posts:[])
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:WCommunityCrewApplication(id:"rank-request",crewID:"rank",applicantMemberID:"fixture-member-early",memo:"",status:.pending),crew:rankLimited,applicantRank:1,viewerID:viewer,approve:true),.rankRequired)
+        let full=WCommunityCrew(id:"full",name:"정원 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer] + (1..<WCommunityCrewPolicy.memberCapacity).map{"member\($0)"},minimumRank:0,tags:[],boards:[],posts:[])
+        XCTAssertEqual(full.memberIDs.count,WCommunityCrewPolicy.memberCapacity)
+        XCTAssertTrue(full.memberIDs.contains(full.ownerMemberID))
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:WCommunityCrewApplication(id:"full-request",crewID:"full",applicantMemberID:"fixture-member-early",memo:"",status:.pending),crew:full,applicantRank:1,viewerID:viewer,approve:true),.full)
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:WCommunityCrewApplication(id:"done",crewID:"dawn",applicantMemberID:"fixture-member-early",memo:"",status:.rejected),crew:dawn,applicantRank:1,viewerID:viewer,approve:false),.notPending)
+        var nineteen=dawn;nineteen.memberIDs=[viewer] + (1..<19).map{"member\($0)"}
+        let approval=WCommunityCrewApplication(id:"last-seat",crewID:dawn.id,applicantMemberID:"fixture-member-early",memo:"",status:.pending)
+        XCTAssertEqual(nineteen.memberIDs.count,19)
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:approval,crew:nineteen,applicantRank:1,viewerID:viewer,approve:true),.approved)
+        nineteen.memberIDs.append(approval.applicantMemberID)
+        XCTAssertEqual(nineteen.memberIDs.count,20)
+        let nextApproval=WCommunityCrewApplication(id:"next-seat",crewID:dawn.id,applicantMemberID:"another-applicant",memo:"",status:.pending)
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:nextApproval,crew:nineteen,applicantRank:1,viewerID:viewer,approve:true),.full,"A subsequent approval cannot exceed 20 total members")
+        var resolved=approval;resolved.status = .approved
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:resolved,crew:nineteen,applicantRank:1,viewerID:viewer,approve:true),.notPending,"An already resolved application cannot be approved twice")
+        var rejected=approval;rejected.status = .rejected;rejected.rejectedAt=Date()
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:rejected,crew:dawn,applicantRank:1,viewerID:viewer,approve:false),.notPending,"A repeated rejection does not rewrite an already resolved decision")
+        XCTAssertFalse(WCommunityCrewPolicy.canManage(dawn,viewerID:"ordinary-member"))
+        XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:approval,crew:dawn,applicantRank:1,viewerID:"ordinary-member",approve:false),.unauthorized)
     }
 
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
