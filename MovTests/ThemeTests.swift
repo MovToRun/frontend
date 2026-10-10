@@ -158,6 +158,43 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:String(repeating:"가",count:300)),.ready)
     }
 
+    func testCommunityCrewBoardArchiveAndRestoreUseActiveFiveBoardLimit() {
+        let owner="fixture-member-current",dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!
+        let archived=WCommunityCrewBoard(id:"archived",title:"기존 글 보관",status:.archived)
+        var fourActive=dawn;fourActive.boards.append(archived)
+        XCTAssertEqual(WCommunityCrewPolicy.activeBoardCount(in:fourActive),4)
+        XCTAssertEqual(WCommunityCrewPolicy.boardCreateResult(crew:fourActive,actorID:owner,name:"새 게시판"),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.boardRestoreResult(crew:fourActive,actorID:owner,boardID:archived.id),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.boardArchiveResult(crew:fourActive,actorID:owner,boardID:dawn.boards[1].id),.ready,"A board with posts may be archived without deleting its content")
+
+        var fiveActive=fourActive
+        fiveActive.boards.append(WCommunityCrewBoard(id:"fifth",title:"다섯 번째"))
+        XCTAssertEqual(WCommunityCrewPolicy.activeBoardCount(in:fiveActive),5)
+        XCTAssertEqual(WCommunityCrewPolicy.boardCreateResult(crew:fiveActive,actorID:owner,name:"여섯 번째"),.activeLimit)
+        XCTAssertEqual(WCommunityCrewPolicy.boardRestoreResult(crew:fiveActive,actorID:owner,boardID:archived.id),.activeLimit)
+        XCTAssertEqual(WCommunityCrewPolicy.boardCreateResult(crew:fiveActive,actorID:"fixture-member-early",name:"일반 멤버"),.unauthorized)
+    }
+
+    func testCommunityCrewBoardNamesMatchBackendGraphemeLimitAndArchivedBoardsCannotBeRenamed() {
+        let owner="fixture-member-current",dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!
+        XCTAssertEqual(WCommunityCrewPolicy.boardRenameResult(crew:dawn,actorID:owner,boardID:dawn.boards[1].id,name:String(repeating:"가",count:60)),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.boardRenameResult(crew:dawn,actorID:owner,boardID:dawn.boards[1].id,name:String(repeating:"가",count:61)),.invalidName)
+        var archived=dawn;archived.boards[1].status = .archived
+        XCTAssertEqual(WCommunityCrewPolicy.boardRenameResult(crew:archived,actorID:owner,boardID:dawn.boards[1].id,name:"이름 변경"),.archivedBoard)
+        XCTAssertEqual(WCommunityCrewPolicy.boardRenameResult(crew:dawn,actorID:owner,boardID:"missing",name:"이름 변경"),.missingBoard)
+    }
+
+    func testCommunityCrewGuidanceAndLocalAnnouncementStayWithinBackendLimits() {
+        let owner="fixture-member-current",crew=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!
+        XCTAssertEqual(WCommunityCrewPolicy.guidanceLimit,500)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:owner,title:"토요일 모임",text:"아침 8시에 만나요."),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:"fixture-member-early",title:"토요일 모임",text:"아침 8시에 만나요."),.unauthorized)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:owner,title:"",text:"내용"),.emptyTitle)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:owner,title:"제목",text:" \n "),.emptyText)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:owner,title:String(repeating:"가",count:61),text:"내용"),.titleTooLong)
+        XCTAssertEqual(WCommunityCrewPolicy.announcementResult(crew:crew,actorID:owner,title:"제목",text:String(repeating:"가",count:301)),.textTooLong)
+    }
+
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
         var state=WCommunityVerificationState()
         XCTAssertEqual(state.submit(" \n "),.invalidActivity)

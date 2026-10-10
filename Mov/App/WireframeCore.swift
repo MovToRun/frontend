@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum WCommunityDiscardContext:Equatable {case profile,crew}
+enum WCommunityDiscardContext:Equatable {case profile,crew,crewManage}
 
 enum WWireDefaults {
     static func resolve(arguments:[String] = ProcessInfo.processInfo.arguments)->(defaults:UserDefaults,suiteName:String?) {
@@ -351,6 +351,9 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewMemberWarningDraft=""
     var communityCrewMemberFeedback=""
     var communityCrewMemberError=""
+    var communityCrewManageDraft:WCommunityCrewManageDraft?
+    var communityCrewManageError=""
+    var communityCrewManageFeedback=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -483,6 +486,9 @@ struct WireframeRoot:View {
     @State var communityCrewExitDestination:String?
     @State var communityCrewDraftOriginal:WCommunityCrewDraftSnapshot?
     @State var showingCommunityCrewKickConfirmation=false
+    @State var communityCrewManageExitDestination:String?
+    @State var showingCrewBoardArchiveConfirmation=false
+    @State var communityCrewPendingArchiveBoardID:String?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -568,23 +574,27 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
             .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
             .onChange(of:ui.communityCrewMemberWarningDraft){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.memberWarningLimit);if limited != value{ui.communityCrewMemberWarningDraft=limited}}
+            .onChange(of:ui.communityCrewManageDraft?.name ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.boardNameLimit);if limited != value{draft.name=limited;ui.communityCrewManageDraft=draft}}
+            .onChange(of:ui.communityCrewManageDraft?.title ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.announcementTitleLimit);if limited != value{draft.title=limited;ui.communityCrewManageDraft=draft}}
+            .onChange(of:ui.communityCrewManageDraft?.text ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limit=draft.kind == .guidance ? WCommunityCrewPolicy.guidanceLimit:WCommunityCrewPolicy.announcementTextLimit;let limited=WCommunityTextLimit.apply(value,limit:limit);if limited != value{draft.text=limited;ui.communityCrewManageDraft=draft}}
             .alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
-                Button("계속 편집",role:.cancel){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityDiscardContext=nil}
+                Button("계속 편집",role:.cancel){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityDiscardContext=nil}
                 Button("버리기",role:.destructive){
                     switch communityDiscardContext {
                     case .some(.profile):discardCommunityProfileDraftAndExit()
                     case .some(.crew):discardCommunityCrewDraftAndExit()
+                    case .some(.crewManage):discardCommunityCrewManageDraftAndExit()
                     case nil:break
                     }
                     communityDiscardContext=nil
                 }
-            }message:{Text(communityDiscardContext == .profile ? "저장하지 않은 프로필 변경사항이 있어요.":"저장하지 않은 크루 수정사항이 있어요.")}
+            }message:{Text(communityDiscardContext == .profile ? "저장하지 않은 프로필 변경사항이 있어요.":communityDiscardContext == .crewManage ? "저장하지 않은 관리 변경사항이 있어요.":"저장하지 않은 크루 수정사항이 있어요.")}
     }
-    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};performNavigation(route)}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return};performNavigation(route)}
     func performNavigation(_ route:String){if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
-    func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};performBack()}
+    func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};performBack()}
     func performBack(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
-    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
+    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func requestCommunityProfileExit(destination:String){
         guard ui.communityProfileEditing else{completeCommunityProfileExit(destination);return}
         guard communityProfileDraftHasChanges() else{ui.communityProfileEditing=false;ui.error="";completeCommunityProfileExit(destination);return}
@@ -616,6 +626,22 @@ struct WireframeRoot:View {
         if let destination{Task{@MainActor in await Task.yield();completeCommunityCrewExit(destination)}}
     }
     func completeCommunityCrewExit(_ destination:String){
+        if destination=="stay"{return}
+        if destination=="back"{performBack();return}
+        if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
+        if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
+    }
+    func requestCommunityCrewManageExit(destination:String){
+        guard let draft=ui.communityCrewManageDraft else{completeCommunityCrewManageExit(destination);return}
+        guard draft.hasChanges else{ui.communityCrewManageDraft=nil;ui.communityCrewManageError="";completeCommunityCrewManageExit(destination);return}
+        communityCrewManageExitDestination=destination;communityDiscardContext = .crewManage;showingCommunityDiscardConfirmation=true
+    }
+    func discardCommunityCrewManageDraftAndExit(){
+        ui.communityCrewManageDraft=nil;ui.communityCrewManageError=""
+        let destination=communityCrewManageExitDestination;communityCrewManageExitDestination=nil
+        if let destination{Task{@MainActor in await Task.yield();completeCommunityCrewManageExit(destination)}}
+    }
+    func completeCommunityCrewManageExit(_ destination:String){
         if destination=="stay"{return}
         if destination=="back"{performBack();return}
         if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
@@ -724,6 +750,11 @@ struct WireframeRoot:View {
         case "C20":communityCrewEditor
         case "C21":communityCrewManagement
         case "C22":communityCrewApplicationReview
+        case "C36":communityCrewGuidanceSettings
+        case "C37":communityCrewBoardManagement
+        case "C38":communityCrewBoardEditor
+        case "C39":communityCrewAnnouncementEditor
+        case "C40":communityCrewPendingApplications
         case "C34":communityCrewMemberList
         case "C35":communityCrewMemberDetail
         case "C07":communityCardPreview
