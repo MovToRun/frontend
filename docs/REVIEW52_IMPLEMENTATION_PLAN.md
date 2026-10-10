@@ -31,11 +31,11 @@
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C15–C22`, `C24`, `C26`, `C29`, `C32–C41` 중 미구현 화면입니다. C06 좋아요 목록, C28 설정 진입, C42 차단 해제, C43 최근 활동 및 C10–C14 인증·코스 로컬 흐름을 구현했습니다. 커뮤니티는 백엔드 연결 없이 동작합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C20–C22`, `C24`, `C26`, `C29`, `C32–C41` 중 미구현 화면입니다. C06 좋아요 목록, C15–C19 크루 탐색·가입 신청·회원 전용 예시 게시판, C28 설정 진입, C42 차단 해제, C43 최근 활동 및 C10–C14 인증·코스 로컬 흐름을 구현했습니다. 커뮤니티의 가입 신청·게시판·인증·코스 데이터는 모두 로컬 fixture로 동작하며 백엔드 연결이 아닙니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 C01 feed, C04 post, C06 liked posts, C10–C14 인증·공유 코스 흐름, C28 settings, C42 blocked list, C43 activity history와 PR28 moderation flows는 `WireframeHome.swift`의 로컬 fixture/state로 동작합니다. 나머지 검색·크루 흐름은 후속 범위입니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 C01 feed, C04 post, C06 liked posts, C10–C19 인증·공유 코스·크루 탐색 흐름, C28 settings, C42 blocked list, C43 activity history와 PR28 moderation flows는 `WireframeHome.swift`의 로컬 fixture/state로 동작합니다. 남은 크루 생성·관리와 다른 커뮤니티 화면은 후속 범위입니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -225,11 +225,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C12` | 공유 코스 | `communityCourseDetail` — 코스 요약·작성자·경로·따라달리기 |
 | [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — 승인 로컬 계정·유효 기기 기록 선택·끝 위치 숨김·게시 미리보기 |
 | [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 60배속 로컬 시간축, 재생/정지/처음부터/끝 위치 설정 |
-| [ ] | `C15` | 크루 탐색 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C16` | 크루 소개 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C17` | 크루 가입 신청 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C18` | 가입 신청 상태 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C19` | 크루 게시판 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C15` | 크루 탐색 | `communityCrewOverview` — 나의 크루/찾기, 지역·입문·주말 필터, 신청 상태 진입; 로컬 목록 예시 |
+| [x] | `C16` | 크루 소개 | `communityCrewDetail` — 안내·정원·등급 조건, 가입/게시판 진입; 로컬 fixture |
+| [x] | `C17` | 크루 가입 신청 | `communityCrewJoinForm` — 안내 확인, 선택 메모 300자, 취소/뒤로; 신청은 기기 내 예시 |
+| [x] | `C18` | 가입 신청 상태 | `communityCrewApplicationStatus` — 로컬 대기·취소 상태 및 취소/복귀 전이; 실제 승인 결과 아님 |
+| [x] | `C19` | 크루 게시판 | `communityCrewBoard` — 멤버 여부 검사, 게시판 전환, C05 미리보기 기반 로컬 예시 게시 |
 | [ ] | `C20` | 크루 만들기·수정 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C21` | 크루 관리 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C22` | 가입 신청 검토 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -256,5 +256,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C43` | 내 활동 기록 | `communityActivity` — 본인 로컬 열람 기록, 90일·최대 100개·중복 최신순; 차단 글은 숨김 |
 
 신고는 네 가지 사유와 모든 사유에 사용할 수 있는 선택 상세 입력(최대 300자)을 제공하고, 접수 후 작성자 차단 선택을 표시합니다. 차단하면 해당 사용자의 글·댓글과 양방향 노출을 로컬에서 제한하고 C42에서 해제할 수 있습니다. 신고·차단 상태는 기기 내 fixture이며 서버 전송은 없습니다. C28 개인 목록은 현재 계정의 좋아요 상태와 로컬 열람 이력을 사용합니다. 열람 이력은 메모리 안의 검토 fixture로만 유지하며 실제 개인 정보나 서버 호출은 추가하지 않습니다.
+
+C15–C19는 Review52 원본의 탐색→소개→신청→상태→회원 게시판 흐름을 로컬 예시로 구현합니다. 샘플 가입 크루, 정원·등급 게이트, 신청 대기/취소, 게시판별 샘플 글과 회원용 로컬 글쓰기가 동작합니다. 화면의 표시와 가입·정원·등급 권한은 서버에서 확인한 실제 계정/멤버 상태가 아닙니다. C10–C14의 인증 신청·승인과 코스 공유·재생도 현재 로컬 흐름이며 실제 계정 인증, 서버 게시, GPS/위치 수집, 다른 사용자와의 실시간 공유가 아닙니다. 실제 서비스 연결 전에는 크루 검색/상세/신청 API 계약, 사용자 신원과 역할·가입 상태 권위, 승인/취소/알림 전이, 멤버 전용 게시판 권한 검사와 서버 데이터 처리 정책이 필요합니다. 다음 크루 묶음은 `C20–C22`(크루 생성/수정, 관리, 가입 신청 검토)이며, 해당 정책·서버 권한은 로컬 예시와 분리해 확인해야 합니다. 이번 묶음의 source-to-app 픽셀·모션 대조는 아직 수행하지 않았습니다.
 
 인증·가입·비밀번호 재설정 화면은 서버/API나 실제 이메일 발송에 연결되어 있지 않습니다. 재설정 A24–A28은 가입 A19–A23의 검수 규칙과 UI 구조를 재사용하지만 별도 세션·발급기·증명 ID를 사용하며, 가입 상태를 읽거나 변경하지 않습니다. 각 로컬 challenge 안에서 OTP 발급기는 이전에 발행한 여섯 자리 값을 재사용하지 않습니다. 실제 발급·비밀번호 변경 권위는 서버에 두어야 하며, 5분 만료·60초 재요청·5회 잠금은 로컬 검토 흐름으로 보안 인증 구현이 아닙니다. 비밀번호 재설정 완료 화면은 실제 비밀번호나 로그인 상태를 바꾸지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

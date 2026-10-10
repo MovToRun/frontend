@@ -115,7 +115,7 @@ struct WField:View {
     var body:some View {
         VStack(alignment:.leading,spacing:0){
             (Text(label).font(W.font(labelSize,labelSize==13 ? .regular:.medium))+Text(secondaryLabel.isEmpty ? "":"  "+secondaryLabel).font(W.font(10)).foregroundColor(W.muted)).frame(height:labelSize==13 ? 19:21,alignment:.leading).padding(.bottom,8)
-            if multiline{TextEditor(text:$text).font(W.font(textSize)).scrollContentBackground(.hidden).lineSpacing(textSize==16 ? 8:4.2).frame(height:multilineHeight-12).padding(.horizontal,9).padding(.vertical,6).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder))}
+            if multiline{TextEditor(text:$text).font(W.font(textSize)).scrollContentBackground(.hidden).lineSpacing(textSize==16 ? 8:4.2).frame(height:multilineHeight-12).padding(.horizontal,9).padding(.vertical,6).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
             else{TextField(placeholder,text:$text,prompt:placeholderColor.map{Text(placeholder).foregroundColor($0)}).font(W.font(textSize)).padding(14).frame(minHeight:54).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
             if let limit{Text("\(text.count)/\(limit)").font(W.font(11)).foregroundStyle(text.count>limit ? .red:W.muted).frame(maxWidth:.infinity,minHeight:18,alignment:.trailing).padding(.top,6)}
         }
@@ -302,8 +302,10 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
     var communityDraftBoard="러닝 인증"
+    var communityDraftCrewID:String?
     var communityDraftTitle=""
     var communityDraftBody=""
+    var communityLocalCrewPosts:[String:[WCommunityCrewPost]]=[:]
     var communityComment=""
     var communityReplyToID:String?
     var communityError=""
@@ -323,6 +325,14 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCoursePlayback=0.0
     var communityCoursePlaying=false
     var communityCourseError=""
+    var communityCrewTab="my"
+    var communityCrewFilter="내 주변"
+    var communitySelectedCrewID="river"
+    var communityCrewBoardID="dawn-board-0"
+    var communityCrewJoinMemo=""
+    var communityCrewJoinError=""
+    var communityCrewApplications:[WCommunityCrewApplication]=[]
+    var communityJoinedCrewIDs:Set<String>=["dawn"]
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -521,6 +531,7 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
+            .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
             .alert("변경사항을 버릴까요?",isPresented:$showingCommunityProfileDiscardConfirmation){
                 Button("계속 편집",role:.cancel){communityProfileExitDestination=nil}
                 Button("버리기",role:.destructive){discardCommunityProfileDraftAndExit()}
@@ -640,6 +651,11 @@ struct WireframeRoot:View {
         case "C12":communityCourseDetail
         case "C13":communityCourseCompose
         case "C14":communityGhostRun
+        case "C15":communityCrewOverview
+        case "C16":communityCrewDetail
+        case "C17":communityCrewJoinForm
+        case "C18":communityCrewApplicationStatus
+        case "C19":communityCrewBoard
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
