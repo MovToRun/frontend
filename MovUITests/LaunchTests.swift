@@ -158,8 +158,9 @@ import UIKit
         let suite="mov.wireframe.test.review55-a11y3"
         for compact in [false,true] {
             app.terminate()
-            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset","-wire-capture-viewport",
+            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset",
                 "-wire-test-store-suite",suite,"-wire-home-weekly-example","both","-wire-large","-appearance","light"]
+            if !compact { app.launchArguments.append("-wire-capture-viewport") }
             if compact { app.launchArguments.append("-wire-compact-review") }
             app.launch()
             XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
@@ -187,8 +188,11 @@ import UIKit
             XCTAssertLessThanOrEqual(actual.frame.maxX,app.frame.width+1)
             XCTAssertLessThanOrEqual(target.frame.maxX,app.frame.width+1)
             XCTAssertGreaterThan(summary.frame.height,80,"Both summary rows expand to fit large text")
+            if compact {
+                XCTAssertLessThanOrEqual(summary.frame.width,280,"Compact review uses the 320-point viewport with 22-point side gutters")
+            }
             XCTAssertGreaterThanOrEqual(edit.frame.minY,summary.frame.maxY,"Weekly goal action remains below both summary rows")
-            if !compact { capture("H00-review55-accessibility3-top") }
+            capture(compact ? "H00-review55-accessibility3-compact-top" : "H00-review55-accessibility3-top")
             let scroll=app.scrollViews.firstMatch
             XCTAssertTrue(scroll.exists,"Home content remains scrollable at Accessibility3")
             for _ in 0..<6 where !edit.isHittable { scroll.swipeUp() }
@@ -201,7 +205,7 @@ import UIKit
             XCTAssertLessThanOrEqual(actual.frame.maxY,homeTab.frame.minY+1)
             XCTAssertLessThanOrEqual(target.frame.maxY,homeTab.frame.minY+1)
             XCTAssertLessThanOrEqual(timeSummary.frame.maxY,homeTab.frame.minY+1)
-            if !compact { capture("H00-review55-accessibility3-summary") }
+            capture(compact ? "H00-review55-accessibility3-compact-summary" : "H00-review55-accessibility3-summary")
             app.terminate()
         }
         UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
