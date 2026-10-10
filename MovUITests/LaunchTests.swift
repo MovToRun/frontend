@@ -472,6 +472,62 @@ import UIKit
     }
 }
 
+@MainActor final class PasswordResetUITests:XCTestCase {
+    private var app=XCUIApplication()
+    override func setUp(){continueAfterFailure=false}
+    private func launch(_ screen:String="A01",resendReady:Bool=false){
+        app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.password-reset.ui.\(UUID().uuidString)","-wire-reset","-appearance","light"]
+        if resendReady{app.launchArguments.append("-wire-password-reset-resend-ready")}
+        app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:15),app.debugDescription)
+    }
+    private func tap(_ label:String){let button=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).firstMatch;XCTAssertTrue(button.waitForExistence(timeout:5),label);XCTAssertTrue(button.isHittable,label);button.tap()}
+    private func tapPrimary(){let button=app.buttons["authPrimary"];if !button.exists || !button.isHittable{app.scrollViews.firstMatch.swipeUp()};XCTAssertTrue(button.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(button.isHittable,app.debugDescription);button.tap()}
+    private func dismissKeyboard(){let keys=app.keyboards.buttons;let done=keys.matching(NSPredicate(format:"label CONTAINS[c] %@ OR identifier CONTAINS[c] %@","done","done")).firstMatch;let ret=keys.matching(NSPredicate(format:"identifier == %@ OR label == %@","Return","return")).firstMatch;if done.exists{done.tap()}else if ret.exists{ret.tap()}}
+    private func type(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{app.scrollViews.firstMatch.swipeUp()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();element.typeText(value)}
+    private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{app.scrollViews.firstMatch.swipeUp()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
+    func testPasswordResetCompleteFlowAndPasswordPolicy() {
+        launch();tap("비밀번호 찾기")
+        XCTAssertFalse(app.staticTexts["메일·서버 연결 없이 비밀번호 재설정 화면을 확인해요."].exists)
+        XCTAssertFalse(app.staticTexts["실제 주소 대신 example.test 예시 주소를 써 주세요"].exists)
+        tap("가상 예시값 채우기");tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A11"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["새 비밀번호를 설정해요"].exists)
+        XCTAssertTrue(app.staticTexts["계속해서 새 비밀번호를 입력해 주세요."].exists)
+        XCTAssertFalse(app.staticTexts["메일은 발송되지 않았어요."].exists)
+        XCTAssertFalse(app.staticTexts["이 흐름은 UI 데모예요."].exists)
+        tap("계속");XCTAssertTrue(app.descendants(matching:.any)["screen-A24"].waitForExistence(timeout:5))
+        tap("fillDemoResetCode");XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5))
+        type("Invalid",into:app.secureTextFields["reset-new-password"]);tap("reset-new-password-reveal");dismissKeyboard();tapPrimary()
+        XCTAssertTrue(app.staticTexts["8~20자의 영문과 숫자를 포함해 입력해 주세요."].waitForExistence(timeout:5))
+        replace("MovDemo482619",into:app.textFields["reset-new-password"]);type("MovDemo482618",into:app.secureTextFields["reset-confirm-password"]);dismissKeyboard();tapPrimary()
+        XCTAssertTrue(app.staticTexts["비밀번호가 서로 달라요."].waitForExistence(timeout:5))
+        let fillPassword=app.buttons["가상 예시값 채우기"]
+        if !fillPassword.isHittable{app.scrollViews.firstMatch.swipeUp()}
+        tap("가상 예시값 채우기")
+        dismissKeyboard()
+        tapPrimary()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["이제 로그인해 주세요"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["로그인 화면으로 돌아가 계속해 주세요."].exists)
+        XCTAssertFalse(app.staticTexts["실제 비밀번호는 바뀌지 않았어요."].exists)
+        XCTAssertFalse(app.staticTexts["이 흐름은 UI 데모예요."].exists)
+        tap("로그인으로");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+    func testResendRejectsOldCodeAndEmailChangeClearsProofAndBackStack() {
+        launch("A24",resendReady:true)
+        type("482619",into:app.textFields["resetCodeInput"])
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A25"].waitForExistence(timeout:5),"The signup OTP cannot authorize password reset")
+        tap("requestNewResetCode");XCTAssertTrue(app.descendants(matching:.any)["screen-A28"].waitForExistence(timeout:5))
+        type("700000",into:app.textFields["resetCodeInput"])
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A25"].waitForExistence(timeout:5),"The previous reset session code must fail after resend")
+        tap("fillDemoResetCode");XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5))
+        tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-A24"].waitForExistence(timeout:5))
+        tap("changeResetEmail");XCTAssertTrue(app.descendants(matching:.any)["screen-A10"].waitForExistence(timeout:5))
+        tapPrimary();XCTAssertTrue(app.staticTexts["이메일을 입력해 주세요."].waitForExistence(timeout:5))
+        tap("취소");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+}
+
 // Regression coverage for HTML's independent consent topics and fractional run target.
 extension LaunchTests {
     func testConsentTopicAndHalfKilometerGoal() {
@@ -766,8 +822,8 @@ extension LaunchTests {
     func testPasswordResetAndEmailMethodManagement() {
         open("A01");tap("비밀번호 찾기");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A11"].waitForExistence(timeout:5))
-        tap("새 비밀번호 UI 데모");tap("가상 예시값 채우기");tap("authPrimary")
-        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:5))
+        tap("계속");XCTAssertTrue(app.descendants(matching:.any)["screen-A24"].waitForExistence(timeout:5));tap("fillDemoResetCode");XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5));tap("가상 예시값 채우기");tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:10),app.debugDescription)
         tap("로그인으로");XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:5))
         app.terminate();open("T05");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A18"].waitForExistence(timeout:5));tap("로그인 수단 확인")
