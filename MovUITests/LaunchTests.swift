@@ -519,41 +519,119 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
         if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
+        if twoCourseRecords{app.launchArguments.append("-wire-community-course-two-records")}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
     func testCommunityCourseWritingAndFollowPreviewStayLocal() {
-        launchCommunity("C13",verificationStatus:"approved")
+        launchCommunity("C01",verificationStatus:"approved",twoCourseRecords:true)
+        app.buttons["communityStartCourseShare"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5))
+        courseReplace("강변 코스 기록",into:app.textFields["communityCourseName"])
+        courseReplace("강변에서 달리는 예시 코스입니다.",into:app.textViews["communityCourseIntroduction"])
         XCTAssertTrue(app.buttons["communityCoursePreview"].waitForExistence(timeout:5))
-        XCTAssertTrue(app.buttons["communityCoursePreview"].isEnabled,"The reset fixture contains one valid local record")
+        XCTAssertTrue(app.buttons["communityCoursePreview"].isEnabled,"The first eligible fixture record is selectable")
         app.buttons["communityCoursePreview"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"강변 아침 코스")
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"강변 코스 기록")
         XCTAssertTrue(app.otherElements["communityPreviewCourseMap"].exists || app.descendants(matching:.any)["communityPreviewCourseMap"].exists)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5),"Back from preview returns to the same draft")
+        XCTAssertEqual(app.textFields["communityCourseName"].value as? String,"강변 코스 기록")
+        app.buttons["communityCoursePreview"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
         app.buttons["communityCoursePublish"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
-        app.buttons["communityPostOpen-local"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier:"communityPostOpen-local").count,1,"One publish tap creates one local post")
+        app.buttons.matching(identifier:"communityPostOpen-local").element(boundBy:0).tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         app.buttons["communityOpenAttachedCourse"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C12"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityCourseTitle"].label,"강변 아침 코스")
+        XCTAssertEqual(app.staticTexts["communityCourseTitle"].label,"강변 코스 기록")
+        XCTAssertEqual(app.buttons["communityCourseAuthor"].label.contains("새벽러너"),true,"The course uses the actual local publisher profile")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseAuthorBadge"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseSourceRecord"].label.contains("가볍게 달린 아침"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-거리"].label.contains("4.82 km"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-기록 시간"].label.contains("30:08"))
         XCTAssertTrue(app.otherElements["communityCourseMap"].exists || app.descendants(matching:.any)["communityCourseMap"].exists)
+        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+
+        app.buttons["communityStartCourseShare"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5))
+        app.buttons["communityCourseRecordPicker"].tap()
+        let secondRecord=app.buttons["저녁 공원 러닝 · 3.4 km"]
+        XCTAssertTrue(secondRecord.waitForExistence(timeout:5),app.debugDescription)
+        secondRecord.tap()
+        courseReplace("공원 코스 기록",into:app.textFields["communityCourseName"])
+        courseReplace("공원에서 달리는 별도 예시 경로입니다.",into:app.textViews["communityCourseIntroduction"])
+        app.buttons["communityCoursePreview"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"공원 코스 기록")
+        app.buttons["communityCoursePublish"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons.matching(identifier:"communityPostOpen-local").count,2,"Two explicitly published courses remain separately available")
+        app.buttons.matching(identifier:"communityPostOpen-local").element(boundBy:0).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityOpenAttachedCourse"].tap()
+        XCTAssertEqual(app.staticTexts["communityCourseTitle"].label,"공원 코스 기록")
+        XCTAssertEqual(app.buttons["communityCourseAuthor"].label.contains("새벽러너"),true)
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseSourceRecord"].label.contains("저녁 공원 러닝"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-거리"].label.contains("3.4 km"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-기록 시간"].label.contains("15:00"))
         app.buttons["communityCourseFollowRun"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C14"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 30:08")
+        XCTAssertEqual(app.staticTexts["communityGhostCourseTitle"].label,"공원 코스 기록")
+        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 15:00")
         app.buttons["communityGhostPlayPause"].tap()
-        XCTAssertTrue(waitForLayout({self.app.staticTexts["communityGhostClock"].label != "00:00 / 30:08"},timeout:4),"Example playback advances on the local timeline")
+        XCTAssertTrue(waitForLayout({self.app.staticTexts["communityGhostClock"].label != "00:00 / 15:00"},timeout:4),"Example playback advances on the selected course's local timeline")
         app.buttons["communityGhostPlayPause"].tap()
         app.buttons["communityGhostReset"].tap()
-        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 30:08")
+        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 15:00")
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C12"].exists,"Back returns to the course detail")
+        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons.matching(identifier:"communityPostOpen-local").count,2)
+        app.buttons.matching(identifier:"communityPostOpen-local").element(boundBy:1).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityOpenAttachedCourse"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C12"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCourseTitle"].label,"강변 코스 기록")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseSourceRecord"].label.contains("가볍게 달린 아침"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-거리"].label.contains("4.82 km"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-기록 시간"].label.contains("30:08"))
+    }
+
+    func testCommunityCourseCancelAndBackPreserveOnlyUnpublishedDraft() {
+        launchCommunity("C01",verificationStatus:"approved")
+        app.buttons["communityStartCourseShare"].tap()
+        courseReplace("취소할 코스",into:app.textFields["communityCourseName"])
+        courseReplace("게시하지 않을 초안",into:app.textViews["communityCourseIntroduction"])
+        app.buttons["communityCoursePreview"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.textFields["communityCourseName"].value as? String,"취소할 코스")
+        app.buttons["communityCourseCancel"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons.matching(identifier:"communityPostOpen-local").count,0,"Cancelling never publishes a post")
+        app.buttons["communityStartCourseShare"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C13"].waitForExistence(timeout:5),"Cancel cleared its navigation stack")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),"Back from a fresh composer returns to the community root")
+    }
+
+    private func courseReplace(_ value:String,into element:XCUIElement){
+        XCTAssertTrue(element.waitForExistence(timeout:5),app.debugDescription)
+        if !element.isHittable{app.scrollViews.firstMatch.swipeUp()}
+        element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)
     }
 
     func testCommunityCourseWritingRequiresApprovedLocalAccount() {
