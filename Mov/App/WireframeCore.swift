@@ -200,7 +200,7 @@ enum WProfileValidation {
     }
 }
 enum WSignupNicknameValidation {
-    static let reservedNicknames=["달빛러너","RunMate"]
+    static let fixtureNicknames=["달빛러너","RunMate"]
 
     static func normalized(_ value:String)->String {
         let scalars=value.precomposedStringWithCanonicalMapping.unicodeScalars.filter { scalar in
@@ -216,8 +216,11 @@ enum WSignupNicknameValidation {
         let name=normalized(value)
         guard !name.isEmpty else{return "닉네임을 입력해 주세요."}
         guard name.count<=20 else{return "닉네임은 20자까지 입력할 수 있어요."}
-        guard !reservedNicknames.contains(where:{canonical($0)==canonical(name)}) else{return "이미 사용 중인 닉네임이에요."}
         return nil
+    }
+
+    static func fixtureError(for value:String)->String? {
+        fixtureNicknames.contains(where:{canonical($0)==canonical(value)}) ? "검토용 예시 계정에서 사용 중인 닉네임이에요.":nil
     }
 }
 enum WSignupWeightValidation {

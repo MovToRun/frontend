@@ -703,14 +703,15 @@ extension LaunchTests {
         tap("signupContinue")
         XCTAssertTrue(app.staticTexts["닉네임을 입력해 주세요."].waitForExistence(timeout:5))
         replaceInput(nickname,"runmate");tap("signupContinue")
-        XCTAssertTrue(app.staticTexts["이미 사용 중인 닉네임이에요."].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["검토용 예시 계정에서 사용 중인 닉네임이에요."].waitForExistence(timeout:5))
         replaceInput(nickname,"아침러너")
         let weight=app.textFields["signupWeightInput"]
         replaceInput(weight,"19.9");tap("signupContinue")
         XCTAssertTrue(app.staticTexts["20~300 kg 사이로 입력하거나 비워 두세요."].waitForExistence(timeout:5))
         replaceInput(weight,"");tap("signupContinue")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:5))
-        XCTAssertTrue(app.staticTexts["기기 안의 데모 프로필이 준비됐어요.\n실제 회원가입은 하지 않았어요."].exists)
+        XCTAssertTrue(app.staticTexts["준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요."].exists)
+        XCTAssertTrue(app.buttons["시작하기"].exists)
     }
 
     func testLoginFailureScreenCopyAndRetry() {
