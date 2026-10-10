@@ -330,6 +330,30 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityTextLimit.apply(String(repeating:"다",count:301),limit:WCommunityTextLimit.comment).count,300)
     }
 
+    func testCommunityDiscoveryNormalizesQueriesAndKeepsPrivateContentOutOfPublicResults() {
+        func post(_ id:String,board:String="러닝 질문",title:String,hot:Bool=false,crewOnly:Bool=false)->WCommunityPost {
+            WCommunityPost(id:id,authorMemberID:"author-\(id)",author:"러너",rank:"시작러너",board:board,title:title,text:"오늘 강변을 달려요",date:"now",likes:0,views:0,comments:[],hot:hot,isCrewOnly:crewOnly)
+        }
+        let publicHot=post("public-hot",title:"Café 강변",hot:true)
+        let publicRegular=post("public-regular",title:"비 오는 날",hot:false)
+        let anonymous=post("anonymous",board:"익명게시판",title:"Café 비밀",hot:true)
+        let crewOnly=post("crew-only",title:"Café 멤버 글",hot:true,crewOnly:true)
+        let posts=[publicHot,publicRegular,anonymous,crewOnly]
+
+        XCTAssertTrue(WCommunityDiscoveryPolicy.matches("  café  ",query:"CAFE\u{0301}"),"Search trims and compares canonical Unicode text without case sensitivity")
+        XCTAssertTrue(WCommunityDiscoveryPolicy.matches("강변 러닝",query:"강변"),"Composed and decomposed Hangul queries match")
+        XCTAssertFalse(WCommunityDiscoveryPolicy.matches("강변 러닝",query:" \n "),"An empty query never becomes a match-all search")
+        XCTAssertEqual(WCommunityDiscoveryPolicy.searchPosts(posts,query:"café").map(\.id),["public-hot"])
+        XCTAssertEqual(WCommunityDiscoveryPolicy.hotPosts(posts).map(\.id),["public-hot"],"HOT uses only explicit public fixture flags and preserves feed order")
+        XCTAssertTrue(WCommunityDiscoveryPolicy.hotPosts([publicRegular]).isEmpty,"No score or implicit fallback creates HOT entries")
+
+        let runners=[WCommunityRunner(id:"visible",name:"Café Runner",rank:"시작러너",introduction:"",region:"",averageDistance:0,verified:false),WCommunityRunner(id:"blocked",name:"Café Blocked",rank:"시작러너",introduction:"",region:"",averageDistance:0,verified:false)]
+        XCTAssertEqual(WCommunityDiscoveryPolicy.searchRunners(runners,query:"café",blockedIDs:["blocked"]).map(\.id),["visible"])
+        let crew=WCommunityCrew(id:"crew",name:"모브 새벽 크루",introduction:"강변에서 함께 달려요",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:0,tags:[],boards:[],posts:[])
+        let blockedCrew=WCommunityCrew(id:"blocked-crew",name:"모브 강변 크루",introduction:"같이 달려요",region:"",guidance:"",ownerMemberID:"blocked",memberIDs:["blocked"],minimumRank:0,tags:[],boards:[],posts:[])
+        XCTAssertEqual(WCommunityDiscoveryPolicy.searchCrews([crew,blockedCrew],query:"강변",blockedOwnerIDs:["blocked"]).map(\.id),["crew"])
+    }
+
     func testCommunityActivityHistoryIsPrivateRecentDeduplicatedAndBounded() {
         let owner="member-owner",other="member-other"
         let now=ISO8601DateFormatter().date(from:"2026-10-10T00:00:00Z")!

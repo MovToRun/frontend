@@ -286,6 +286,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
     var communitySelectedPostID="p1"
+    var communitySearchQuery=""
     var communitySelectedUserID="fixture-member-ga-on"
     var communityCardOriginScreen="C01"
     var communityCardOriginAnonymous=false
@@ -493,6 +494,7 @@ struct WireframeRoot:View {
     @State var communityCrewPendingCancellationApplicationID:String?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
+    @FocusState var communitySearchFocused:Bool
     @State var splash=true
     @AppStorage("appearance") var appearance="system"
     @Environment(\.accessibilityReduceMotion) var systemMotion
@@ -549,6 +551,7 @@ struct WireframeRoot:View {
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot)}
+                    if reviewTools && args.contains("-wire-community-empty-hot") {for index in ui.communityPosts.indices{ui.communityPosts[index].hot=false}}
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
@@ -768,6 +771,8 @@ struct WireframeRoot:View {
         case "C23":communityReport
         case "C25":communityReportReceipt
         case "C28":communitySettings
+        case "C29":communitySearch
+        case "C41":communityHotPosts
         case "C42":communityBlockedUsers
         case "C43":communityActivity
         case "C02":communityBoards

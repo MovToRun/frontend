@@ -1,5 +1,15 @@
 # Test verification history
 
+## Community discovery and HOT feed (C29, C41)
+
+- Branch: `feature/community-feed-discovery`, based on merged PR #36 main SHA `3d52e241e3010cfadc4c461707c8b416ed9ea730`.
+- Clean build and unit suite: 72/72 unit tests passed on the existing iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). Focused C29/C41 UI suite: 3/3 passed on the same simulator. Both used a temporary source copy with unique app/unit/UI bundle identifiers and fixture-only storage.
+- UI coverage: C01 search entry → C29 query groups → C04 post detail → search return; C29 → C07 profile preview → query return; C29 → C16 crew intro → query return; all-empty search results; C01 → C41 → C04 and back; empty HOT preview/list; and anonymous-post exclusion from public feed, HOT, and search while anonymous detail and block-list masking stay intact.
+- Policy coverage: trimmed NFC normalization and Korean-locale case-insensitive matching, blank-query safety, public-only post search, blocked-profile/crew-owner exclusion, anonymous/crew-only visibility filtering, and explicit HOT flags retaining input order with no score/fallback.
+- Result bundles: `/tmp/mov-community-discovery.rLTh71/CommunityDiscovery-focused.xcresult` (3 passed, 0 failed, 0 skipped); `/tmp/mov-community-discovery.rLTh71/CommunityDiscovery-final3.xcresult` (72 unit tests passed; broad UI run subsequently reported an unrelated auth test failure and was stopped while an unrelated UI case was in progress).
+- The existing `testAuthenticationConsentAndProviderProtection` fails because it expects a `홈으로` control after signup, while the completion screen exposes `시작하기` and has already routed to H00. The same isolated failure reproduces with the merged-main Swift sources and the unchanged test method (`/tmp/mov-community-baseline-check/AuthBaseline.xcresult`), so it is baseline behavior rather than this discovery change.
+- The reference `community-model.js` defines HOT as the public feed filtered by its existing `hot` marker and does not compute a rank. The local screen follows that fixture-only policy; live search and popularity aggregation remain unconnected. This run verifies functional flows, not source/app pixel or motion parity; full visual QA remains open.
+
 ## Crew information and member application list (C32–C33)
 
 - Branch: `feature/community-crew-info-applications`, based on merged PR #35 main SHA `b682c19f34eb9169e3121eb14ed92fa8a0e8a076`.
