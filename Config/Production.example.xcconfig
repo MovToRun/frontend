@@ -1,0 +1,5 @@
+// Copy to Production.local.xcconfig and replace the reserved placeholder after the production API host is agreed.
+MOV_API_ENVIRONMENT = production
+MOV_API_BASE_URL = https:/$()/api.example.invalid/api/v1/
+MOV_API_REQUEST_TIMEOUT_SECONDS = 30
+MOV_API_RESOURCE_TIMEOUT_SECONDS = 60

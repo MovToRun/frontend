@@ -1,0 +1,6 @@
+MOV_API_ENVIRONMENT = development
+MOV_API_BASE_URL =
+MOV_API_REQUEST_TIMEOUT_SECONDS = 30
+MOV_API_RESOURCE_TIMEOUT_SECONDS = 60
+
+#include? "Development.local.xcconfig"
