@@ -616,6 +616,38 @@ import UIKit
         XCTAssertTrue(app.staticTexts["댓글 2"].exists)
     }
 
+    func testCommunityNestedRepliesQuoteParentsAndKeepChildrenWhenDeleted() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCommentAuthorBadge-c1"].waitForExistence(timeout:3),"Post-author comments use the stable member ID to show the badge")
+        app.buttons["communityReply-c1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityReplyComposerTarget"].waitForExistence(timeout:3))
+        let input=app.textFields["communityCommentInput"]
+        input.tap();input.typeText("첫 단계 답글")
+        app.buttons["communityCommentSubmit"].tap()
+        let child=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityReply-"))
+        XCTAssertTrue(child.firstMatch.waitForExistence(timeout:5))
+        child.element(boundBy:1).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityReplyComposerTarget"].waitForExistence(timeout:3))
+        input.tap();input.typeText("한 단계 더 깊은 답글")
+        app.buttons["communityCommentSubmit"].tap()
+        XCTAssertTrue(app.staticTexts["한 단계 더 깊은 답글"].waitForExistence(timeout:5))
+        let grandchildReplyID=String(child.element(boundBy:2).identifier.dropFirst("communityReply-".count))
+        let delete=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityDeleteComment-"))
+        XCTAssertTrue(delete.firstMatch.waitForExistence(timeout:3))
+        let deletedCommentID=String(delete.firstMatch.identifier.dropFirst("communityDeleteComment-".count))
+        delete.firstMatch.tap()
+        let tombstone=app.staticTexts["communityCommentText-\(deletedCommentID)"]
+        XCTAssertTrue(tombstone.waitForExistence(timeout:3))
+        XCTAssertEqual(tombstone.label,"삭제된 댓글입니다")
+        XCTAssertFalse(app.staticTexts["communityCommentAuthorBadge-\(deletedCommentID)"].exists,"Deleted comments do not retain the author badge")
+        XCTAssertTrue(app.staticTexts["한 단계 더 깊은 답글"].exists,"Deleting a parent keeps its descendant visible")
+        let quote=app.descendants(matching:.any)["communityReplyQuote-\(grandchildReplyID)"]
+        XCTAssertTrue(quote.exists)
+        XCTAssertEqual(quote.label,"삭제된 댓글입니다","A quote to a deleted parent must not expose its author")
+    }
+
     func testCommunityBoardRouteAndLocalPostPreviewPublish() {
         app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
         app.launch()

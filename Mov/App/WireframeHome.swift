@@ -2,9 +2,33 @@ import SwiftUI
 
 struct WCommunityComment:Identifiable {
     let id:String
-    let author:String
-    let text:String
+    var author:String
+    var authorMemberID:String?=nil
+    var text:String
     let date:String
+    var parentID:String?=nil
+    var isDeleted=false
+}
+
+enum WCommunityCommentActions {
+    static func add(_ text:String,author:String,authorMemberID:String,date:String,parentID:String?,to comments:inout [WCommunityComment])->Bool {
+        let value=text.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.isEmpty,value.count<=WCommunityTextLimit.comment,
+              parentID == nil || comments.contains(where:{$0.id==parentID}) else{return false}
+        comments.append(WCommunityComment(id:UUID().uuidString,author:author,authorMemberID:authorMemberID,text:value,date:date,parentID:parentID))
+        return true
+    }
+    static func delete(_ id:String,byMemberID memberID:String,to comments:inout [WCommunityComment])->Bool {
+        guard let i=comments.firstIndex(where:{$0.id==id}),comments[i].authorMemberID==memberID,!comments[i].isDeleted else{return false}
+        comments[i].author=""
+        comments[i].authorMemberID=nil
+        comments[i].text=""
+        comments[i].isDeleted=true
+        return true
+    }
+    static func isPostAuthor(_ comment:WCommunityComment,postAuthorMemberID:String)->Bool {
+        !comment.isDeleted && comment.authorMemberID == postAuthorMemberID
+    }
 }
 
 struct WCommunityPost:Identifiable {
@@ -26,7 +50,7 @@ struct WCommunityPost:Identifiable {
 enum WCommunityFixtures {
     static let boards=["러닝 인증","러닝 질문","러닝 정보·팁","러닝화·장비","대회 정보·후기","러닝 메이트 모집","크루 모집","자유게시판","연애","익명게시판"]
     static let posts:[WCommunityPost]=[
-        WCommunityPost(id:"p1",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"노을러너",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
+        WCommunityPost(id:"p1",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
         WCommunityPost(id:"p2",authorMemberID:"fixture-member-no-eul",author:"노을러너",rank:"새싹러너",board:boards[1],title:"비 오는 날에는 어떻게 달리세요?",text:"가볍게 나갈지 실내에서 운동할지 고민이에요. 각자의 방법을 듣고 싶어요.",date:"10.05 08:16",likes:12,views:92,comments:[],hot:true),
         WCommunityPost(id:"p3",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[6],title:"모브 강변 크루에서 함께 달려요",text:"주말 아침에 편하게 만나요. 소개와 가입 안내를 먼저 확인해 주세요.",date:"10.05 07:52",likes:8,views:64,comments:[],hot:true)
     ]
@@ -620,9 +644,31 @@ extension WireframeRoot {
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C01")
     }
     func submitCommunityComment(){
-        let text=ui.communityComment.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !text.isEmpty,text.count<=300,let index=ui.communityPosts.firstIndex(where:{$0.id==ui.communitySelectedPostID})else{ui.communityError="댓글을 입력해 주세요.";return}
-        ui.communityPosts[index].comments.append(WCommunityComment(id:UUID().uuidString,author:"나",text:text,date:"방금 전"));ui.communityComment="";ui.communityError=""
+        guard let index=ui.communityPosts.firstIndex(where:{$0.id==ui.communitySelectedPostID}),
+              WCommunityCommentActions.add(ui.communityComment,author:"나",authorMemberID:ui.communityViewerMemberID,date:"방금 전",parentID:ui.communityReplyToID,to:&ui.communityPosts[index].comments) else{ui.communityError="댓글을 입력해 주세요.";return}
+        ui.communityComment="";ui.communityReplyToID=nil;ui.communityError=""
+    }
+
+    func communityCommentRow(_ comment:WCommunityComment,all:[WCommunityComment],depth:Int)->AnyView {
+        let children=all.filter{$0.parentID==comment.id}
+        return AnyView(VStack(alignment:.leading,spacing:0){
+            VStack(alignment:.leading,spacing:6){
+                if let parentID=comment.parentID,let parent=all.first(where:{$0.id==parentID}) {
+                    HStack(spacing:7){Rectangle().fill(W.border).frame(width:2,height:28);Text(parent.isDeleted ? "삭제된 댓글입니다":"\(parent.author)에게 답글 · \(parent.text)").font(W.font(10)).foregroundStyle(W.muted).lineLimit(2)}
+                        .accessibilityIdentifier("communityReplyQuote-\(comment.id)")
+                }
+                if comment.isDeleted {Text("삭제된 댓글입니다").font(W.font(13)).foregroundStyle(W.muted).italic().accessibilityIdentifier("communityCommentText-\(comment.id)")}
+                else {
+                    HStack(spacing:6){Text(comment.author).font(W.font(12,.semibold));if WCommunityCommentActions.isPostAuthor(comment,postAuthorMemberID:currentCommunityPost()?.authorMemberID ?? ""){Text("작성자").font(W.font(9,.medium)).padding(.horizontal,5).padding(.vertical,2).background(W.soft,in:Capsule()).accessibilityIdentifier("communityCommentAuthorBadge-\(comment.id)")};Spacer();Text(comment.date).font(W.font(10)).foregroundStyle(W.muted)}
+                    Text(comment.text).font(W.font(13)).lineSpacing(4).accessibilityIdentifier("communityCommentText-\(comment.id)")
+                }
+                HStack(spacing:16){Button("답글"){ui.communityReplyToID=comment.id}.font(W.font(11,.medium)).accessibilityIdentifier("communityReply-\(comment.id)")
+                    if comment.authorMemberID==ui.communityViewerMemberID && !comment.isDeleted {Button("삭제"){if let i=ui.communityPosts.firstIndex(where:{$0.id==ui.communitySelectedPostID}){_ = WCommunityCommentActions.delete(comment.id,byMemberID:ui.communityViewerMemberID,to:&ui.communityPosts[i].comments)}}.font(W.font(11)).foregroundStyle(W.muted).accessibilityIdentifier("communityDeleteComment-\(comment.id)")}}
+            }.padding(.vertical,12).padding(.leading,depth == 0 ? 0:14)
+                .overlay(alignment:.leading){if depth>0{Rectangle().fill(W.border).frame(width:1)}}
+            ForEach(children){child in communityCommentRow(child,all:all,depth:depth+1)}
+            W.line.frame(height:1)
+        })
     }
 
     var communityBoards:some View {
@@ -650,12 +696,16 @@ extension WireframeRoot {
                 }.buttonStyle(.plain).padding(.vertical,12).overlay(alignment:.bottom){W.line.frame(height:1)}
                 VStack(alignment:.leading,spacing:0){
                     Text("댓글 \(post.comments.count)").font(W.font(16,.semibold)).padding(.top,8).padding(.bottom,4)
-                    ForEach(post.comments){comment in VStack(alignment:.leading,spacing:6){HStack{Text(comment.author).font(W.font(12,.semibold));Spacer();Text(comment.date).font(W.font(10)).foregroundStyle(W.muted)};Text(comment.text).font(W.font(13)).lineSpacing(4)}.padding(.vertical,14).overlay(alignment:.bottom){W.line.frame(height:1)}}
+                    ForEach(post.comments.filter{$0.parentID==nil}){comment in communityCommentRow(comment,all:post.comments,depth:0)}
                 }
             }actions:{
+                if let parent=post.comments.first(where:{$0.id==ui.communityReplyToID}) {
+                    HStack(spacing:8){Text(parent.isDeleted ? "삭제된 댓글입니다":"\(parent.author)에게 답글 · \(parent.text)").font(W.font(11)).foregroundStyle(W.muted).lineLimit(1);Spacer();Button("취소"){ui.communityReplyToID=nil}.font(W.font(11)).accessibilityIdentifier("communityReplyCancel")}
+                        .accessibilityIdentifier("communityReplyComposerTarget")
+                }
                 TextField("댓글을 남겨 보세요",text:Binding(get:{ui.communityComment},set:{ui.communityComment=WCommunityTextLimit.apply($0,limit:WCommunityTextLimit.comment)})).font(W.font(14)).padding(14).frame(minHeight:50).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityCommentInput").submitLabel(.send).onSubmit{submitCommunityComment()}
                 if !ui.communityError.isEmpty{WText(text:ui.communityError,small:true)}
-                Button("댓글 등록"){submitCommunityComment()}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityComment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityIdentifier("communityCommentSubmit")
+                Button(ui.communityReplyToID == nil ? "댓글 등록":"답글 등록"){submitCommunityComment()}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityComment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityIdentifier("communityCommentSubmit")
             }.onAppear{recordCommunityDetailView(post)}
                 .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
         } else {
