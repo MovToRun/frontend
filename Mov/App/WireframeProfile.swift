@@ -129,6 +129,7 @@ private struct WNotificationList:View {
 }
 struct WAvatarEditor:View {
     @State private var item:PhotosPickerItem?
+    @State private var importGuard=WProfilePhotoImportGuard()
     @Binding var data:Data?
     @State private var draft:UIImage?
     @State private var message=""
@@ -139,25 +140,54 @@ struct WAvatarEditor:View {
         HStack{PhotosPicker(selection:$item,matching:.images){Text(hasPhoto ? "사진 바꾸기":"사진 선택").font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.lime,in:RoundedRectangle(cornerRadius:10)).foregroundStyle(MovTokens.onBrand)};Button("사진 삭제"){data=nil;item=nil;draft=nil}.font(W.font(12,.medium)).frame(minWidth:72,minHeight:24).padding(.horizontal,14).padding(.vertical,10).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.line)).foregroundStyle(hasPhoto ? W.ink:W.muted).disabled(!hasPhoto)}.frame(maxWidth:.infinity)
         Text("사진 원본 20 MB 이하 · HEIC/HEIF 포함\n회전 보정 후 JPEG 최대 1024×1024 · 2 MB 이하").font(W.font(11)).lineSpacing(6).foregroundStyle(W.muted)
         if !message.isEmpty{WNotice(text:message,danger:true)}
-    }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height)else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return};draft=image;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}.onAppear{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-photo-crop-fixture"){draft=WProfilePhotoPolicy.reviewCaptureFixture()}}}
+    }.task(id:item){let request=importGuard.begin();await load(item,request:request)}.onChange(of:item){_,_ in importGuard.invalidate()}.onDisappear{importGuard.invalidate()}.onAppear{if WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-photo-crop-fixture"){draft=WProfilePhotoPolicy.reviewCaptureFixture()}}}
+    private func load(_ selected:PhotosPickerItem?,request:UUID)async {
+        guard let selected,isCurrent(request) else{return}
+        do {
+            guard let imported=try await selected.loadTransferable(type:WImportedProfilePhoto.self) else{if isCurrent(request){message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요."};return}
+            guard isCurrent(request) else{return}
+            guard let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height) else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return}
+            draft=image;message=""
+        } catch {if isCurrent(request){message=error.localizedDescription}}
+    }
+    private func isCurrent(_ request:UUID)->Bool{!Task.isCancelled && importGuard.accepts(request)}
 }
 struct WCommunityCrewPhotoPicker:View {
     @Binding var data:Data?
     @State private var item:PhotosPickerItem?
+    @State private var importGuard=WProfilePhotoImportGuard()
     @State private var image:UIImage?
     @State private var message=""
     var body:some View {
+        let hasPhoto=data != nil
         VStack(alignment:.leading,spacing:10){
             Group{
                 if let image{Image(uiImage:image).resizable().scaledToFill()}
                 else if let data,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}
                 else{ZStack{RoundedRectangle(cornerRadius:16).fill(W.soft);Image(systemName:"person.3.fill").font(.system(size:34)).foregroundStyle(W.muted)}}
             }.frame(maxWidth:.infinity).frame(height:155).clipped().clipShape(RoundedRectangle(cornerRadius:16)).accessibilityIdentifier("communityCrewPhotoPreview")
-            PhotosPicker(selection:$item,matching:.images){Label(data == nil ? "크루 사진 선택":"사진 바꾸기",systemImage:"photo").font(W.font(13,.medium)).frame(maxWidth:.infinity,minHeight:46).background(W.soft,in:RoundedRectangle(cornerRadius:10))}.accessibilityIdentifier("communityCrewPhotoPicker")
+            PhotosPicker(selection:$item,matching:.images){Label(hasPhoto ? "사진 바꾸기":"크루 사진 선택",systemImage:"photo").font(W.font(13,.medium)).frame(maxWidth:.infinity,minHeight:46).background(W.soft,in:RoundedRectangle(cornerRadius:10))}.accessibilityIdentifier("communityCrewPhotoPicker")
             Text("사진 원본 20 MB 이하 · 기기 안 예시로만 사용돼요.").font(W.font(11)).foregroundStyle(W.muted)
             if !message.isEmpty{WNotice(text:message,danger:true).accessibilityIdentifier("communityCrewPhotoError")}
-        }.task(id:item){guard let item else{return};do{guard let imported=try await item.loadTransferable(type:WImportedProfilePhoto.self),!Task.isCancelled,let decoded=UIImage(data:imported.data),let cgImage=decoded.cgImage,WProfilePhotoPolicy.accepts(width:cgImage.width,height:cgImage.height)else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return};data=imported.data;image=decoded;message=""}catch{if !Task.isCancelled{message=error.localizedDescription}}}
+        }.task(id:item){let request=importGuard.begin();await load(item,request:request)}.onChange(of:item){_,_ in importGuard.invalidate()}.onDisappear{importGuard.invalidate()}
     }
+    private func load(_ selected:PhotosPickerItem?,request:UUID)async {
+        guard let selected,isCurrent(request) else{return}
+        do {
+            guard let imported=try await selected.loadTransferable(type:WImportedProfilePhoto.self) else{if isCurrent(request){message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요."};return}
+            guard isCurrent(request) else{return}
+            guard let decoded=UIImage(data:imported.data),let cgImage=decoded.cgImage,WProfilePhotoPolicy.accepts(width:cgImage.width,height:cgImage.height) else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return}
+            data=imported.data;image=decoded;message=""
+        } catch {if isCurrent(request){message=error.localizedDescription}}
+    }
+    private func isCurrent(_ request:UUID)->Bool{!Task.isCancelled && importGuard.accepts(request)}
+}
+
+struct WProfilePhotoImportGuard {
+    private(set) var current:UUID?
+    mutating func begin()->UUID{let request=UUID();current=request;return request}
+    mutating func invalidate(){current=nil}
+    func accepts(_ request:UUID)->Bool{current==request}
 }
 struct WPhotoCrop:View {
     var image:UIImage

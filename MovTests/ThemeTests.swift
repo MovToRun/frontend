@@ -749,6 +749,22 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(detail.height, 266 / 1.65, accuracy: 0.001, "The source detail card keeps a 1.65 ratio")
     }
 
+    func testProfilePhotoImportGuardRejectsLateCompletionAfterReselection() {
+        var guardState=WProfilePhotoImportGuard()
+        let first=guardState.begin()
+        XCTAssertTrue(guardState.accepts(first))
+        let replacement=guardState.begin()
+        XCTAssertFalse(guardState.accepts(first),"A completed older PhotosPicker request cannot replace the latest selection")
+        XCTAssertTrue(guardState.accepts(replacement))
+    }
+
+    func testProfilePhotoImportGuardRejectsCompletionAfterPickerOwnerExits() {
+        var guardState=WProfilePhotoImportGuard()
+        let request=guardState.begin()
+        guardState.invalidate()
+        XCTAssertFalse(guardState.accepts(request),"Leaving the profile or crew editor invalidates its pending import")
+    }
+
     func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
         XCTAssertEqual(WProfilePhotoPolicy.maximumInputBytes,20_000_000)
         XCTAssertEqual(WProfilePhotoPolicy.maximumOutputBytes,2_000_000)
