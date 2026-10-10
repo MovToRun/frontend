@@ -154,6 +154,59 @@ import UIKit
         UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
     }
 
+    func testReview55HomeGoalSelectorAccessibility3ReflowsWithoutClipping() {
+        let suite="mov.wireframe.test.review55-a11y3"
+        for compact in [false,true] {
+            app.terminate()
+            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset","-wire-capture-viewport",
+                "-wire-test-store-suite",suite,"-wire-home-weekly-example","both","-wire-large","-appearance","light"]
+            if compact { app.launchArguments.append("-wire-compact-review") }
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+
+            let distance=app.buttons["homeGoalSelector-distance"]
+            let time=app.buttons["homeGoalSelector-time"]
+            XCTAssertTrue(distance.waitForExistence(timeout:6))
+            XCTAssertTrue(distance.isHittable);XCTAssertTrue(time.isHittable)
+            XCTAssertGreaterThanOrEqual(distance.frame.height,44)
+            XCTAssertGreaterThanOrEqual(time.frame.height,44)
+            XCTAssertLessThan(distance.frame.maxX,time.frame.minX+1,"Selector choices remain side by side without overlapping")
+            XCTAssertGreaterThanOrEqual(distance.frame.minX,0)
+            XCTAssertLessThanOrEqual(time.frame.maxX,app.frame.width)
+
+            let ring=app.descendants(matching:.any)["homeRing-distance"].firstMatch
+            let actual=app.staticTexts["homeSummaryActual-distance"]
+            let target=app.staticTexts["homeSummaryTarget-distance"]
+            let summary=app.descendants(matching:.any)["homeGoalSummaries"]
+            let edit=app.buttons["homeEditWeeklyGoal"]
+            XCTAssertTrue(ring.exists,app.debugDescription)
+            XCTAssertTrue(actual.exists);XCTAssertTrue(target.exists)
+            XCTAssertGreaterThan(actual.frame.height,30,"Summary values scale with Accessibility3 text")
+            XCTAssertGreaterThan(target.frame.height,20,"Summary targets scale with Accessibility3 text")
+            XCTAssertFalse(actual.frame.intersects(target.frame),"Actual and target values reflow vertically rather than overlap")
+            XCTAssertLessThanOrEqual(actual.frame.maxX,app.frame.width+1)
+            XCTAssertLessThanOrEqual(target.frame.maxX,app.frame.width+1)
+            XCTAssertGreaterThan(summary.frame.height,80,"Both summary rows expand to fit large text")
+            XCTAssertGreaterThanOrEqual(edit.frame.minY,summary.frame.maxY,"Weekly goal action remains below both summary rows")
+            if !compact { capture("H00-review55-accessibility3-top") }
+            let scroll=app.scrollViews.firstMatch
+            XCTAssertTrue(scroll.exists,"Home content remains scrollable at Accessibility3")
+            for _ in 0..<6 where !edit.isHittable { scroll.swipeUp() }
+            let distanceSummary=app.descendants(matching:.any)["homeSummary-distance"]
+            let timeSummary=app.descendants(matching:.any)["homeSummary-time"]
+            let homeTab=app.buttons["tab-2"]
+            XCTAssertTrue(actual.isHittable);XCTAssertTrue(target.isHittable)
+            XCTAssertTrue(distanceSummary.isHittable);XCTAssertTrue(timeSummary.isHittable)
+            XCTAssertTrue(edit.isHittable,"The goal action remains reachable after scrolling the expanded home layout")
+            XCTAssertLessThanOrEqual(actual.frame.maxY,homeTab.frame.minY+1)
+            XCTAssertLessThanOrEqual(target.frame.maxY,homeTab.frame.minY+1)
+            XCTAssertLessThanOrEqual(timeSummary.frame.maxY,homeTab.frame.minY+1)
+            if !compact { capture("H00-review55-accessibility3-summary") }
+            app.terminate()
+        }
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
     func testReview52RunPanelAndRecordListDetailAlignment() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))

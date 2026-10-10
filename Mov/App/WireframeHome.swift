@@ -62,6 +62,11 @@ private struct WReview54Arc: Shape {
 }
 
 private struct WReview54RingVisual: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo:.largeTitle) private var largeValueSize:CGFloat = 48
+    @ScaledMetric(relativeTo:.title3) private var compactValueSize:CGFloat = 27
+    @ScaledMetric(relativeTo:.body) private var largeUnitSize:CGFloat = 16
+    @ScaledMetric(relativeTo:.caption) private var compactUnitSize:CGFloat = 12
     let value:String
     let unit:String
     let progress:CGFloat
@@ -70,17 +75,36 @@ private struct WReview54RingVisual: View {
     let accessibilityValue:String
     var reduceMotion:Bool = false
     private var lineWidth:CGFloat { WReview54HomeArc.strokeWidth * size / WReview54HomeArc.viewBoxWidth }
+    @ViewBuilder private var centerMetric:some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing:0) {
+                Text(value)
+                    .font(.system(size:largeValueSize,weight:.semibold))
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.62)
+                    .frame(maxWidth:size*0.9)
+                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
+                if !unit.isEmpty {
+                    Text(unit).font(.system(size:largeUnitSize)).foregroundStyle(W.muted)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .position(x:size/2,y:size*0.47)
+        } else {
+            HStack(alignment:.firstTextBaseline,spacing:4) {
+                Text(value).font(.system(size:size<200 ? compactValueSize:largeValueSize,weight:.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
+                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
+                if !unit.isEmpty { Text(unit).font(.system(size:size<200 ? compactUnitSize:largeUnitSize)).foregroundStyle(W.muted) }
+            }.position(x:size/2,y:size/2)
+        }
+    }
     var body:some View {
         ZStack {
             WReview54Arc().stroke(W.soft,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
             WReview54Arc().trim(from:0,to:progress)
                 .stroke(W.lime,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
                 .animation(reduceMotion ? nil:.easeOut(duration:0.32),value:progress)
-            HStack(alignment:.firstTextBaseline,spacing:4) {
-                Text(value).font(.system(size:size<200 ? 27:48,weight:.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
-                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
-                if !unit.isEmpty { Text(unit).font(.system(size:size<200 ? 12:16)).foregroundStyle(W.muted) }
-            }.position(x:size/2,y:size/2)
+            centerMetric
         }
         .frame(width:size,height:size*WReview54HomeArc.viewBoxHeight/WReview54HomeArc.viewBoxWidth)
         .accessibilityElement(children:.ignore)
@@ -103,6 +127,13 @@ private struct WReview54HomeCTAStyle:ButtonStyle {
 }
 
 private struct WReview55GoalSelector: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo:.caption) private var summaryTitleSize:CGFloat = 12
+    @ScaledMetric(relativeTo:.body) private var summaryActualSize:CGFloat = 13
+    @ScaledMetric(relativeTo:.caption) private var summaryTargetSize:CGFloat = 11
+    @ScaledMetric(relativeTo:.caption2) private var summaryPercentSize:CGFloat = 11
+    @ScaledMetric(relativeTo:.caption2) private var summaryOverageSize:CGFloat = 10
+    @ScaledMetric(relativeTo:.footnote) private var selectorTitleSize:CGFloat = 13
     @State private var selected = "distance"
     let distance: Double
     let minutes: Double
@@ -117,20 +148,39 @@ private struct WReview55GoalSelector: View {
         let actual=unit == "km" ? "\(WReview52StatisticsFormat.kilometers(value)) km" : RunGoal.duration(Int(value))
         let target=unit == "km" ? "\(MovNumber.display(goal)) km" : RunGoal.duration(Int(goal))
         let surplus=value > goal ? (unit == "km" ? "\(MovNumber.display(value-goal)) km 더 달렸어요" : "\(RunGoal.duration(Int(value-goal))) 더 달렸어요") : ""
+        let percent=HStack(spacing:4) {
+            if reached { Image(systemName:"checkmark").foregroundStyle(W.lime).accessibilityHidden(true) }
+            Text("\(percentage)%").monospacedDigit()
+        }.font(.system(size:summaryPercentSize)).accessibilityIdentifier("homeSummaryPercent-\(id)")
         return VStack(alignment:.leading,spacing:0) {
-            HStack(alignment:.firstTextBaseline,spacing:0) {
-                Text(title).font(.system(size:12)).foregroundStyle(W.muted).frame(width:28,alignment:.leading).padding(.trailing,9)
-                Text(actual).font(.system(size:13,weight:.medium)).lineLimit(1).minimumScaleFactor(0.8)
+            if dynamicTypeSize.isAccessibilitySize {
+                HStack(alignment:.firstTextBaseline) {
+                    Text(title).font(.system(size:summaryTitleSize)).foregroundStyle(W.muted)
+                    Spacer(minLength:8)
+                    percent
+                }
+                Text(actual).font(.system(size:summaryActualSize,weight:.medium))
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
                     .accessibilityIdentifier("homeSummaryActual-\(id)")
-                Text(" / \(target)").font(.system(size:11)).foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
+                Text(" / \(target)").font(.system(size:summaryTargetSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
                     .accessibilityIdentifier("homeSummaryTarget-\(id)")
-                Spacer(minLength:8)
-                HStack(spacing:4) {
-                    if reached { Image(systemName:"checkmark").foregroundStyle(W.lime).accessibilityHidden(true) }
-                    Text("\(percentage)%").monospacedDigit()
-                }.font(.system(size:11)).accessibilityIdentifier("homeSummaryPercent-\(id)")
+            } else {
+                HStack(alignment:.firstTextBaseline,spacing:0) {
+                    Text(title).font(.system(size:summaryTitleSize)).foregroundStyle(W.muted).frame(width:28,alignment:.leading).padding(.trailing,9)
+                    Text(actual).font(.system(size:summaryActualSize,weight:.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityIdentifier("homeSummaryActual-\(id)")
+                    Text(" / \(target)").font(.system(size:summaryTargetSize)).foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityIdentifier("homeSummaryTarget-\(id)")
+                    Spacer(minLength:8)
+                    percent
+                }
             }
-            if !surplus.isEmpty { Text(surplus).font(.system(size:10)).foregroundStyle(W.muted).padding(.leading,37).accessibilityIdentifier("homeSummaryOverage-\(id)") }
+            if !surplus.isEmpty {
+                Text(surplus).font(.system(size:summaryOverageSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).padding(.leading,dynamicTypeSize.isAccessibilitySize ? 0:37)
+                    .accessibilityIdentifier("homeSummaryOverage-\(id)")
+            }
         }.padding(.vertical,8)
             .overlay(alignment:.top) { if id == "time" { W.line.frame(height:1) } }
             .accessibilityElement(children:.contain).accessibilityIdentifier("homeSummary-\(id)")
@@ -168,7 +218,7 @@ private struct WReview55GoalSelector: View {
         Button {
             selected=kind
         } label: {
-            Text(title).font(.system(size:13,weight:.medium))
+            Text(title).font(.system(size:selectorTitleSize,weight:.medium)).fixedSize(horizontal:false,vertical:true)
                 .foregroundStyle(selected == kind ? Color(red:32/255,green:41/255,blue:37/255):W.muted)
                 .padding(.horizontal,17).frame(minWidth:76,minHeight:44)
                 .background(selected == kind ? W.lime:Color.clear,in:RoundedRectangle(cornerRadius:11))
@@ -294,13 +344,13 @@ extension WireframeRoot {
                 }.font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,8)
                 if stableReview55Slots {
                     Text(value>target ? (unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요"):"")
-                        .font(.system(size:12)).foregroundStyle(W.muted).frame(height:18,alignment:.leading).padding(.top,3)
+                        .font(.system(size:12)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true).frame(minHeight:18,alignment:.leading).padding(.top,3)
                         .accessibilityIdentifier("homeRingOverage-\(identifier)")
                     Text("").font(.system(size:11)).frame(height:18,alignment:.leading)
                         .accessibilityIdentifier("homeAvailability-\(identifier)")
                 } else if value>target {
                     Text(unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요")
-                        .font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,6)
+                        .font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true).padding(.top,6)
                         .accessibilityIdentifier("homeRingOverage-\(identifier)")
                 }
             }
