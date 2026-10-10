@@ -9,6 +9,7 @@ struct WCommunityComment:Identifiable {
 
 struct WCommunityPost:Identifiable {
     let id:String
+    let authorMemberID:String
     let author:String
     let rank:String
     let board:String
@@ -25,10 +26,37 @@ struct WCommunityPost:Identifiable {
 enum WCommunityFixtures {
     static let boards=["러닝 인증","러닝 질문","러닝 정보·팁","러닝화·장비","대회 정보·후기","러닝 메이트 모집","크루 모집","자유게시판","연애","익명게시판"]
     static let posts:[WCommunityPost]=[
-        WCommunityPost(id:"p1",author:"가온러너",rank:"도전러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"노을러너",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
-        WCommunityPost(id:"p2",author:"노을러너",rank:"새싹러너",board:boards[1],title:"비 오는 날에는 어떻게 달리세요?",text:"가볍게 나갈지 실내에서 운동할지 고민이에요. 각자의 방법을 듣고 싶어요.",date:"10.05 08:16",likes:12,views:92,comments:[],hot:true),
-        WCommunityPost(id:"p3",author:"가온러너",rank:"도전러너",board:boards[6],title:"모브 강변 크루에서 함께 달려요",text:"주말 아침에 편하게 만나요. 소개와 가입 안내를 먼저 확인해 주세요.",date:"10.05 07:52",likes:8,views:64,comments:[],hot:true)
+        WCommunityPost(id:"p1",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[0],title:"오늘은 강변을 따라 5 km",text:"속도보다 일정한 호흡에 집중했어요. 오늘 달린 분들도 수고하셨어요.",date:"10.05 08:30",likes:24,views:138,comments:[WCommunityComment(id:"c1",author:"노을러너",text:"함께 달린 기분이네요!",date:"10.05 08:42")],imageName:"CommunityRiverside",hot:true),
+        WCommunityPost(id:"p2",authorMemberID:"fixture-member-no-eul",author:"노을러너",rank:"새싹러너",board:boards[1],title:"비 오는 날에는 어떻게 달리세요?",text:"가볍게 나갈지 실내에서 운동할지 고민이에요. 각자의 방법을 듣고 싶어요.",date:"10.05 08:16",likes:12,views:92,comments:[],hot:true),
+        WCommunityPost(id:"p3",authorMemberID:"fixture-member-ga-on",author:"가온러너",rank:"도전러너",board:boards[6],title:"모브 강변 크루에서 함께 달려요",text:"주말 아침에 편하게 만나요. 소개와 가입 안내를 먼저 확인해 주세요.",date:"10.05 07:52",likes:8,views:64,comments:[],hot:true)
     ]
+}
+
+enum WCommunityTextLimit {
+    static let title=60
+    static let body=2000
+    static let comment=300
+    static func apply(_ text:String,limit:Int)->String{String(text.prefix(limit))}
+}
+
+/// Review-only provider. It models the server's member/post/KST-day deduplication rule in memory.
+/// It is not an authoritative view counter; production counts must come from the backend response.
+protocol WCommunityViewCountProvider {
+    mutating func recordDetailView(viewerMemberID:String,postID:String,authorMemberID:String,date:Date)->Bool
+}
+
+struct WLocalCommunityViewCountProvider:WCommunityViewCountProvider {
+    private(set) var recordedKeys:Set<String>=[]
+    static let kst=TimeZone(identifier:"Asia/Seoul")!
+
+    mutating func recordDetailView(viewerMemberID:String,postID:String,authorMemberID:String,date:Date)->Bool {
+        guard !viewerMemberID.isEmpty,!postID.isEmpty,viewerMemberID != authorMemberID else{return false}
+        var calendar=Calendar(identifier:.gregorian)
+        calendar.timeZone=Self.kst
+        let day=calendar.dateComponents([.year,.month,.day],from:date)
+        let key="\(viewerMemberID)|\(postID)|\(day.year!)-\(day.month!)-\(day.day!)"
+        return recordedKeys.insert(key).inserted
+    }
 }
 
 enum WReview52StatisticsFormat {
@@ -551,40 +579,44 @@ extension WireframeRoot {
 
     func communityPostCard(_ post:WCommunityPost)->some View {
         VStack(alignment:.leading,spacing:0){
-            HStack(spacing:10){
-                communityAvatar(post.author)
-                VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)}
-                Spacer()
-                Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)
-            }.frame(minHeight:44)
-            Button { ui.communitySelectedPostID=post.id;go("C04") } label:{
+            Button { openCommunityPost(post) } label:{
                 VStack(alignment:.leading,spacing:6){
+                    HStack(spacing:10){
+                        communityAvatar(post.author)
+                        VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)}
+                        Spacer()
+                        Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)
+                    }.frame(minHeight:44)
                     Text(post.title).font(W.font(16,.semibold)).foregroundStyle(W.ink).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityPostTitle-\(post.id)")
                     Text(post.text).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)
-                }.padding(.top,12).padding(.bottom,8).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityIdentifier("communityPostOpen-\(post.id)")
-            if let imageName=post.imageName{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:194).clipped().clipShape(RoundedRectangle(cornerRadius:12)).padding(.top,8).accessibilityLabel("게시글 예시 사진")}
+                }.padding(.vertical,20).contentShape(Rectangle()).frame(maxWidth:.infinity,alignment:.leading)
+            }.buttonStyle(.plain).accessibilityIdentifier(post.author=="나" ? "communityPostOpen-local":"communityPostOpen-\(post.id)")
+            if let imageName=post.imageName{Button{openCommunityPost(post)}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:194).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).padding(.top,8).accessibilityLabel("게시글 예시 사진 열기").accessibilityIdentifier("communityFeedImageOpen-\(post.id)")}
             HStack(spacing:18){
                 Button { toggleCommunityLike(post.id) } label:{Label("\(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(11)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}
                     .accessibilityLabel("좋아요 \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").accessibilityIdentifier("communityLike-\(post.id)")
                 Button { ui.communitySelectedPostID=post.id;go("C04") } label:{Label("\(post.comments.count)",systemImage:"bubble.right").font(W.font(11)).foregroundStyle(W.muted)}
                     .accessibilityLabel("댓글 \(post.comments.count)").accessibilityIdentifier("communityComments-\(post.id)")
-                Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted)
-                Spacer()
-            }.buttonStyle(.plain).padding(.top,12)
-        }.padding(.vertical,20).overlay(alignment:.bottom){W.line.frame(height:1)}
+                Button{openCommunityPost(post)}label:{Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityViews-\(post.id)")
+            }.buttonStyle(.plain).padding(.horizontal,2).padding(.top,12).padding(.bottom,20)
+        }.overlay(alignment:.bottom){W.line.frame(height:1)}
     }
 
     func communityAvatar(_ name:String)->some View {Text(String(name.prefix(1))).font(W.font(13,.semibold)).foregroundStyle(W.ink).frame(width:38,height:38).background(W.soft,in:Circle()).accessibilityHidden(true)}
     func toggleCommunityLike(_ id:String){if ui.communityLikedPosts.contains(id){ui.communityLikedPosts.remove(id)}else{ui.communityLikedPosts.insert(id)}}
     func beginCommunityCompose(board:String?=nil){ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";go("C05")}
     func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID}}
+    func openCommunityPost(_ post:WCommunityPost){ui.communitySelectedPostID=post.id;go("C04")}
+    func recordCommunityDetailView(_ post:WCommunityPost){
+        guard let index=ui.communityPosts.firstIndex(where:{$0.id==post.id}) else{return}
+        if ui.communityViewCountProvider.recordDetailView(viewerMemberID:ui.communityViewerMemberID,postID:post.id,authorMemberID:post.authorMemberID,date:Date()) {ui.communityPosts[index].views+=1}
+    }
     func publishCommunityDraft(){
         let title=ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines),body=ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !title.isEmpty else{ui.communityError="제목을 입력해 주세요.";return}
         guard !body.isEmpty else{ui.communityError="내용을 입력해 주세요.";return}
         guard title.count<=60,body.count<=2000 else{ui.communityError="제목은 60자, 내용은 2,000자 이내로 입력해 주세요.";return}
-        ui.communityPosts.insert(WCommunityPost(id:UUID().uuidString,author:"나",rank:"시작러너",board:ui.communityDraftBoard,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[]),at:0)
+        ui.communityPosts.insert(WCommunityPost(id:UUID().uuidString,authorMemberID:ui.communityViewerMemberID,author:"나",rank:"시작러너",board:ui.communityDraftBoard,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[]),at:0)
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";go("C01")
     }
     func submitCommunityComment(){
@@ -610,33 +642,53 @@ extension WireframeRoot {
                 HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}
                 Text(post.title).font(W.font(23,.semibold)).lineSpacing(5).padding(.top,5).accessibilityIdentifier("communityDetailTitle")
                 Text(post.text).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityDetailBody")
-                if let imageName=post.imageName{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:210).clipped().clipShape(RoundedRectangle(cornerRadius:12)).accessibilityLabel("게시글 예시 사진")}
+                if let imageName=post.imageName{Button{go("C04-IMAGE")}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:210).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 확대").accessibilityIdentifier("communityDetailImageOpen")}
                 HStack(spacing:18){
                     Button{toggleCommunityLike(post.id)}label:{Label("\(post.likes+(ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(12)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}.accessibilityIdentifier("communityDetailLike")
                     Label("\(post.comments.count)",systemImage:"bubble.right").font(W.font(12)).foregroundStyle(W.muted)
-                    Spacer();Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted)
+                    Spacer();Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted).accessibilityIdentifier("communityDetailViews")
                 }.buttonStyle(.plain).padding(.vertical,12).overlay(alignment:.bottom){W.line.frame(height:1)}
                 VStack(alignment:.leading,spacing:0){
                     Text("댓글 \(post.comments.count)").font(W.font(16,.semibold)).padding(.top,8).padding(.bottom,4)
                     ForEach(post.comments){comment in VStack(alignment:.leading,spacing:6){HStack{Text(comment.author).font(W.font(12,.semibold));Spacer();Text(comment.date).font(W.font(10)).foregroundStyle(W.muted)};Text(comment.text).font(W.font(13)).lineSpacing(4)}.padding(.vertical,14).overlay(alignment:.bottom){W.line.frame(height:1)}}
                 }
             }actions:{
-                TextField("댓글을 남겨 보세요",text:$ui.communityComment).font(W.font(14)).padding(14).frame(minHeight:50).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityCommentInput").submitLabel(.send).onSubmit{submitCommunityComment()}
+                TextField("댓글을 남겨 보세요",text:Binding(get:{ui.communityComment},set:{ui.communityComment=WCommunityTextLimit.apply($0,limit:WCommunityTextLimit.comment)})).font(W.font(14)).padding(14).frame(minHeight:50).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityCommentInput").submitLabel(.send).onSubmit{submitCommunityComment()}
                 if !ui.communityError.isEmpty{WText(text:ui.communityError,small:true)}
-                Button("댓글 등록"){submitCommunityComment()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCommentSubmit")
-            }
+                Button("댓글 등록"){submitCommunityComment()}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityComment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityIdentifier("communityCommentSubmit")
+            }.onAppear{recordCommunityDetailView(post)}
+                .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
         } else {
             WPage(title:"게시물",back:back){WText(text:"지금은 볼 수 없는 글이에요.")}actions:{}
         }
     }
 
-    var communityCompose:some View {WPage(title:"글쓰기",back:back){
-        VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(WCommunityFixtures.boards.filter{$0 != "익명게시판"},id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBoard")}
-        WField(label:"제목",text:$ui.communityDraftTitle,placeholder:"제목을 입력해 주세요",limit:60,accessibilityID:"communityComposeTitle")
-        VStack(alignment:.leading,spacing:8){Text("내용").font(W.font(14,.medium));TextEditor(text:$ui.communityDraftBody).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:178).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBody");Text("\(ui.communityDraftBody.count)/2000").font(W.font(11)).foregroundStyle(ui.communityDraftBody.count>2000 ? Color.red:W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
-        WText(text:"가상 커뮤니티 글은 이 기기 안에서만 보여요. 사진·영상 첨부와 서버 게시 기능은 연결되어 있지 않아요.",small:true)
-        if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}
-    }actions:{Button("미리보기"){guard !ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="제목을 입력해 주세요.";return};guard !ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="내용을 입력해 주세요.";return};ui.communityError="";go("C09")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityPreviewButton");Button("취소"){back()}.buttonStyle(WButtonStyle(kind:1))}}
+    var communityImageViewer:some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing:0){
+                HStack{Spacer();Button{back()}label:{Image(systemName:"xmark").font(.system(size:18,weight:.semibold)).foregroundStyle(.white).frame(width:48,height:48).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("확대 사진 닫기").accessibilityIdentifier("communityImageClose")}.padding(.horizontal,12).padding(.top,8)
+                Spacer(minLength:12)
+                if let post=currentCommunityPost(),let imageName=post.imageName {Image(imageName).resizable().scaledToFit().frame(maxWidth:.infinity,maxHeight:.infinity).accessibilityLabel("확대된 게시글 사진").accessibilityIdentifier("communityImageZoom")}
+                Spacer(minLength:12)
+            }
+        }
+    }
+
+    var communityCompose:some View {
+        WPage(title:"글쓰기",back:back){
+            VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(WCommunityFixtures.boards.filter{$0 != "익명게시판"},id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBoard")}
+            WField(label:"제목",text:$ui.communityDraftTitle,placeholder:"제목을 입력해 주세요",limit:60,accessibilityID:"communityComposeTitle")
+            VStack(alignment:.leading,spacing:8){Text("내용").font(W.font(14,.medium));TextEditor(text:$ui.communityDraftBody).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:178).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBody");Text("\(ui.communityDraftBody.count)/2000").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
+            WText(text:"가상 커뮤니티 글은 이 기기 안에서만 보여요. 사진·영상 첨부와 서버 게시 기능은 연결되어 있지 않아요.",small:true)
+            if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}
+        }actions:{
+            Button("미리보기"){guard !ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="제목을 입력해 주세요.";return};guard !ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="내용을 입력해 주세요.";return};ui.communityError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityIdentifier("communityPreviewButton")
+            Button("취소"){back()}.buttonStyle(WButtonStyle(kind:1))
+        }
+        .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
+        .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
+    }
     var communityPreview:some View {WPage(title:"미리보기",back:back){Text("커뮤니티에 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");Text(ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody");WNotice(text:"게시물은 로컬 예시 데이터로만 추가돼요.");if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button("게시하기"){publishCommunityDraft()}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityPublishButton");Button("다시 수정"){go("C05")}.buttonStyle(WButtonStyle(kind:1))}}
 }
 

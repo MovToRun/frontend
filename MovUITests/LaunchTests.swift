@@ -519,10 +519,83 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func testCommunityFeedOpensPostAndAddsLocalComment() {
-        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false) {
+        app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
+        if compact{app.launchArguments.append("-wire-compact-review")}
         app.launch()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+    }
+
+    func testCommunityFeedCardImageAndBlankAreaOpenDetailOnCompactDark() {
+        launchCommunity("C01",appearance:"dark",compact:true)
+        let card=app.buttons["communityPostOpen-p1"]
+        XCTAssertTrue(card.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(waitHittable(card))
+        app.scrollViews["communityFeedScroll"].swipeUp()
+        let feedImage=app.buttons["communityFeedImageOpen-p1"]
+        XCTAssertTrue(feedImage.waitForExistence(timeout:5),app.debugDescription)
+        feedImage.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5),"Feed photo opens the post detail")
+        XCTAssertTrue(app.buttons["communityDetailImageOpen"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        let returnedCard=app.buttons["communityPostOpen-p1"]
+        XCTAssertTrue(waitHittable(returnedCard))
+        app.scrollViews["communityFeedScroll"].swipeDown()
+        returnedCard.coordinate(withNormalizedOffset:CGVector(dx:0.04,dy:0.02)).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5),"The padded blank region of a post card opens its detail")
+        app.buttons["communityDetailImageOpen"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04-IMAGE"].waitForExistence(timeout:5))
+        let zoom=app.images["communityImageZoom"]
+        XCTAssertTrue(zoom.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertLessThanOrEqual(zoom.frame.width,321,"Zoomed image fits the 320pt compact viewport")
+        XCTAssertTrue(app.buttons["communityImageClose"].isHittable)
+        XCTAssertTrue(containsDarkPixel(in:app.screenshot().image,rect:CGRect(x:50,y:280,width:12,height:12)),"The viewer stays legible on a dark background")
+        app.buttons["communityImageClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        capture("community-detail-image-compact-dark")
+    }
+
+    func testCommunityViewCountRunsLocalKSTPolicyOnlyOnDetailEntry() {
+        launchCommunity("C01")
+        let listCount=app.descendants(matching:.any)["communityViews-p1"]
+        XCTAssertTrue(listCount.waitForExistence(timeout:5))
+        XCTAssertTrue(listCount.label.contains("138"),listCount.label)
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        let detailCount=app.descendants(matching:.any)["communityDetailViews"]
+        XCTAssertTrue(detailCount.waitForExistence(timeout:5))
+        XCTAssertTrue(detailCount.label.contains("139"),detailCount.label)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(listCount.label.contains("139"),listCount.label)
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertTrue(detailCount.label.contains("139"),"Repeat detail entry by the same member on the same KST date counts once: \(detailCount.label)")
+    }
+
+    func testCommunityTextLimitsDisableEmptyActionsAndKeepDraftOnBack() {
+        launchCommunity("C05")
+        let preview=app.buttons["communityPreviewButton"]
+        XCTAssertTrue(preview.waitForExistence(timeout:5))
+        XCTAssertFalse(preview.isEnabled,"Empty title/body cannot proceed")
+        let title=app.textFields["communityComposeTitle"]
+        title.tap();title.typeText(String(repeating:"a",count:61))
+        XCTAssertEqual((title.value as? String)?.count,60,"Title entry stops at 60 characters")
+        let body=app.textViews["communityComposeBody"]
+        body.tap();body.typeText(String(repeating:"b",count:2001))
+        XCTAssertEqual((body.value as? String)?.count,2000,"Body entry stops at 2,000 characters")
+        XCTAssertTrue(preview.isEnabled,"Both maximum-length values are valid")
+        preview.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        XCTAssertEqual((app.textFields["communityComposeTitle"].value as? String)?.count,60)
+        XCTAssertEqual((app.textViews["communityComposeBody"].value as? String)?.count,2000)
+    }
+
+    func testCommunityFeedOpensPostAndAddsLocalComment() {
+        launchCommunity("C01")
         XCTAssertTrue(app.staticTexts["지금 많이 보는 글"].exists)
         app.buttons["communityHot-p1"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
@@ -533,9 +606,13 @@ import UIKit
         XCTAssertTrue(like.label.contains("25"),like.label)
         let comment=app.textFields["communityCommentInput"]
         XCTAssertTrue(comment.waitForExistence(timeout:5))
-        comment.tap();comment.typeText("오늘도 함께 달려요!")
+        let submit=app.buttons["communityCommentSubmit"]
+        XCTAssertFalse(submit.isEnabled,"Empty comment cannot be registered")
+        comment.tap();comment.typeText(String(repeating:"x",count:301))
+        XCTAssertTrue(submit.isEnabled)
         tap("communityCommentSubmit")
-        XCTAssertTrue(app.staticTexts["오늘도 함께 달려요!"].waitForExistence(timeout:5))
+        let registeredComment=app.staticTexts.matching(NSPredicate(format:"label == %@",String(repeating:"x",count:300))).firstMatch
+        XCTAssertTrue(registeredComment.waitForExistence(timeout:5),"The overlong entry is locally capped at 300 characters")
         XCTAssertTrue(app.staticTexts["댓글 2"].exists)
     }
 

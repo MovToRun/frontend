@@ -260,6 +260,8 @@ enum WRootTab: Int, CaseIterable {
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
     var communitySelectedPostID="p1"
+    let communityViewerMemberID="fixture-member-current"
+    var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
     var communityDraftBoard="러닝 인증"
     var communityDraftTitle=""
@@ -444,6 +446,9 @@ struct WireframeRoot:View {
                     if ui.screen=="S05"{var record=current;record.kilometers=0;record.seconds=312;record.segments=[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")];store.records=[record];ui.selected=record.id}
                 }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
+            .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
+            .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
+            .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
     }
     func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
@@ -538,6 +543,7 @@ struct WireframeRoot:View {
         case "C04":communityPostDetail
         case "C05":communityCompose
         case "C09":communityPreview
+        case "C04-IMAGE":communityImageViewer
         default:informationPage
         }
     }
