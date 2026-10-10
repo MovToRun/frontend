@@ -273,7 +273,7 @@ enum WRootTab: Int, CaseIterable {
     var consentTopic="이용약관"
     var nickname="";var introduction="";var region="";var weight=""
     var title="";var memo="";var photo:Data?
-    var challengeIssued:Date?;var challengeCode="482619"
+    var challengeIssued:Date?;var challengeCode="482619";var otpCodeIssuer=WLocalOTPCodeIssuer()
     var authErrorField="";var authFilled=false;var authEmail="";var authPassword="";var authConfirm="";var authCurrent="";var revealedFields:Set<String>=[];var settingsGrant=false;var otpSuccess=false;var otpFocused=false;var otpVerifying=false;var otpVerificationID:UUID?;var lastAttemptedOTP:String?;var code="";var codeAttempts=0;var verified=false
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
@@ -303,7 +303,7 @@ enum WRootTab: Int, CaseIterable {
         let preservingOTP=Self.otpScreens.contains(screen) && Self.otpScreens.contains(next)
         if !preservingOTP{otpSuccess=false;otpVerifying=false;otpVerificationID=nil}
         clearAuthSecrets(preservingOTP:preservingOTP)
-        if !Self.otpScreens.contains(next){challengeIssued=nil;challengeCode="482619";codeAttempts=0;lastAttemptedOTP=nil;authEmail=""}
+        if !Self.otpScreens.contains(next){challengeIssued=nil;challengeCode="482619";otpCodeIssuer.reset();codeAttempts=0;lastAttemptedOTP=nil;authEmail=""}
         if !["A16","A17","A18","T15","T06"].contains(next){settingsGrant=false}
     }
     static let providerRoutes:Set<String>=["T06","T07","T08","T09","T15","T17","A16","A17","A18"]
@@ -410,7 +410,7 @@ struct WireframeRoot:View {
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
-                    if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
+                    if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}
                     if ui.screen.hasPrefix("R") || ["H05","H06","S03"].contains(ui.screen){
                         store.session=DemoSession(startedAt:Date().addingTimeInterval(-302),segmentStart:["R01","R02","R03","R07","R08"].contains(ui.screen) ? Date():nil,accumulated:ui.screen=="R12" ? 0:ui.screen=="R01" ? 4:302,goal:store.goal,distance:ui.screen=="R12" || ui.screen=="R01" ? 0:0.81)

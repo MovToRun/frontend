@@ -101,13 +101,17 @@ extension WireframeRoot {
         if ["A07","A12","A16","A17"].contains(id) && ui.authPassword != ui.authConfirm{ui.authErrorField=["A12","A17"].contains(id) ? "새 비밀번호 확인":"비밀번호 확인";ui.error="비밀번호가 서로 달라요.";return false}
         return true
     }
-    func issueEmailChallenge(now:Date=Date(),code:String="482619"){
-        ui.challengeIssued=now;ui.challengeCode=code;ui.code="";ui.codeAttempts=0;ui.lastAttemptedOTP=nil;ui.error="";ui.otpSuccess=false;ui.otpVerifying=false
+    @discardableResult func issueEmailChallenge(now:Date=Date(),resetHistory:Bool=true)->Bool{
+        if resetHistory{ui.otpCodeIssuer.reset()}
+        guard let code=ui.otpCodeIssuer.issueNext()else{return false}
+        ui.challengeCode=code
+        ui.challengeIssued=now;ui.code="";ui.codeAttempts=0;ui.lastAttemptedOTP=nil;ui.error="";ui.otpSuccess=false;ui.otpVerifying=false
+        return true
     }
     func requestEmailCodeAgain(now:Date=Date()){
         guard WireState.otpScreens.contains(ui.screen),WEmailChallengePolicy.secondsRemaining(since:ui.challengeIssued,now:now,duration:WEmailChallengePolicy.resendDelay)==0,!ui.otpVerifying,!ui.otpSuccess else{return}
-        let next=ui.challengeCode=="482619" ? "731204":"482619"
-        issueEmailChallenge(now:now,code:next);go("A23")
+        guard issueEmailChallenge(now:now,resetHistory:false)else{return}
+        go("A23")
     }
     func verifyEmailCode(now:Date=Date()){
         guard WireState.otpScreens.contains(ui.screen),!ui.otpVerifying,!ui.otpSuccess else{return}
@@ -118,7 +122,7 @@ extension WireframeRoot {
         if ui.codeAttempts>=WEmailChallengePolicy.maximumAttempts || ui.screen=="A22"{go("A22");return}
         guard ui.lastAttemptedOTP != submitted else{return}
         ui.lastAttemptedOTP=submitted;ui.otpVerifying=true
-        if submitted==ui.challengeCode{
+        if ui.otpCodeIssuer.matches(submitted){
             ui.otpSuccess=true;let sequence=UUID();ui.otpVerificationID=sequence
             Task{@MainActor in
                 if !reduceMotion{try? await Task.sleep(for:.milliseconds(420))}
@@ -227,6 +231,29 @@ enum WEmailChallengePolicy {
         guard let remaining=secondsRemaining(since:issued,now:now,duration:lifetime) else{return "missing"}
         if attempts>=maximumAttempts{return "locked"}
         return remaining==0 ? "expired":"pending"
+    }
+}
+struct WLocalOTPCodeIssuer {
+    private static let codeSpace=1_000_000
+    private var nextValue=482_619
+    private var issuedCodes=Set<String>()
+    private var currentCode:String?
+    mutating func reset(){nextValue=482_619;issuedCodes=[];currentCode=nil}
+    mutating func seed(_ code:String){
+        reset()
+        guard code.count==6,let value=Int(code),WEmailChallengePolicy.digits(code)==code else{return}
+        currentCode=code;issuedCodes.insert(code);nextValue=(value+1)%Self.codeSpace
+    }
+    mutating func issueNext()->String?{
+        for _ in 0..<Self.codeSpace {
+            let code=String(format:"%06d",nextValue)
+            nextValue=(nextValue+1)%Self.codeSpace
+            if issuedCodes.insert(code).inserted{currentCode=code;return code}
+        }
+        return nil
+    }
+    func matches(_ candidate:String)->Bool{
+        candidate.count==6 && WEmailChallengePolicy.digits(candidate)==candidate && candidate==currentCode
     }
 }
 struct WAuthNotice:View {

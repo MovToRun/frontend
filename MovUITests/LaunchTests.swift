@@ -818,7 +818,11 @@ extension LaunchTests {
         XCTAssertEqual(app.secureTextFields.count,2)
         tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].exists)
-        tap("가상 예시값 채우기");tap("authPrimary");tap("가입 취소")
+        tap("가상 예시값 채우기")
+        app.textFields["auth-email"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["가입 취소"].isHittable,"The A07 cancel action remains reachable with the keyboard open")
+        tap("가입 취소")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
     func testSocialReloginAndConsentPartialValidationBothThemes() {

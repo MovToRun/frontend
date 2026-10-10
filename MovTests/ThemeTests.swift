@@ -639,6 +639,17 @@ extension ThemeTests {
         XCTAssertEqual(WEmailChallengePolicy.digits("a1 2-3\n456789"),"123456")
         XCTAssertEqual(WEmailChallengePolicy.digits("１２３４５６"),"")
     }
+    func testInitialAndTwoResentOTPValuesNeverRepeat() {
+        var issuer=WLocalOTPCodeIssuer()
+        var codes:[String]=[]
+        for _ in 0..<3{if let code=issuer.issueNext(){codes.append(code)}}
+        XCTAssertEqual(codes.count,3)
+        XCTAssertEqual(codes,["482619","482620","482621"])
+        XCTAssertEqual(Set(codes).count,codes.count,"Initial and resent codes must all be unique")
+        XCTAssertFalse(issuer.matches(codes[0]))
+        XCTAssertFalse(issuer.matches(codes[1]))
+        XCTAssertTrue(issuer.matches(codes[2]),"Only the latest issued code verifies")
+    }
     @MainActor func testAuthNavigationClearsTransientSecrets() {
         let state=WireState();state.screen="A19";state.path=["A07"]
         state.challengeIssued=Date();state.code="482619";state.authPassword="FixtureOnly482619";state.revealedFields=["예시 비밀번호"]
