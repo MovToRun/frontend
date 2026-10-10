@@ -104,7 +104,7 @@ final class ThemeTests:XCTestCase {
         let dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,request=WCommunityCrewFixtures.applications[0],viewer="fixture-member-current"
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:dawn,applicantRank:1,viewerID:viewer,approve:true),.approved)
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:dawn,applicantRank:1,viewerID:"fixture-member-early",approve:true),.unauthorized)
-        var operatorManaged=dawn;operatorManaged.operatorMemberIDs.insert("fixture-operator")
+        var operatorManaged=dawn;operatorManaged.memberIDs.append("fixture-operator");operatorManaged.operatorMemberIDs.insert("fixture-operator")
         XCTAssertTrue(WCommunityCrewPolicy.canManage(operatorManaged,viewerID:"fixture-operator"))
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:operatorManaged,applicantRank:1,viewerID:"fixture-operator",approve:false),.rejected)
         let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:3,tags:[],boards:[],posts:[])
@@ -128,6 +128,34 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:rejected,crew:dawn,applicantRank:1,viewerID:viewer,approve:false),.notPending,"A repeated rejection does not rewrite an already resolved decision")
         XCTAssertFalse(WCommunityCrewPolicy.canManage(dawn,viewerID:"ordinary-member"))
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:approval,crew:dawn,applicantRank:1,viewerID:"ordinary-member",approve:false),.unauthorized)
+    }
+
+    func testCommunityCrewMemberRolesCanOnlyBeChangedByOwner() {
+        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator"])
+        XCTAssertEqual(WCommunityCrewPolicy.role(of:"owner",in:crew),.owner)
+        XCTAssertEqual(WCommunityCrewPolicy.role(of:"operator",in:crew),.crewOperator)
+        XCTAssertEqual(WCommunityCrewPolicy.role(of:"member",in:crew),.member)
+        XCTAssertEqual(WCommunityCrewPolicy.role(of:"outsider",in:crew),.outsider)
+        XCTAssertEqual(WCommunityCrewPolicy.roleChangeResult(crew:crew,actorID:"owner",targetMemberID:"member"),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.roleChangeResult(crew:crew,actorID:"owner",targetMemberID:"operator"),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.roleChangeResult(crew:crew,actorID:"operator",targetMemberID:"member"),.ownerOnly)
+        XCTAssertEqual(WCommunityCrewPolicy.roleChangeResult(crew:crew,actorID:"owner",targetMemberID:"owner"),.ownerProtected)
+        XCTAssertEqual(WCommunityCrewPolicy.roleChangeResult(crew:crew,actorID:"owner",targetMemberID:"outsider"),.missingMember)
+    }
+
+    func testCommunityCrewMemberActionsProtectOwnerSelfAndPeerOperators() {
+        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","peer-operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator","peer-operator"])
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:"주의 내용"),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"operator",kind:.kick),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"operator",targetMemberID:"member",kind:.kick),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"operator",targetMemberID:"peer-operator",kind:.kick),.peerOperatorProtected)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"operator",targetMemberID:"owner",kind:.kick),.ownerProtected)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"operator",targetMemberID:"operator",kind:.kick),.selfProtected)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"member",targetMemberID:"operator",kind:.kick),.unauthorized)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"outsider",kind:.kick),.notMember)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:" \n "),.emptyNote)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:String(repeating:"가",count:301)),.noteTooLong)
+        XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:String(repeating:"가",count:300)),.ready)
     }
 
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {

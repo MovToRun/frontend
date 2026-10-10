@@ -642,6 +642,43 @@ import UIKit
         XCTAssertFalse(app.buttons["communityCrewReview-fixture-request-dawn-ga-on"].exists,"Resolved requests leave the pending list")
     }
 
+    func testCommunityCrewMemberManagementUsesOwnerRoleAndLocalWarningAndRemoval() {
+        launchCommunity("C15")
+        app.buttons["communityCrewOpen-dawn"].tap()
+        app.buttons["communityCrewManage"].tap()
+        app.buttons["communityCrewReview-fixture-request-dawn-early"].tap()
+        app.buttons["communityCrewApproveApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+
+        app.buttons["communityCrewMembers"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"2/20명")
+        app.buttons["communityCrewMember-fixture-member-early"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C35"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"멤버")
+
+        app.buttons["communityCrewMemberRoleChange"].tap()
+        XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"운영자","The owner can grant operator status")
+        app.buttons["communityCrewMemberRoleChange"].tap()
+        XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"멤버","The owner can revoke operator status")
+
+        let note=app.textViews["communityCrewMemberWarning"]
+        note.tap();note.typeText("함께 안전하게 달려 주세요.")
+        app.buttons["communityCrewMemberWarn"].tap()
+        XCTAssertEqual(app.staticTexts["communityCrewWarningCount"].label,"주의 기록 1회")
+        XCTAssertTrue(app.staticTexts["communityCrewMemberFeedback"].label.contains("실제로 전달되지는 않았어요"))
+
+        app.buttons["communityCrewMemberKick"].tap()
+        XCTAssertTrue(app.alerts["이 멤버를 내보낼까요?"].waitForExistence(timeout:3))
+        app.alerts.buttons["취소"].tap()
+        XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"멤버","Cancel keeps the member in the crew")
+        app.buttons["communityCrewMemberKick"].tap()
+        app.alerts.buttons.matching(identifier:"communityCrewConfirmRemove").firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"1/20명")
+        XCTAssertFalse(app.buttons["communityCrewMember-fixture-member-early"].exists,"A removed member leaves the local member list")
+    }
+
     func testCommunityCrewEditDiscardPromptTracksActualChangesAndTabExit() {
         launchCommunity("C15")
         app.buttons["communityCrewOpen-dawn"].tap()

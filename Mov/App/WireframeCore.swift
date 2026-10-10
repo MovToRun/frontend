@@ -347,6 +347,10 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewNameCheck=""
     var communityCrewReviewApplicationID="fixture-request-dawn-early"
     var communityCrewReviewError=""
+    var communitySelectedCrewMemberID=""
+    var communityCrewMemberWarningDraft=""
+    var communityCrewMemberFeedback=""
+    var communityCrewMemberError=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -478,6 +482,7 @@ struct WireframeRoot:View {
     @State var communityProfileExitDestination:String?
     @State var communityCrewExitDestination:String?
     @State var communityCrewDraftOriginal:WCommunityCrewDraftSnapshot?
+    @State var showingCommunityCrewKickConfirmation=false
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -562,6 +567,7 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
             .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
             .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
+            .onChange(of:ui.communityCrewMemberWarningDraft){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.memberWarningLimit);if limited != value{ui.communityCrewMemberWarningDraft=limited}}
             .alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
                 Button("계속 편집",role:.cancel){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityDiscardContext=nil}
                 Button("버리기",role:.destructive){
@@ -718,6 +724,8 @@ struct WireframeRoot:View {
         case "C20":communityCrewEditor
         case "C21":communityCrewManagement
         case "C22":communityCrewApplicationReview
+        case "C34":communityCrewMemberList
+        case "C35":communityCrewMemberDetail
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
