@@ -639,6 +639,74 @@ import UIKit
         XCTAssertTrue(app.buttons["communityPersonalPostOpen-p2"].exists)
     }
 
+    func testCommunityVerificationSubmitOperatorReviewAndResubmission() {
+        let suite="mov.community.verification.\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","C10","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C10"].waitForExistence(timeout:10))
+        let note=app.textViews["communityVerificationNote"]
+        XCTAssertTrue(note.waitForExistence(timeout:5))
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C10"].exists,"Empty application stays on the form")
+        XCTAssertTrue(app.staticTexts["communityVerificationError"].exists)
+        note.tap();note.typeText("주간 러닝 활동을 기록하고 있어요.")
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"인증을 검토하고 있어요")
+        app.buttons["뒤로"].tap()
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationError"].label,"인증 신청을 검토하고 있어요.","A duplicate submission reports the pending state, not an input error")
+        app.terminate()
+        app.launchArguments=["-wire-screen","C11","-wire-fixture","-wire-test-store-suite",suite,"-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:10))
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"인증을 검토하고 있어요")
+        app.buttons["communityVerificationRejectExample"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"신청 내용을 다시 확인해 주세요")
+        XCTAssertTrue(app.staticTexts["communityVerificationMessage"].label.contains("조금 더 구체적으로"))
+        app.buttons["communityVerificationContinue"].tap()
+        XCTAssertTrue(app.textViews["communityVerificationNote"].waitForExistence(timeout:5))
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"인증을 검토하고 있어요")
+        app.buttons["communityVerificationApproveExample"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"계정 인증이 완료됐어요")
+        XCTAssertEqual(app.staticTexts["communityVerificationMessage"].label,"이제 코스를 공유할 수 있어요.")
+
+        app.terminate()
+        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-appearance","light"]
+        app.launch()
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"Approved state persists and marks the signed-in runner's profile card")
+        app.buttons["tab-3"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        app.buttons["communityCompose"].tap()
+        let postTitle=app.textFields["communityComposeTitle"]
+        postTitle.tap();postTitle.typeText("인증된 러닝 기록")
+        let postBody=app.textViews["communityComposeBody"]
+        postBody.tap();postBody.typeText("오늘의 러닝 활동을 남깁니다.")
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        let publish=app.buttons["communityPublishButton"]
+        XCTAssertTrue(publish.waitForExistence(timeout:5))
+        publish.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityPostVerificationBadge-current"].exists,"The same approved state marks the signed-in runner's post")
+        for status in ["pending","rejected"] {
+            app.terminate()
+            app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-wire-community-verification-status",status,"-appearance","light"]
+            app.launch()
+            app.buttons["communityOpenOwnProfile"].tap()
+            XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
+            XCTAssertFalse(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"\(status) applications do not show a verification badge")
+        }
+        app.terminate()
+        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-appearance","light"]
+        app.launch()
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"The approved profile badge remains after relaunch")
+    }
+
     func testCommunityTextLimitsDisableEmptyActionsAndKeepDraftOnBack() {
         launchCommunity("C05")
         let preview=app.buttons["communityPreviewButton"]

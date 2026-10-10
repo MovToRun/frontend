@@ -763,7 +763,7 @@ extension WireframeRoot {
         return VStack(alignment:.leading,spacing:0){
             Group{if anonymous{HStack(spacing:10){communityAvatar("익명 사용자");VStack(alignment:.leading,spacing:2){Text("익명 사용자").font(W.font(13,.semibold));Text(post.date).font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)}.frame(maxWidth:.infinity,minHeight:44,alignment:.leading).accessibilityIdentifier("communityAnonymousAuthor-\(post.id)")}
             else{Button { openCommunityCard(for:post.authorMemberID,origin:"C01") } label:{
-                HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)}
+                HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:2){HStack(spacing:4){Text(post.author).font(W.font(13,.semibold));communityVerifiedBadge(memberID:post.authorMemberID,identifier:"communityPostVerificationBadge-current")};Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)}
                     .frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("communityPostAuthor-\(post.id)")}}
             Button { openCommunityPost(post) } label:{VStack(alignment:.leading,spacing:6){
@@ -852,7 +852,7 @@ extension WireframeRoot {
                 }
                 if comment.isDeleted {Text("삭제된 댓글입니다").font(W.font(13)).foregroundStyle(W.muted).italic().accessibilityIdentifier("communityCommentText-\(comment.id)")}
                 else {
-                    HStack(spacing:6){Text(anonymous ? "익명 사용자":comment.author).font(W.font(12,.semibold)).accessibilityIdentifier(anonymous ? "communityAnonymousCommentAuthor-\(comment.id)":"communityCommentAuthor-\(comment.id)");if !anonymous && WCommunityCommentActions.isPostAuthor(comment,postAuthorMemberID:currentCommunityPost()?.authorMemberID ?? ""){Text("작성자").font(W.font(9,.medium)).padding(.horizontal,5).padding(.vertical,2).background(W.soft,in:Capsule()).accessibilityIdentifier("communityCommentAuthorBadge-\(comment.id)")};Spacer();Text(comment.date).font(W.font(10)).foregroundStyle(W.muted)}
+                    HStack(spacing:6){Text(anonymous ? "익명 사용자":comment.author).font(W.font(12,.semibold)).accessibilityIdentifier(anonymous ? "communityAnonymousCommentAuthor-\(comment.id)":"communityCommentAuthor-\(comment.id)");communityVerifiedBadge(memberID:comment.authorMemberID ?? "",identifier:"communityCommentVerificationBadge-\(comment.id)");if !anonymous && WCommunityCommentActions.isPostAuthor(comment,postAuthorMemberID:currentCommunityPost()?.authorMemberID ?? ""){Text("작성자").font(W.font(9,.medium)).padding(.horizontal,5).padding(.vertical,2).background(W.soft,in:Capsule()).accessibilityIdentifier("communityCommentAuthorBadge-\(comment.id)")};Spacer();Text(comment.date).font(W.font(10)).foregroundStyle(W.muted)}
                     Text(comment.text).font(W.font(13)).lineSpacing(4).accessibilityIdentifier("communityCommentText-\(comment.id)")
                 }
                 HStack(spacing:16){Button("답글"){ui.communityReplyToID=comment.id}.font(W.font(11,.medium)).accessibilityIdentifier("communityReply-\(comment.id)")
@@ -867,9 +867,15 @@ extension WireframeRoot {
     func communityRunner(_ id:String)->WCommunityRunner {
         if id==ui.communityViewerMemberID {
             let rank=store.totalDistance==0 ? "시작러너":store.tier=="마스터" ? "러닝마스터":store.tier=="도전" ? "도전러너":store.tier=="열정" ? "열정러너":"새싹러너"
-            return WCommunityRunner(id:id,name:ui.profile.nickname,rank:rank,introduction:ui.profile.introduction,region:ui.profile.region,averageDistance:store.averageDistance,verified:false)
+            return WCommunityRunner(id:id,name:ui.profile.nickname,rank:rank,introduction:ui.profile.introduction,region:ui.profile.region,averageDistance:store.averageDistance,verified:ui.communityAccountVerified)
         }
         return WCommunityRunnerFixtures.values.first{$0.id==id} ?? WCommunityRunnerFixtures.values[0]
+    }
+
+    @ViewBuilder func communityVerifiedBadge(memberID:String,identifier:String)->some View {
+        if memberID==ui.communityViewerMemberID && ui.communityAccountVerified {
+            Image(systemName:"checkmark.seal.fill").font(.system(size:13)).foregroundStyle(Color.wire(0x2580EB,0x63A5F2)).accessibilityLabel("계정 인증 완료").accessibilityIdentifier(identifier)
+        }
     }
 
     func communityRunnerPhoto(_ id:String)->Data? {
@@ -894,7 +900,7 @@ extension WireframeRoot {
             HStack(alignment:.center,spacing:12){
                 communityRunnerAvatar(runner,photo:photo,zoomable:zoomable)
                 VStack(alignment:.leading,spacing:3){
-                    HStack(spacing:5){Text(runner.rank).font(W.font(11,.medium)).foregroundStyle(W.muted);if runner.verified{Image(systemName:"checkmark.seal.fill").font(.system(size:13)).foregroundStyle(Color.wire(0x2580EB,0x63A5F2)).accessibilityLabel("계정 인증 완료")}}
+                    HStack(spacing:5){Text(runner.rank).font(W.font(11,.medium)).foregroundStyle(W.muted);if runner.verified{Image(systemName:"checkmark.seal.fill").font(.system(size:13)).foregroundStyle(Color.wire(0x2580EB,0x63A5F2)).accessibilityLabel("계정 인증 완료").accessibilityIdentifier("communityRunnerVerifiedBadge-\(runner.id)")}}
                     Text(runner.name).font(W.font(22,.semibold)).lineLimit(2).minimumScaleFactor(0.8).accessibilityIdentifier("communityCardName")
                 }
             }.padding(.top,22).padding(.bottom,18)
@@ -1061,6 +1067,21 @@ extension WireframeRoot {
         }actions:{}
     }
 
+    var communityVerificationForm:some View {
+        WPage(title:"계정 인증",back:back){
+            WHeading(text:"나의 러닝 활동을\n소개해 주세요")
+            WText(text:"운영자가 신청 내용을 검토해요. 계정 인증은 러닝 등급과 별개예요.")
+            WField(label:"활동 소개",text:$ui.communityVerification.note,limit:300,multiline:true).accessibilityIdentifier("communityVerificationNote")
+            if !ui.communityVerificationError.isEmpty{WNotice(text:ui.communityVerificationError,danger:true).accessibilityIdentifier("communityVerificationError")}
+        }actions:{
+            Button("인증 신청"){if ui.submitCommunityVerification(){go("C11")}}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityVerificationSubmit")
+        }.onChange(of:ui.communityVerification.note){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityVerification.note=limited}}
+    }
+
+    var communityVerificationStatus:some View {
+        WCommunityVerificationStatusPage(state:ui,reviewTools:WReviewMode.tools,back:back,go:go)
+    }
+
     var communityLikedPosts:some View {
         let posts=communityLikedVisiblePosts
         return WPage(title:"좋아요한 글",back:back){
@@ -1123,7 +1144,7 @@ extension WireframeRoot {
             let comments=communityVisibleComments(post)
             WPage(title:post.board,back:back,trailing:post.authorMemberID==ui.communityViewerMemberID ? AnyView(EmptyView()):AnyView(Button{ui.communityMoreMenu = .post(post.id)}label:{Image(systemName:"ellipsis").font(.system(size:19,weight:.medium)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("게시물 더보기").accessibilityIdentifier("communityPostMore"))){
                 if post.board=="익명게시판" {HStack(spacing:10){communityAvatar("익명 사용자");Text("익명 사용자").font(W.font(13,.semibold));Spacer()}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).accessibilityIdentifier("communityAnonymousDetailAuthor")}
-                else {Button{openCommunityCard(for:post.authorMemberID,origin:"C04")}label:{HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityDetailAuthorCard")}
+                else {Button{openCommunityCard(for:post.authorMemberID,origin:"C04")}label:{HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){HStack(spacing:4){Text(post.author).font(W.font(13,.semibold));communityVerifiedBadge(memberID:post.authorMemberID,identifier:"communityDetailAuthorVerificationBadge")};Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityDetailAuthorCard")}
                 Text(post.title).font(W.font(23,.semibold)).lineSpacing(5).padding(.top,5).accessibilityIdentifier("communityDetailTitle")
                 Text(post.text).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityDetailBody")
                 if let imageName=post.imageName{Button{go("C04-IMAGE")}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:210).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 확대").accessibilityIdentifier("communityDetailImageOpen")}

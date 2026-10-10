@@ -251,6 +251,29 @@ enum WRootTab: Int, CaseIterable {
     var assetName: String? { [nil, "run", nil, "community", "profile"][rawValue] }
 }
 
+enum WCommunityVerificationStatus:String,Codable,CaseIterable {case none,pending,approved,rejected}
+enum WCommunityVerificationSubmissionResult:Equatable {case submitted,invalidActivity,alreadyPending,alreadyApproved}
+
+struct WCommunityVerificationState:Codable,Equatable {
+    var status:WCommunityVerificationStatus = .none
+    var note=""
+    var reason=""
+    var isVerified:Bool{status == .approved}
+
+    mutating func submit(_ value:String)->WCommunityVerificationSubmissionResult {
+        guard status != .pending else{return .alreadyPending}
+        guard status != .approved else{return .alreadyApproved}
+        let trimmed=value.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !trimmed.isEmpty,trimmed.count<=300 else{return .invalidActivity}
+        note=trimmed;reason="";status = .pending;return .submitted
+    }
+
+    mutating func review(as result:WCommunityVerificationStatus)->Bool {
+        guard status == .pending,result == .approved || result == .rejected else{return false}
+        status=result;reason=result == .rejected ? "신청 내용을 조금 더 구체적으로 적어 주세요.":"";return true
+    }
+}
+
 @MainActor @Observable final class WireState {
     private let defaults:UserDefaults
     var profile:WLocalProfile
@@ -285,6 +308,9 @@ enum WRootTab: Int, CaseIterable {
     var communityReplyToID:String?
     var communityError=""
     var communityLikedPosts:Set<String>=[]
+    var communityVerification=WCommunityVerificationState()
+    var communityVerificationError=""
+    var communityAccountVerified:Bool{communityVerification.isVerified}
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -305,8 +331,19 @@ enum WRootTab: Int, CaseIterable {
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
-    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
+    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
+    func submitCommunityVerification()->Bool{
+        switch communityVerification.submit(communityVerification.note){
+        case .submitted:communityVerificationError="";saveCommunityVerification();return true
+        case .invalidActivity:communityVerificationError="활동 소개를 300자 안으로 입력해 주세요."
+        case .alreadyPending:communityVerificationError="인증 신청을 검토하고 있어요."
+        case .alreadyApproved:communityVerificationError="계정 인증이 완료됐어요."
+        }
+        return false
+    }
+    func reviewCommunityVerification(as result:WCommunityVerificationStatus){guard communityVerification.review(as:result)else{return};saveCommunityVerification()}
+    private func saveCommunityVerification(){if let data=try? JSONEncoder().encode(communityVerification){defaults.set(data,forKey:"mov.wireframe.community-verification.v1")}}
     var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
     var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
     func cancelReauthentication(){guard screen=="T15" else{return};settingsGrant=false;let destination=pendingBack;if path.last==destination{path.removeLast()};leaveAuth(for:destination);forward=false;screen=destination;error=""}
@@ -448,6 +485,7 @@ struct WireframeRoot:View {
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot)}
+                    if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
                     if WireState.passwordResetScreens.contains(ui.screen),ui.screen != "A10"{ui.passwordReset.prepareFixture(screen:ui.screen,resendReady:args.contains("-wire-password-reset-resend-ready"))}
@@ -582,6 +620,8 @@ struct WireframeRoot:View {
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
         case "C06":communityLikedPosts
+        case "C10":communityVerificationForm
+        case "C11":communityVerificationStatus
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
@@ -601,6 +641,36 @@ struct WireframeRoot:View {
         default:informationPage
         }
     }
+}
+
+struct WCommunityVerificationStatusPage:View {
+    @Bindable var state:WireState
+    let reviewTools:Bool
+    let back:()->Void
+    let go:(String)->Void
+    var body:some View {
+        let status=state.communityVerification.status
+        let heading=headingText(status)
+        let message=messageText(status)
+        return WPage(title:"인증 신청",back:back){
+            VStack(alignment:.leading,spacing:14){
+                Text(heading).font(W.font(21,.semibold)).accessibilityIdentifier("communityVerificationHeading")
+                Text(message).font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityVerificationMessage")
+                WNotice(text:"인증 배지는 코스의 안전이나 운동 능력을 보증하지 않아요.")
+                if reviewTools {VStack(alignment:.leading,spacing:10){
+                    Text("플랫폼 운영자 인증 결과 예시").font(W.font(14,.medium))
+                    Text("아래 도구는 계정 인증 담당자의 응답을 흉내냅니다. 일반 앱 화면에는 승인 버튼이 없습니다.").font(W.font(12)).foregroundStyle(W.muted)
+                    Button("인증 승인 예시"){state.reviewCommunityVerification(as:.approved)}.buttonStyle(WButtonStyle()).disabled(status != .pending).accessibilityIdentifier("communityVerificationApproveExample")
+                    Button("인증 반려 예시"){state.reviewCommunityVerification(as:.rejected)}.buttonStyle(WButtonStyle(kind:1)).disabled(status != .pending).accessibilityIdentifier("communityVerificationRejectExample")
+                }.padding(.top,12)}
+            }
+        }actions:{
+            Button(continueText(status)){if status == .approved{go("C13")}else if status != .pending{go("C10")}}.buttonStyle(WButtonStyle()).disabled(status == .pending).accessibilityIdentifier("communityVerificationContinue")
+        }
+    }
+    private func headingText(_ status:WCommunityVerificationStatus)->String {switch status{case .none:return "계정 인증을 신청해 보세요";case .pending:return "인증을 검토하고 있어요";case .approved:return "계정 인증이 완료됐어요";case .rejected:return "신청 내용을 다시 확인해 주세요"}}
+    private func messageText(_ status:WCommunityVerificationStatus)->String {switch status{case .none:return "운영자가 신청 내용을 검토해요.";case .pending:return "결과가 나오면 알림으로 알려드려요.";case .approved:return "이제 코스를 공유할 수 있어요.";case .rejected:return state.communityVerification.reason}}
+    private func continueText(_ status:WCommunityVerificationStatus)->String {switch status{case .none:return "신청하기";case .pending:return "검토 중";case .approved:return "코스 공유하기";case .rejected:return "다시 신청"}}
 }
 
 struct WGoalWheel:View {
