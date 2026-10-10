@@ -68,14 +68,17 @@ private struct WReview54RingVisual: View {
     let size:CGFloat
     let accessibilityTitle:String
     let accessibilityValue:String
+    var reduceMotion:Bool = false
     private var lineWidth:CGFloat { WReview54HomeArc.strokeWidth * size / WReview54HomeArc.viewBoxWidth }
     var body:some View {
         ZStack {
             WReview54Arc().stroke(W.soft,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
             WReview54Arc().trim(from:0,to:progress)
                 .stroke(W.lime,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
+                .animation(reduceMotion ? nil:.easeOut(duration:0.32),value:progress)
             HStack(alignment:.firstTextBaseline,spacing:4) {
                 Text(value).font(.system(size:size<200 ? 27:48,weight:.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
+                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
                 if !unit.isEmpty { Text(unit).font(.system(size:size<200 ? 12:16)).foregroundStyle(W.muted) }
             }.position(x:size/2,y:size/2)
         }
@@ -96,6 +99,80 @@ private struct WReview54HomeCTAStyle:ButtonStyle {
             .background(enabled ? W.lime:W.secondary,in:RoundedRectangle(cornerRadius:17))
             .scaleEffect(configuration.isPressed && !systemMotion ? 0.988:1)
             .animation(systemMotion ? nil:.easeOut(duration:configuration.isPressed ? 0.09:0.18),value:configuration.isPressed)
+    }
+}
+
+private struct WReview55GoalSelector: View {
+    @State private var selected = "distance"
+    let distance: Double
+    let minutes: Double
+    let distanceGoal: Double
+    let timeGoal: Double
+    let reduceMotion: Bool
+    let ring: (Double, String, Double, Int, String) -> AnyView
+
+    private func summary(_ title:String, value:Double, goal:Double, unit:String, id:String)->some View {
+        let reached=value >= goal
+        let percentage=WeeklyGoal.percent(value:value,goal:goal)
+        let actual=unit == "km" ? "\(WReview52StatisticsFormat.kilometers(value)) km" : RunGoal.duration(Int(value))
+        let target=unit == "km" ? "\(MovNumber.display(goal)) km" : RunGoal.duration(Int(goal))
+        let surplus=value > goal ? (unit == "km" ? "\(MovNumber.display(value-goal)) km 더 달렸어요" : "\(RunGoal.duration(Int(value-goal))) 더 달렸어요") : ""
+        return VStack(alignment:.leading,spacing:0) {
+            HStack(alignment:.firstTextBaseline,spacing:0) {
+                Text(title).foregroundStyle(W.muted).frame(width:28,alignment:.leading)
+                Text(actual).fontWeight(.medium).lineLimit(1).minimumScaleFactor(0.8)
+                    .accessibilityIdentifier("homeSummaryActual-\(id)")
+                Text(" / \(target)").foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
+                    .accessibilityIdentifier("homeSummaryTarget-\(id)")
+                Spacer(minLength:8)
+                HStack(spacing:4) {
+                    if reached { Image(systemName:"checkmark").foregroundStyle(W.lime).accessibilityHidden(true) }
+                    Text("\(percentage)%").monospacedDigit()
+                }.font(.system(size:11)).accessibilityIdentifier("homeSummaryPercent-\(id)")
+            }.font(.system(size:13))
+            if !surplus.isEmpty { Text(surplus).font(.system(size:10)).foregroundStyle(W.muted).padding(.leading,37).accessibilityIdentifier("homeSummaryOverage-\(id)") }
+        }.padding(.vertical,8)
+            .overlay(alignment:.top) { if id == "time" { W.line.frame(height:1) } }
+            .accessibilityElement(children:.contain).accessibilityIdentifier("homeSummary-\(id)")
+    }
+
+    var body: some View {
+        VStack(spacing:0) {
+            HStack(spacing:4) {
+                selector("distance", title:"거리")
+                selector("time", title:"시간")
+            }
+            .padding(3).background(W.soft,in:RoundedRectangle(cornerRadius:14))
+            .padding(.bottom,9)
+            Group {
+                if selected == "time" {
+                    ring(minutes,"분",timeGoal,WeeklyGoal.percent(value:minutes,goal:timeGoal),"time")
+                } else {
+                    ring(distance,"km",distanceGoal,WeeklyGoal.percent(value:distance,goal:distanceGoal),"distance")
+                }
+            }
+            .frame(minHeight:190)
+            VStack(spacing:0) {
+                summary("거리",value:distance,goal:distanceGoal,unit:"km",id:"distance")
+                summary("시간",value:minutes,goal:timeGoal,unit:"분",id:"time")
+            }.padding(.top,3).padding(.bottom,3)
+                .accessibilityElement(children:.contain).accessibilityLabel("두 주간 목표 요약").accessibilityIdentifier("homeGoalSummaries")
+        }
+        .frame(maxWidth:.infinity).padding(.top,14)
+    }
+
+    private func selector(_ kind:String,title:String)->some View {
+        Button {
+            selected=kind
+        } label: {
+            Text(title).font(.system(size:13,weight:.medium))
+                .foregroundStyle(selected == kind ? Color(red:32/255,green:41/255,blue:37/255):W.muted)
+                .frame(minWidth:76,minHeight:44).padding(.horizontal,17)
+                .background(selected == kind ? W.lime:Color.clear,in:RoundedRectangle(cornerRadius:11))
+                .contentShape(RoundedRectangle(cornerRadius:11))
+                .animation(reduceMotion ? nil:.easeOut(duration:0.18),value:selected)
+        }.buttonStyle(.plain).accessibilityIdentifier("homeGoalSelector-\(kind)")
+            .accessibilityAddTraits(selected == kind ? .isSelected:[])
     }
 }
 
@@ -170,7 +247,6 @@ extension WireframeRoot {
         let seconds=store.weeklySeconds
         let distanceGoal=store.weekly.distanceEnabled ? Double(store.weekly.kilometers):nil
         let timeGoal=store.weekly.timeEnabled ? Double(store.weekly.minutes):nil
-        let showsOverage=(distanceGoal.map{distance>$0} ?? false) || (timeGoal.map{seconds/60>$0} ?? false)
         return VStack(spacing:0) {
             if distanceGoal == nil && timeGoal == nil {
                 homeRing(value:distance,unit:"km",target:nil,percent:nil,identifier:"distance")
@@ -178,13 +254,9 @@ extension WireframeRoot {
                 WText(text:"이번 주 달린 거리",small:true).padding(.top,3)
             } else {
                 if let distanceGoal,let timeGoal {
-                    GeometryReader { proxy in
-                        let ringSize=WReview54HomeArc.dualRingSize(availableWidth:proxy.size.width)
-                        HStack(alignment:.top,spacing:14) {
-                            homeRing(value:distance,unit:"km",target:distanceGoal,percent:WeeklyGoal.percent(value:distance,goal:distanceGoal),identifier:"distance",size:ringSize)
-                            homeRing(value:seconds/60,unit:"분",target:timeGoal,percent:WeeklyGoal.percent(value:seconds/60,goal:timeGoal),identifier:"time",size:ringSize)
-                        }.accessibilityElement(children:.contain).accessibilityIdentifier("homeDualRings")
-                    }.frame(height:showsOverage ? WReview54HomeArc.dualRingHeight(size:173,showsOverage:true):165).padding(.horizontal,1).padding(.top,12)
+                    WReview55GoalSelector(distance:distance,minutes:seconds/60,distanceGoal:distanceGoal,timeGoal:timeGoal,reduceMotion:reduceMotion,ring:{value,unit,target,percent,identifier in
+                        AnyView(homeRing(value:value,unit:unit,target:target,percent:percent,identifier:identifier,reduceMotion:reduceMotion,stableReview55Slots:true))
+                    })
                 } else if let target=distanceGoal {
                     homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
                 } else if let target=timeGoal {
@@ -194,11 +266,11 @@ extension WireframeRoot {
             }
         }.frame(maxWidth:.infinity).padding(.top,14).accessibilityElement(children:.contain).accessibilityIdentifier("homeWeeklyRings")
     }
-    func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220)->some View {
+    func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220,reduceMotion:Bool=false,stableReview55Slots:Bool=false)->some View {
         let displayed=unit=="km" ? WReview52StatisticsFormat.kilometers(value):RunGoal.duration(Int(value))
         let targetText=target.map{unit=="km" ? MovNumber.display($0):RunGoal.duration(Int($0))} ?? ""
         let progressDescription:String
-        if let target {
+        if target != nil {
             if unit=="km" {
                 progressDescription="\(displayed) km / \(targetText) km · \(percent ?? 0)%"
             } else {
@@ -208,7 +280,7 @@ extension WireframeRoot {
             progressDescription=unit=="km" ? "\(displayed) km":displayed
         }
         return VStack(spacing:0) {
-            WReview54RingVisual(value:displayed,unit:unit=="km" ? "km":"",progress:WReview54HomeArc.progressRatio(value:value,target:target),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription)
+            WReview54RingVisual(value:displayed,unit:unit=="km" ? "km":"",progress:WReview54HomeArc.progressRatio(value:value,target:target),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription,reduceMotion:reduceMotion)
             .accessibilityIdentifier("homeRing-\(identifier)")
             if let target,let percent {
                 HStack(spacing:6) {
@@ -217,7 +289,13 @@ extension WireframeRoot {
                     Text("\(percent)%").accessibilityIdentifier("homeRingPercent-\(identifier)")
                     if value>=target { Image(systemName:"checkmark.circle.fill").foregroundStyle(W.lime).accessibilityHidden(true) }
                 }.font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,8)
-                if value>target {
+                if stableReview55Slots {
+                    Text(value>target ? (unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요"):"")
+                        .font(.system(size:12)).foregroundStyle(W.muted).frame(height:18,alignment:.leading).padding(.top,3)
+                        .accessibilityIdentifier("homeRingOverage-\(identifier)")
+                    Text("").font(.system(size:11)).frame(height:18,alignment:.leading)
+                        .accessibilityIdentifier("homeAvailability-\(identifier)")
+                } else if value>target {
                     Text(unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요")
                         .font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,6)
                         .accessibilityIdentifier("homeRingOverage-\(identifier)")

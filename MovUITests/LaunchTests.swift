@@ -55,12 +55,13 @@ import UIKit
             }
         }
     }
-    func testReview54HomeWeeklyArcsExamplesAndNavigation() {
-        let suite="mov.wireframe.test.review54-home"
-        func launchExample(_ example:String) {
+    func testReview55HomeGoalSelectorAndPersistentSummaries() {
+        let suite="mov.wireframe.test.review55-home"
+        func launchExample(_ example:String,appearance:String="light",compact:Bool=false) {
             app.terminate()
             app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
-                "-wire-reset","-wire-capture-viewport","-wire-home-weekly-example",example,"-appearance","light"]
+                "-wire-reset","-wire-capture-viewport","-wire-home-weekly-example",example,"-appearance",appearance]
+            if compact { app.launchArguments.append("-wire-compact-review") }
             app.launch()
             XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:12),"Home example: \(example)")
         }
@@ -81,25 +82,45 @@ import UIKit
         XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
         XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"1시간 30분 / 2시간 · 75%")
         XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
+        XCTAssertFalse(app.buttons["homeGoalSelector-distance"].exists,"Single goal keeps the direct large arc")
 
         launchExample("both")
-        XCTAssertTrue(app.descendants(matching:.any)["homeDualRings"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeGoalSummaries"].exists)
+        XCTAssertEqual(app.staticTexts["homeSummaryActual-distance"].label,"12.00 km")
+        XCTAssertEqual(app.staticTexts["homeSummaryTarget-time"].label," / 2시간")
         XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
-        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
         XCTAssertTrue(app.buttons["homeEditWeeklyGoal"].exists)
-        XCTAssertLessThanOrEqual(app.descendants(matching:.any)["homeDualRings"].frame.maxX,368.5,"Dual goal rings stay within the source 22pt content inset")
+        XCTAssertLessThanOrEqual(app.descendants(matching:.any)["homeWeeklyRings"].frame.maxX,app.frame.width-22,"The selector and summaries stay within the 22pt content inset")
+        app.buttons["homeGoalSelector-time"].tap()
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-time"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"1시간 30분 / 2시간 · 75%")
+        app.buttons["homeGoalSelector-distance"].tap()
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeAvailability-distance"].exists,"The availability line reserves its source height")
+        capture("H00-review55-selector")
         app.buttons["homeEditWeeklyGoal"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:6))
 
         launchExample("both-over")
         let distanceOverage=app.staticTexts["homeRingOverage-distance"]
-        let timeOverage=app.staticTexts["homeRingOverage-time"]
         XCTAssertTrue(distanceOverage.exists)
+        XCTAssertEqual(app.staticTexts["homeSummaryOverage-distance"].label,"3 km 더 달렸어요")
+        XCTAssertEqual(app.staticTexts["homeSummaryOverage-time"].label,"30분 더 달렸어요")
+        app.buttons["homeGoalSelector-time"].tap()
+        let timeOverage=app.staticTexts["homeRingOverage-time"]
         XCTAssertTrue(timeOverage.exists)
         XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"2시간 30분 / 2시간 · 125%")
         XCTAssertEqual(timeOverage.label,"30분 더 달렸어요")
         XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
-        XCTAssertGreaterThanOrEqual(app.buttons["homeEditWeeklyGoal"].frame.minY,max(distanceOverage.frame.maxY,timeOverage.frame.maxY),"Goal action stays below both overage messages")
+        XCTAssertGreaterThanOrEqual(app.buttons["homeEditWeeklyGoal"].frame.minY,app.descendants(matching:.any)["homeGoalSummaries"].frame.maxY,"Goal action stays below the persistent summary rows")
 
         launchExample("unset")
         XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
@@ -113,6 +134,19 @@ import UIKit
         XCTAssertTrue(app.staticTexts["homeRingOverage-distance"].exists)
         app.buttons["homeStartRun"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:6))
+
+        launchExample("both",appearance:"dark")
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeGoalSummaries"].exists)
+        capture("H00-review55-dark")
+
+        launchExample("both",compact:true)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isHittable)
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].isHittable)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-time"].exists)
+        capture("H00-review55-compact")
         app.terminate()
         UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
     }
