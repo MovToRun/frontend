@@ -523,7 +523,7 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
@@ -533,6 +533,8 @@ import UIKit
         if let viewerID{app.launchArguments += ["-wire-community-viewer",viewerID]}
         if let crewID{app.launchArguments += ["-wire-community-crew",crewID]}
         if let crewBoardID{app.launchArguments += ["-wire-community-board",crewBoardID]}
+        if photoDraftFixture{app.launchArguments.append("-wire-community-photo-draft-fixture")}
+        if photoPostFixture{app.launchArguments.append("-wire-community-photo-post-fixture")}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
@@ -1765,6 +1767,80 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts.matching(identifier:"communityPostTitle-p1").count,1,"Editing keeps the original post ID and does not create a duplicate")
         XCTAssertEqual(app.staticTexts["communityPostTitle-p1"].label,"수정한 강변 러닝")
+    }
+
+    func testCommunityPhotoDraftOrderPreviewAndC26Discard() {
+        launchCommunity("C05",photoDraftFixture:true)
+        XCTAssertEqual(app.staticTexts["communityComposePhotoCount"].label,"사진 2/10")
+        app.buttons["communityDraftPhotoMoveRight-0"].tap()
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityPreviewPhoto-review-photo-1"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityPreviewPhoto-review-photo-0"].exists)
+        app.buttons["다시 수정"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        app.buttons["communityDraftPhotoRemove-0"].tap()
+        XCTAssertEqual(app.staticTexts["communityComposePhotoCount"].label,"사진 1/10")
+        app.buttons["communityComposeCancel"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),"Reordering/removing a photo marks the draft dirty")
+        app.alerts.buttons["계속 편집"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].exists)
+        XCTAssertEqual(app.staticTexts["communityComposePhotoCount"].label,"사진 1/10","Continue editing retains the remaining photo")
+        app.buttons["communityComposeCancel"].tap()
+        app.alerts.buttons["버리기"].tap()
+        XCTAssertFalse(app.staticTexts["communityComposePhotoCount"].exists,"Discard leaves the composer and its photo draft")
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists)
+    }
+
+    func testCommunityPhotoPostPreviewDetailZoomAndDelete() {
+        launchCommunity("C05",photoDraftFixture:true)
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityPreviewPhoto-review-photo-0"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["communityPreviewPhoto-review-photo-1"].exists)
+        app.buttons["communityPublishButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        let post=app.staticTexts.matching(NSPredicate(format:"label == %@","사진 첨부 예시")).firstMatch
+        XCTAssertTrue(post.waitForExistence(timeout:5))
+        post.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityDetailPhotoOpen-0"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04-IMAGE"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityImageCount"].label,"1 / 2")
+        app.buttons["communityImageNext"].tap()
+        XCTAssertEqual(app.staticTexts["communityImageCount"].label,"2 / 2")
+        app.buttons["communityImagePrevious"].tap()
+        let image=app.images["communityImageZoom"]
+        XCTAssertTrue(image.waitForExistence(timeout:5))
+        image.pinch(withScale:1.8,velocity:1)
+        XCTAssertNotEqual(image.value as? String,"확대 100%","C04 supports pinch zoom for attached photos")
+        app.buttons["communityImageClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuDeletePost"].tap()
+        app.buttons["communityPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label == %@","사진 첨부 예시")).firstMatch.exists)
+    }
+
+    func testCommunityPhotoEditDiscardPreservesPublishedFileAndSaveRemovesIt() {
+        launchCommunity("C01",viewerID:"fixture-member-ga-on",photoPostFixture:true)
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap();app.buttons["communityMenuEditPost"].tap()
+        app.buttons["communityDraftPhotoRemove-0"].tap()
+        app.buttons["communityComposeCancel"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
+        app.alerts.buttons["계속 편집"].tap()
+        XCTAssertEqual(app.staticTexts["communityComposePhotoCount"].label,"사진 0/10")
+        app.buttons["communityComposeCancel"].tap();app.alerts.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityDetailPhotoOpen-1"].exists,"Discard retains the published file and attachment")
+
+        app.buttons["communityPostMore"].tap();app.buttons["communityMenuEditPost"].tap()
+        app.buttons["communityDraftPhotoRemove-0"].tap()
+        app.buttons["communityPreviewButton"].tap()
+        app.buttons["communityEditPostSave"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["communityDetailPhotoOpen-1"].exists,"Saving the edit releases the removed published file")
     }
 
     func testCommunityPostEditUsesC26ForChangedDraftAndSkipsItWhenUnchanged() {

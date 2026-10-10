@@ -2,6 +2,7 @@ import XCTest
 import UIKit
 import SwiftUI
 import UniformTypeIdentifiers
+import ImageIO
 @testable import Mov
 
 private struct V1PointEntryFixture: Codable {
@@ -18,6 +19,90 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func communityPhotoFixture(width:Int=240,height:Int=160,transparent:Bool=false)->Data {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque = !transparent
+        let size=CGSize(width:CGFloat(width),height:CGFloat(height))
+        let image=UIGraphicsImageRenderer(size:size,format:format).image { context in
+            if !transparent{context.cgContext.setFillColor(UIColor(red:0.15,green:0.55,blue:0.35,alpha:1).cgColor);context.cgContext.fill(CGRect(origin:.zero,size:size))}
+            let diameter=CGFloat(min(110,min(width,height)));context.cgContext.setFillColor(UIColor(red:0.95,green:0.25,blue:0.15,alpha:transparent ? 0.8:1).cgColor);context.cgContext.fillEllipse(in:CGRect(x:CGFloat(width)/3,y:CGFloat(height)/4,width:diameter,height:diameter))
+        }
+        return transparent ? image.pngData()!:image.jpegData(compressionQuality:0.9)!
+    }
+
+    func testCommunityPhotoPolicyEnforcesSizeCountAndAggregateLimits() {
+        XCTAssertTrue(WCommunityPhotoPolicy.canAppend(currentCount:0,currentBytes:0,addingCount:10,addingBytes:50_000_000))
+        XCTAssertFalse(WCommunityPhotoPolicy.canAppend(currentCount:10,currentBytes:0,addingCount:1,addingBytes:1))
+        XCTAssertFalse(WCommunityPhotoPolicy.canAppend(currentCount:1,currentBytes:99_000_000,addingCount:1,addingBytes:2_000_000))
+        XCTAssertThrowsError(try WCommunityPhotoPolicy.convertedBytes(from:Data(repeating:0,count:WCommunityPhotoPolicy.maximumOriginalBytes+1))) { error in
+            XCTAssertEqual(error as? WCommunityPhotoError,.inputTooLarge)
+        }
+        XCTAssertThrowsError(try WCommunityPhotoPolicy.convertedBytes(from:Data("not an image".utf8)))
+    }
+
+    func testCommunityPhotoConversionKeepsTransparencyAndStripsSourceMetadata() throws {
+        let transparent=try WCommunityPhotoPolicy.convertedBytes(from:communityPhotoFixture(transparent:true))
+        XCTAssertTrue(transparent.starts(with:[0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]))
+        XCTAssertLessThanOrEqual(transparent.count,WCommunityPhotoPolicy.maximumPhotoBytes)
+        let pngInfo=WProfilePhotoPolicy.inspect(transparent)
+        XCTAssertTrue(pngInfo?.type.conforms(to:.png) == true)
+
+        let source=communityPhotoFixture()
+        guard let imageSource=CGImageSourceCreateWithData(source as CFData,nil),let image=CGImageSourceCreateImageAtIndex(imageSource,0,nil) else{return XCTFail("Synthetic JPEG decodes")}
+        let tagged=NSMutableData()
+        let gps:[CFString:Any]=[kCGImagePropertyGPSLatitude:37.5,kCGImagePropertyGPSLatitudeRef:"N",kCGImagePropertyGPSLongitude:127.0,kCGImagePropertyGPSLongitudeRef:"E"]
+        let properties:[CFString:Any]=[kCGImagePropertyGPSDictionary:gps]
+        guard let destination=CGImageDestinationCreateWithData(tagged,UTType.jpeg.identifier as CFString,1,nil) else{return XCTFail("Synthetic JPEG destination")}
+        CGImageDestinationAddImage(destination,image,properties as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let cleaned=try WCommunityPhotoPolicy.convertedBytes(from:tagged as Data)
+        XCTAssertLessThanOrEqual(cleaned.count,WCommunityPhotoPolicy.maximumPhotoBytes)
+        let cleanedSource=CGImageSourceCreateWithData(cleaned as CFData,nil)
+        let cleanedProperties=CGImageSourceCopyPropertiesAtIndex(cleanedSource!,0,nil) as? [CFString:Any]
+        XCTAssertNil(cleanedProperties?[kCGImagePropertyGPSDictionary],"Re-encoding strips GPS metadata before local storage")
+    }
+
+    func testCommunityPhotoConversionNormalizesExifRotationAndResizesLongEdge() throws {
+        let source=communityPhotoFixture(width:900,height:450)
+        guard let sourceReader=CGImageSourceCreateWithData(source as CFData,nil),let image=CGImageSourceCreateImageAtIndex(sourceReader,0,nil) else{return XCTFail("Synthetic JPEG decodes")}
+        let rotated=NSMutableData()
+        guard let writer=CGImageDestinationCreateWithData(rotated,UTType.jpeg.identifier as CFString,1,nil) else{return XCTFail("Synthetic rotated JPEG destination")}
+        CGImageDestinationAddImage(writer,image,[kCGImagePropertyOrientation:6] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(writer))
+        let normalized=try WCommunityPhotoPolicy.convertedBytes(from:rotated as Data)
+        let rotatedInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(normalized))
+        XCTAssertEqual(rotatedInfo.width,450)
+        XCTAssertEqual(rotatedInfo.height,900,"EXIF rotation becomes real pixel orientation before storage")
+
+        let wide=try WCommunityPhotoPolicy.convertedBytes(from:communityPhotoFixture(width:9000,height:100))
+        let wideInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(wide))
+        XCTAssertEqual(max(wideInfo.width,wideInfo.height),WCommunityPhotoPolicy.maximumEdge)
+        XCTAssertLessThanOrEqual(wideInfo.width*wideInfo.height,WCommunityPhotoPolicy.maximumPixels)
+    }
+
+    @MainActor func testCommunityAttachmentStoreSeparatesDraftAndPublishedCleanup() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("community-photo-test-\(UUID().uuidString)",isDirectory:true)
+        let store=WCommunityAttachmentStore(rootURL:root)
+        defer{store.cleanup()}
+        let bytes=try WCommunityPhotoPolicy.convertedBytes(from:communityPhotoFixture())
+        let first=try store.saveDraft(bytes,id:"first")
+        let published=try store.commit([first],forPost:"post-1")
+        XCTAssertFalse(store.isDraft(published[0].url));XCTAssertTrue(store.isPublished(published[0].url));XCTAssertTrue(store.contains(published[0].url))
+        let second=try store.saveDraft(bytes,id:"second")
+        store.discardDraft([second])
+        XCTAssertFalse(store.contains(second.url),"Discard removes a temporary draft file")
+        XCTAssertTrue(store.contains(published[0].url),"Discard never removes a published post's file")
+        store.releaseRemovedPublished(published,keeping:[])
+        XCTAssertFalse(store.contains(published[0].url),"A saved edit removes a published file after replacement")
+    }
+
+    func testCommunityComposerSnapshotIncludesAttachmentIdentityAndOrder() {
+        let original=WCommunityComposerSnapshot(screen:"C05",board:"러닝 인증",crewID:nil,postID:"p1",title:"제목",body:"본문",recordID:"",hideEnds:false,attachmentIDs:["a","b"])
+        let reordered=WCommunityComposerSnapshot(screen:"C05",board:"러닝 인증",crewID:nil,postID:"p1",title:"제목",body:"본문",recordID:"",hideEnds:false,attachmentIDs:["b","a"])
+        let removed=WCommunityComposerSnapshot(screen:"C05",board:"러닝 인증",crewID:nil,postID:"p1",title:"제목",body:"본문",recordID:"",hideEnds:false,attachmentIDs:["a"])
+        XCTAssertNotEqual(original,reordered)
+        XCTAssertNotEqual(original,removed)
+    }
+
     func testCommunityNotificationCenterTracksReadStateAndEmptyState() {
         var center=WCommunityNotificationCenter()
         XCTAssertTrue(center.hasUnread)
