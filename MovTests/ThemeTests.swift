@@ -47,7 +47,7 @@ final class ThemeTests:XCTestCase {
     }
 
     func testCommunityPostManagementAllowsOnlyAuthorsToEditAndCrewManagersToDeleteCrewPosts() {
-        let crew=WCommunityCrew(id:"crew",name:"강변 크루",introduction:"소개",region:"모브시 강변",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator"])
+        let crew=WCommunityCrew(id:"crew",name:"강변 크루",introduction:"소개",region:"모브시 강변",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],operatorMemberIDs:["operator"])
         let crewPost=WCommunityPost(id:"crew-post",authorMemberID:"author",author:"작성자",rank:"시작러너",board:"자유게시판",title:"제목",text:"내용",date:"now",likes:0,views:0,comments:[],isCrewOnly:true,crewID:crew.id)
         XCTAssertFalse(WCommunityPostManagementPolicy.canEdit(crewPost,viewerID:"owner"))
         XCTAssertTrue(WCommunityPostManagementPolicy.canEdit(crewPost,viewerID:"author"))
@@ -73,6 +73,31 @@ final class ThemeTests:XCTestCase {
         XCTAssertFalse(WCommunityPostManagementPolicy.update("post-1",by:"another",board:"러닝 인증",title:"무단 수정",text:"변경",posts:&posts))
         XCTAssertFalse(WCommunityPostManagementPolicy.update("post-1",by:"author",board:"러닝 인증",title:" ",text:"변경",posts:&posts))
         XCTAssertEqual(posts[0].title,"바뀐 제목","Rejected updates leave the saved post intact")
+    }
+
+    func testCrewPostEditPreservesItsStableBoardIdentityAndRejectsMissingBoardMetadata() {
+        let post=WCommunityPost(id:"crew-post",authorMemberID:"author",author:"작성자",rank:"열정러너",board:"러닝 일정",title:"기존 제목",text:"기존 내용",date:"now",likes:0,views:0,comments:[],isCrewOnly:true,crewID:"dawn",crewBoardID:"dawn-board-1")
+        var posts=[post]
+        XCTAssertFalse(WCommunityPostManagementPolicy.update(post.id,by:"author",board:"새 이름",title:"변경 제목",text:"변경 내용",posts:&posts))
+        XCTAssertEqual(posts[0].board,post.board,"A rejected update leaves the post unchanged")
+        XCTAssertTrue(WCommunityPostManagementPolicy.update(post.id,by:"author",board:"새 이름",title:"변경 제목",text:"변경 내용",crewBoardID:"dawn-board-1",posts:&posts))
+        XCTAssertEqual(posts.count,1)
+        XCTAssertEqual(posts[0].id,post.id)
+        XCTAssertEqual(posts[0].crewBoardID,"dawn-board-1")
+        XCTAssertEqual(posts[0].board,"새 이름")
+    }
+
+    func testCrewManagerCommentDeletionTombstonesWithoutRemovingReplies() {
+        let reply=WCommunityComment(id:"reply",author:"답글 작성자",authorMemberID:"reply-author",text:"답글 내용",date:"now",parentID:"parent")
+        var comments=[WCommunityComment(id:"parent",author:"작성자",authorMemberID:"author",text:"댓글 내용",date:"now"),reply]
+        XCTAssertFalse(WCommunityCommentActions.delete("parent",byMemberID:"member",to:&comments),"A regular crew member cannot delete someone else's comment")
+        XCTAssertFalse(WCommunityCommentActions.delete("parent",byMemberID:"manager",canManageCrew:true,to:&comments),"A crew role cannot moderate a public-post comment")
+        XCTAssertTrue(WCommunityCommentActions.delete("parent",byMemberID:"manager",canManageCrew:true,isCrewPost:true,to:&comments))
+        XCTAssertEqual(comments.count,2,"Deleting a comment keeps descendant replies")
+        XCTAssertTrue(comments[0].isDeleted)
+        XCTAssertNil(comments[0].authorMemberID)
+        XCTAssertEqual(comments[1].parentID,"parent")
+        XCTAssertEqual(comments[1].text,"답글 내용")
     }
 
     func testCommunityPostDeleteRemovesOnlyAuthorizedPostAndItsReadState() {
@@ -153,7 +178,7 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:rejected,now:rejectedAt.addingTimeInterval(WCommunityCrewPolicy.rejectionCooldown)),.ready,"Exactly 24 hours has elapsed")
         let cancelled=WCommunityCrewApplication(id:"cancelled",crewID:river.id,applicantMemberID:viewer,memo:"",status:.cancelled)
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:cancelled,now:rejectedAt.addingTimeInterval(60)),.ready,"Cancellation allows an immediate new application")
-        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:3,tags:[],boards:[],posts:[])
+        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:3,tags:[],boards:[])
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:rankLimited,viewerID:viewer,rank:1,memo:"",current:nil),.rankRequired)
         XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:String(repeating:"가",count:301),current:nil),.invalidMemo)
     }
@@ -163,15 +188,25 @@ final class ThemeTests:XCTestCase {
         XCTAssertTrue(WCommunityCrewPolicy.canReadBoard(crew:dawn,memberIDs:[],viewerID:viewer))
         XCTAssertFalse(WCommunityCrewPolicy.canReadBoard(crew:river,memberIDs:[],viewerID:viewer))
         XCTAssertTrue(WCommunityCrewPolicy.canReadBoard(crew:river,memberIDs:[river.id],viewerID:viewer))
-        XCTAssertTrue(dawn.posts.contains{$0.boardID==dawn.boards[0].id && $0.title=="이번 주 러닝 안내"})
-        XCTAssertFalse(river.posts.contains{$0.boardID==dawn.boards[0].id},"Crew board content stays scoped to its own crew")
+        let crewPosts=WCommunityFixtures.posts.filter{$0.crewID != nil}
+        XCTAssertTrue(crewPosts.contains{$0.id=="dawn-notice-1" && $0.crewBoardID==dawn.boards[0].id && $0.title=="이번 주 러닝 안내"})
+        XCTAssertFalse(crewPosts.contains{$0.crewID==river.id && $0.crewBoardID==dawn.boards[0].id},"Posts stay scoped by crew and stable board identity")
+        XCTAssertEqual(crewPosts.first{$0.id=="river-run-1"}?.comments.count,2,"Crew post comments use the same detail model")
+    }
+
+    func testCrewPostsNeverEnterPublicFeedSearchOrHotResults() {
+        let crewPosts=WCommunityFixtures.posts.filter{$0.crewID != nil}
+        XCTAssertTrue(WCommunityDiscoveryPolicy.publicPosts(WCommunityFixtures.posts).allSatisfy{$0.crewID==nil && !$0.isCrewOnly})
+        XCTAssertFalse(WCommunityDiscoveryPolicy.searchPosts(WCommunityFixtures.posts,query:"회원에게만 공개되는 러닝 인증 예시").contains{$0.id=="river-run-1"})
+        let crewPostIDs=Set(crewPosts.map(\.id))
+        XCTAssertTrue(WCommunityDiscoveryPolicy.hotPosts(WCommunityFixtures.posts).allSatisfy{!crewPostIDs.contains($0.id)})
     }
 
     func testCommunityCrewCreateAndEditPolicyUsesLocalReviewRules() {
         let dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,river=WCommunityCrewFixtures.values.first{$0.id=="river"}!,viewer="fixture-member-current"
         XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"새벽 크루",introduction:"함께 천천히 달려요.",region:"모브시 중앙",minimumRank:0,existing:[dawn,river],editingID:nil,viewerID:viewer),.ready)
         XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"  모브   새벽 크루 ",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.duplicateName)
-        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"MÖVE RUN CLUB",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[WCommunityCrew(id:"english",name:"möve run club",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:0,tags:[],boards:[],posts:[])],editingID:nil,viewerID:viewer),.duplicateName,"NFC and English case variants share one canonical name")
+        XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"MÖVE RUN CLUB",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[WCommunityCrew(id:"english",name:"möve run club",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:0,tags:[],boards:[])],editingID:nil,viewerID:viewer),.duplicateName,"NFC and English case variants share one canonical name")
         XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"",introduction:"소개",region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.invalidName)
         XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"새 크루",introduction:String(repeating:"가",count:301),region:"모브시 중앙",minimumRank:0,existing:[dawn],editingID:nil,viewerID:viewer),.invalidIntroduction)
         XCTAssertEqual(WCommunityCrewPolicy.saveResult(name:"크루",introduction:"소개",region:"없는 지역",minimumRank:0,existing:[],editingID:nil,viewerID:viewer),.invalidRegion)
@@ -185,9 +220,9 @@ final class ThemeTests:XCTestCase {
         var operatorManaged=dawn;operatorManaged.memberIDs.append("fixture-operator");operatorManaged.operatorMemberIDs.insert("fixture-operator")
         XCTAssertTrue(WCommunityCrewPolicy.canManage(operatorManaged,viewerID:"fixture-operator"))
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:request,crew:operatorManaged,applicantRank:1,viewerID:"fixture-operator",approve:false),.rejected)
-        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:3,tags:[],boards:[],posts:[])
+        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer],minimumRank:3,tags:[],boards:[])
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:WCommunityCrewApplication(id:"rank-request",crewID:"rank",applicantMemberID:"fixture-member-early",memo:"",status:.pending),crew:rankLimited,applicantRank:1,viewerID:viewer,approve:true),.rankRequired)
-        let full=WCommunityCrew(id:"full",name:"정원 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer] + (1..<WCommunityCrewPolicy.memberCapacity).map{"member\($0)"},minimumRank:0,tags:[],boards:[],posts:[])
+        let full=WCommunityCrew(id:"full",name:"정원 예시",introduction:"",region:"",guidance:"",ownerMemberID:viewer,memberIDs:[viewer] + (1..<WCommunityCrewPolicy.memberCapacity).map{"member\($0)"},minimumRank:0,tags:[],boards:[])
         XCTAssertEqual(full.memberIDs.count,WCommunityCrewPolicy.memberCapacity)
         XCTAssertTrue(full.memberIDs.contains(full.ownerMemberID))
         XCTAssertEqual(WCommunityCrewPolicy.reviewResult(application:WCommunityCrewApplication(id:"full-request",crewID:"full",applicantMemberID:"fixture-member-early",memo:"",status:.pending),crew:full,applicantRank:1,viewerID:viewer,approve:true),.full)
@@ -209,7 +244,7 @@ final class ThemeTests:XCTestCase {
     }
 
     func testCommunityCrewMemberRolesCanOnlyBeChangedByOwner() {
-        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator"])
+        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],operatorMemberIDs:["operator"])
         XCTAssertEqual(WCommunityCrewPolicy.role(of:"owner",in:crew),.owner)
         XCTAssertEqual(WCommunityCrewPolicy.role(of:"operator",in:crew),.crewOperator)
         XCTAssertEqual(WCommunityCrewPolicy.role(of:"member",in:crew),.member)
@@ -222,7 +257,7 @@ final class ThemeTests:XCTestCase {
     }
 
     func testCommunityCrewMemberActionsProtectOwnerSelfAndPeerOperators() {
-        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","peer-operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator","peer-operator"])
+        let crew=WCommunityCrew(id:"members",name:"멤버 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","peer-operator","member"],minimumRank:0,tags:[],boards:[],operatorMemberIDs:["operator","peer-operator"])
         XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"member",kind:.warn,note:"주의 내용"),.ready)
         XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"owner",targetMemberID:"operator",kind:.kick),.ready)
         XCTAssertEqual(WCommunityCrewPolicy.memberActionResult(crew:crew,actorID:"operator",targetMemberID:"member",kind:.kick),.ready)
@@ -427,8 +462,8 @@ final class ThemeTests:XCTestCase {
 
         let runners=[WCommunityRunner(id:"visible",name:"Café Runner",rank:"시작러너",introduction:"",region:"",averageDistance:0,verified:false),WCommunityRunner(id:"blocked",name:"Café Blocked",rank:"시작러너",introduction:"",region:"",averageDistance:0,verified:false)]
         XCTAssertEqual(WCommunityDiscoveryPolicy.searchRunners(runners,query:"café",blockedIDs:["blocked"]).map(\.id),["visible"])
-        let crew=WCommunityCrew(id:"crew",name:"모브 새벽 크루",introduction:"강변에서 함께 달려요",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:0,tags:[],boards:[],posts:[])
-        let blockedCrew=WCommunityCrew(id:"blocked-crew",name:"모브 강변 크루",introduction:"같이 달려요",region:"",guidance:"",ownerMemberID:"blocked",memberIDs:["blocked"],minimumRank:0,tags:[],boards:[],posts:[])
+        let crew=WCommunityCrew(id:"crew",name:"모브 새벽 크루",introduction:"강변에서 함께 달려요",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:0,tags:[],boards:[])
+        let blockedCrew=WCommunityCrew(id:"blocked-crew",name:"모브 강변 크루",introduction:"같이 달려요",region:"",guidance:"",ownerMemberID:"blocked",memberIDs:["blocked"],minimumRank:0,tags:[],boards:[])
         XCTAssertEqual(WCommunityDiscoveryPolicy.searchCrews([crew,blockedCrew],query:"강변",blockedOwnerIDs:["blocked"]).map(\.id),["crew"])
     }
 
