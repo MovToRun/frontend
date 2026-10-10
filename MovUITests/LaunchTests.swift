@@ -523,7 +523,7 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
@@ -531,6 +531,8 @@ import UIKit
         if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
         if twoCourseRecords{app.launchArguments.append("-wire-community-course-two-records")}
         if let viewerID{app.launchArguments += ["-wire-community-viewer",viewerID]}
+        if let crewID{app.launchArguments += ["-wire-community-crew",crewID]}
+        if let crewBoardID{app.launchArguments += ["-wire-community-board",crewBoardID]}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
@@ -725,8 +727,56 @@ import UIKit
         app.buttons["communityPublishButton"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["이번 주 일정 예시"].exists,"Publishing adds a local example to the selected crew board")
+        let createdPost=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label CONTAINS %@","communityCrewPost-","이번 주 일정 예시")).firstMatch
+        XCTAssertTrue(createdPost.waitForExistence(timeout:5),"The new C19 row is backed by the shared post store")
+        createdPost.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"이번 주 일정 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["communityDetailCrewContext"].label.contains("모브 새벽 크루"))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5),"Detail back returns to the selected crew board")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@ AND label CONTAINS %@","communityCrewPost-","이번 주 일정 예시")).firstMatch.exists)
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+    }
+
+    func testCrewPostCanBeEditedFromC19AndReturnsToSameBoard() {
+        launchCommunity("C19",viewerID:"fixture-member-ga-on",crewID:"dawn",crewBoardID:"dawn-board-1")
+        let row=app.buttons["communityCrewPost-dawn-run-1"]
+        XCTAssertTrue(row.waitForExistence(timeout:5))
+        row.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"다음 모임은 천천히 한 바퀴")
+        XCTAssertTrue(app.descendants(matching:.any)["communityDetailCrewContext"].label.contains("모브 새벽 크루"))
+        app.buttons["communityPostMore"].tap()
+        XCTAssertTrue(app.buttons["communityMenuEditPost"].exists,"The author can edit the post in C04")
+        app.buttons["communityMenuEditPost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        replace("수정된 새벽 모임",into:app.textFields["communityComposeTitle"])
+        replace("한 주 뒤에도 같은 게시물 ID로 보여요.",into:app.textViews["communityComposeBody"])
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        app.buttons["communityEditPostSave"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"수정된 새벽 모임")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewPost-dawn-run-1"].label.contains("수정된 새벽 모임"))
+        XCTAssertEqual(app.buttons.matching(identifier:"communityCrewPost-dawn-run-1").count,1,"Editing updates the shared post instead of duplicating it")
+    }
+
+    func testCrewPostDeleteFromC19ReturnsToItsBoardAndRemovesTheSameID() {
+        launchCommunity("C19",viewerID:"fixture-member-current",crewID:"dawn",crewBoardID:"dawn-board-1")
+        XCTAssertTrue(app.buttons["communityCrewPost-dawn-run-1"].waitForExistence(timeout:5))
+        app.buttons["communityCrewPost-dawn-run-1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        XCTAssertFalse(app.buttons["communityMenuEditPost"].exists,"The crew owner cannot edit another member's post")
+        app.buttons["communityMenuDeletePost"].tap()
+        app.buttons["communityPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5),"Deleting a detail returns to the originating crew board")
+        XCTAssertFalse(app.buttons["communityCrewPost-dawn-run-1"].exists,"The same shared post ID is removed from the crew board")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewBoardEmpty"].exists)
     }
 
     func testCommunityCrewBoardHidesPostsFromNonMembers() {
@@ -1786,9 +1836,24 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         XCTAssertFalse(app.buttons["communityMenuEditPost"].exists,"A crew manager cannot edit another member's post")
         XCTAssertTrue(app.buttons["communityMenuDeletePost"].exists,"The crew owner can delete a crew post")
+        app.buttons["communityMenuClose"].tap()
+        XCTAssertTrue(app.buttons["communityDeleteComment-c1"].exists,"Crew managers can delete other members' comments on crew posts")
+        app.buttons["communityDeleteComment-c1"].tap()
+        XCTAssertTrue(app.staticTexts["communityCommentText-c1"].label.contains("삭제된 댓글"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityReplyQuote-c1-reply"].exists,"Deleting a parent comment preserves its reply")
+        app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuDeletePost"].tap()
         app.buttons["communityPostDeleteConfirm"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
+    }
+
+    func testDirectCrewPostRouteHidesContentFromNonMembers() {
+        app.launchArguments=["-wire-screen","C04","-wire-fixture","-wire-test-store-suite","community-crew-private-\(UUID().uuidString)","-wire-reset","-appearance","light","-wire-community-crew-post","-wire-community-not-member","-wire-community-viewer","fixture-member-early"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["communityPostUnavailable"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["communityDetailTitle"].exists,"A direct route never reveals a non-member's crew post")
+        XCTAssertFalse(app.buttons["communityPostMore"].exists,"A non-member cannot use post actions through a direct route")
     }
 
     func testPaceChartReflowsOnCompactDarkViewport() {
