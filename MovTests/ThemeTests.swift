@@ -46,6 +46,56 @@ final class ThemeTests:XCTestCase {
         XCTAssertNil(WCommunityNotificationPolicy.destination(for:.post(postID:"blocked-or-deleted"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts))
     }
 
+    func testCommunityPostManagementAllowsOnlyAuthorsToEditAndCrewManagersToDeleteCrewPosts() {
+        let crew=WCommunityCrew(id:"crew",name:"강변 크루",introduction:"소개",region:"모브시 강변",guidance:"",ownerMemberID:"owner",memberIDs:["owner","operator","member"],minimumRank:0,tags:[],boards:[],posts:[],operatorMemberIDs:["operator"])
+        let crewPost=WCommunityPost(id:"crew-post",authorMemberID:"author",author:"작성자",rank:"시작러너",board:"자유게시판",title:"제목",text:"내용",date:"now",likes:0,views:0,comments:[],isCrewOnly:true,crewID:crew.id)
+        XCTAssertFalse(WCommunityPostManagementPolicy.canEdit(crewPost,viewerID:"owner"))
+        XCTAssertTrue(WCommunityPostManagementPolicy.canEdit(crewPost,viewerID:"author"))
+        XCTAssertTrue(WCommunityPostManagementPolicy.canDelete(crewPost,viewerID:"owner",canManageCrew:WCommunityCrewPolicy.canManage(crew,viewerID:"owner")))
+        XCTAssertTrue(WCommunityPostManagementPolicy.canDelete(crewPost,viewerID:"operator",canManageCrew:WCommunityCrewPolicy.canManage(crew,viewerID:"operator")))
+        XCTAssertFalse(WCommunityPostManagementPolicy.canDelete(crewPost,viewerID:"member",canManageCrew:WCommunityCrewPolicy.canManage(crew,viewerID:"member")))
+        XCTAssertFalse(WCommunityPostManagementPolicy.canDelete(crewPost,viewerID:"outsider",canManageCrew:WCommunityCrewPolicy.canManage(crew,viewerID:"outsider")))
+        let publicPost=WCommunityPost(id:"public-post",authorMemberID:"author",author:"작성자",rank:"시작러너",board:"러닝 질문",title:"제목",text:"내용",date:"now",likes:0,views:0,comments:[])
+        XCTAssertFalse(WCommunityPostManagementPolicy.canDelete(publicPost,viewerID:"owner",canManageCrew:true),"Crew roles never grant deletion rights on public posts")
+    }
+
+    func testCommunityPostEditUpdatesExistingPostAndPreservesUneditedData() {
+        let comment=WCommunityComment(id:"comment",author:"작성자",authorMemberID:"author",text:"기존 댓글",date:"now")
+        let post=WCommunityPost(id:"post-1",authorMemberID:"author",author:"작성자",rank:"열정러너",board:"러닝 인증",title:"기존 제목",text:"기존 내용",date:"now",likes:7,views:19,comments:[comment],imageName:"CommunityRiverside",hot:true,course:WCommunityCourseFixtures.sample)
+        var posts=[post]
+        XCTAssertTrue(WCommunityPostManagementPolicy.update("post-1",by:"author",board:"자유게시판",title:"  바뀐 제목  ",text:"  바뀐 내용  ",posts:&posts))
+        XCTAssertEqual(posts.count,1,"Editing updates the existing post instead of inserting a duplicate")
+        XCTAssertEqual(posts[0].id,"post-1");XCTAssertEqual(posts[0].board,"자유게시판");XCTAssertEqual(posts[0].title,"바뀐 제목");XCTAssertEqual(posts[0].text,"바뀐 내용")
+        XCTAssertEqual(posts[0].authorMemberID,post.authorMemberID);XCTAssertEqual(posts[0].likes,7);XCTAssertEqual(posts[0].views,19)
+        XCTAssertEqual(posts[0].comments.count,1);XCTAssertEqual(posts[0].comments[0].text,"기존 댓글")
+        XCTAssertEqual(posts[0].imageName,"CommunityRiverside","Fixture media stays attached when text is edited")
+        XCTAssertEqual(posts[0].course?.id,WCommunityCourseFixtures.sample.id,"Attached course details stay attached when text is edited")
+        XCTAssertFalse(WCommunityPostManagementPolicy.update("post-1",by:"another",board:"러닝 인증",title:"무단 수정",text:"변경",posts:&posts))
+        XCTAssertFalse(WCommunityPostManagementPolicy.update("post-1",by:"author",board:"러닝 인증",title:" ",text:"변경",posts:&posts))
+        XCTAssertEqual(posts[0].title,"바뀐 제목","Rejected updates leave the saved post intact")
+    }
+
+    func testCommunityPostDeleteRemovesOnlyAuthorizedPostAndItsReadState() {
+        let deleted=WCommunityPost(id:"delete-me",authorMemberID:"author",author:"작성자",rank:"시작러너",board:"러닝 질문",title:"삭제할 글",text:"내용",date:"now",likes:0,views:0,comments:[WCommunityComment(id:"comment",author:"작성자",authorMemberID:"author",text:"댓글",date:"now")])
+        let retained=WCommunityPost(id:"keep-me",authorMemberID:"other",author:"다른 러너",rank:"시작러너",board:"러닝 질문",title:"남길 글",text:"내용",date:"now",likes:0,views:0,comments:[])
+        var posts=[deleted,retained]
+        XCTAssertFalse(WCommunityPostManagementPolicy.delete("delete-me",by:"other",canManageCrew:false,posts:&posts))
+        XCTAssertEqual(posts.map(\.id),["delete-me","keep-me"])
+        var likes:Set<String>=["delete-me","keep-me"]
+        var activity=WLocalCommunityActivityProvider(ownerMemberID:"viewer")
+        let date=Date(timeIntervalSince1970:1_800_000_000)
+        XCTAssertTrue(activity.recordView(viewerMemberID:"viewer",postID:"delete-me",date:date))
+        var viewCounts=WLocalCommunityViewCountProvider()
+        XCTAssertTrue(viewCounts.recordDetailView(viewerMemberID:"viewer",postID:"delete-me",authorMemberID:"author",date:date))
+        XCTAssertTrue(WCommunityPostManagementPolicy.delete("delete-me",by:"author",canManageCrew:false,posts:&posts))
+        likes.remove("delete-me");activity.remove(postID:"delete-me");viewCounts.remove(postID:"delete-me")
+        XCTAssertEqual(posts.map(\.id),["keep-me"],"Removing the post also removes its nested comments")
+        XCTAssertEqual(likes,["keep-me"])
+        XCTAssertTrue(activity.recentPostIDs(viewerMemberID:"viewer",asOf:date).isEmpty)
+        XCTAssertTrue(viewCounts.recordedKeys.isEmpty)
+        XCTAssertNil(WCommunityNotificationPolicy.destination(for:.post(postID:"delete-me"),crewIDs:[],memberCrewIDs:[],applicationCrewIDs:[],accessiblePostIDs:Set(posts.map(\.id))))
+    }
+
     func testCommunityCourseRequiresValidLocalRecordsAndClampsExamplePlayback() {
         let date=Date()
         let valid=RunRecord(date:date,title:"유효 예시",seconds:600,kilometers:2,isExample:true)

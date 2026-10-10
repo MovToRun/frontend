@@ -16,6 +16,7 @@ struct WCommunityComposerSnapshot:Equatable {
     var screen:String
     var board:String
     var crewID:String?
+    var postID:String?
     var title:String
     var body:String
     var recordID:String
@@ -323,11 +324,13 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityReportError=""
     var communityMoreMenu:WCommunityMoreMenu?
     var communityModerationDialog:WCommunityModerationDialog?
+    var communityPostDeleteConfirmationID:String?
     var communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
     var communityDraftBoard="러닝 인증"
     var communityDraftCrewID:String?
+    var communityDraftPostID:String?
     var communityDraftTitle=""
     var communityDraftBody=""
     var communityLocalCrewPosts:[String:[WCommunityCrewPost]]=[:]
@@ -568,6 +571,7 @@ struct WireframeRoot:View {
             if splash {WSplash().frame(maxWidth:.infinity,maxHeight:.infinity).background(W.paper)}
             if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
+            if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
             .task{
                 let args=ProcessInfo.processInfo.arguments
@@ -578,7 +582,8 @@ struct WireframeRoot:View {
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
-                    if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot)}
+                    if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot,crewID:original.crewID)}
+                    if reviewTools && args.contains("-wire-community-crew-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}){ui.communityPosts[index].crewID="dawn";ui.communityPosts[index].isCrewOnly=true}
                     if reviewTools && args.contains("-wire-community-empty-hot") {for index in ui.communityPosts.indices{ui.communityPosts[index].hot=false}}
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
@@ -632,8 +637,8 @@ struct WireframeRoot:View {
     func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
-        if screen=="C13"{return WCommunityComposerSnapshot(screen:screen,board:"",crewID:nil,title:ui.communityCourseTitle,body:ui.communityCourseIntroduction,recordID:ui.communityCourseRecordID,hideEnds:ui.communityCourseHideEnds)}
-        return WCommunityComposerSnapshot(screen:"C05",board:ui.communityDraftBoard,crewID:ui.communityDraftCrewID,title:ui.communityDraftTitle,body:ui.communityDraftBody,recordID:"",hideEnds:false)
+        if screen=="C13"{return WCommunityComposerSnapshot(screen:screen,board:"",crewID:nil,postID:nil,title:ui.communityCourseTitle,body:ui.communityCourseIntroduction,recordID:ui.communityCourseRecordID,hideEnds:ui.communityCourseHideEnds)}
+        return WCommunityComposerSnapshot(screen:"C05",board:ui.communityDraftBoard,crewID:ui.communityDraftCrewID,postID:ui.communityDraftPostID,title:ui.communityDraftTitle,body:ui.communityDraftBody,recordID:"",hideEnds:false)
     }
     func captureCommunityComposerBaseline(for screen:String){
         guard ["C05","C13"].contains(screen),communityComposerOriginal?.screen != screen else{return}
@@ -650,7 +655,7 @@ struct WireframeRoot:View {
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
     }
     func resetCommunityComposerDraft(){
-        ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil
+        ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true
     }
     func discardCommunityComposerAndExit(){
