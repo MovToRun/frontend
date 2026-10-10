@@ -54,3 +54,11 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - The draft comparison covers nickname, introduction, region, and profile photo, including reverting changed values to the saved state.
 - UI coverage verifies cancel → continue editing preserves text, discard leaves the saved profile unchanged, unchanged drafts close without an alert, settings/tab navigation requests confirmation, and successful save closes without another prompt.
 - `go` and `back` both guard profile-edit exits; root tab switching preserves its pending destination until confirmation. `git diff --check` passed.
+
+### Community report and block management
+
+- iPhone 17 Pro simulator: 2 unit tests and 2 UI tests passed on the focused run.
+- Unit coverage checks all four report reasons, optional details through 300 characters, rejection above the limit, self/unknown/duplicate block rejection, anonymous-block identity masking, symmetric content hiding, and visibility restoration after unblock.
+- UI coverage follows post detail → report → receipt/block prompt and post detail → block → C28 → C42 → unblock → feed restoration.
+- The report and block provider stores local in-memory fixture state only. No report is sent to a service. C28 exposes the blocked-user management entry for this slice; other community settings remain outside this implementation.
+- `git diff --check` passed. Independent verification and full pixel/motion QA remain pending.

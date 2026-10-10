@@ -54,11 +54,12 @@ struct WButtonStyle:ButtonStyle {
 struct WPage<Content:View,Actions:View>:View {
     var title:String
     var back:(()->Void)?
+    var trailing:AnyView=AnyView(EmptyView())
     @ViewBuilder var content:Content
     @ViewBuilder var actions:Actions
     var body:some View {
         VStack(spacing:0){
-            WHeader(title:title,back:back,mark:title=="시뮬레이션 완료")
+            WHeader(title:title,back:back,mark:title=="시뮬레이션 완료",trailing:trailing)
             ScrollView { VStack(alignment:.leading,spacing:18){content}.frame(maxWidth:.infinity,alignment:.leading).padding(24) }.scrollDismissesKeyboard(.interactively).modifier(WAuthBodyMotion())
             if Actions.self != EmptyView.self { VStack(spacing:10){actions}.padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)} }
         }.background(W.paper)
@@ -262,9 +263,17 @@ enum WRootTab: Int, CaseIterable {
     var communitySelectedPostID="p1"
     var communitySelectedUserID="fixture-member-ga-on"
     var communityCardOriginScreen="C01"
+    var communityCardOriginAnonymous=false
     var communityProfileEditing=false
     var communityConnectionsKind="followers"
     var communityFollowProvider=WLocalCommunityFollowProvider()
+    var communityModerationProvider=WLocalCommunityModerationProvider()
+    var communityReportTarget:WCommunityReportTarget?
+    var communityReportReason="욕설·괴롭힘"
+    var communityReportDetail=""
+    var communityReportError=""
+    var communityMoreMenu:WCommunityMoreMenu?
+    var communityModerationDialog:WCommunityModerationDialog?
     let communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
@@ -430,11 +439,14 @@ struct WireframeRoot:View {
             }
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}
             if splash {WSplash().frame(maxWidth:.infinity,maxHeight:.infinity).background(W.paper)}
+            if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
+            if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
+                    if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot)}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
                     if WireState.passwordResetScreens.contains(ui.screen),ui.screen != "A10"{ui.passwordReset.prepareFixture(screen:ui.screen,resendReady:args.contains("-wire-password-reset-resend-ready"))}
@@ -462,7 +474,7 @@ struct WireframeRoot:View {
                 Button("버리기",role:.destructive){discardCommunityProfileDraftAndExit()}
             }message:{Text("저장하지 않은 프로필 변경사항이 있어요.")}
     }
-    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};performNavigation(route)}
+    func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};performNavigation(route)}
     func performNavigation(_ route:String){if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};performBack()}
     func performBack(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
@@ -530,7 +542,7 @@ struct WireframeRoot:View {
         .allowsHitTesting(isRoot && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true)->some View {let unread = ui.hasUnreadNotifications;return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier("communityOwnProfileSettings")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil)->some View {let unread = ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -572,6 +584,10 @@ struct WireframeRoot:View {
         case "C08":communityRunnerProfile
         case "C30":communityConnections
         case "C31":communityPhotoViewer
+        case "C23":communityReport
+        case "C25":communityReportReceipt
+        case "C28":communitySettings
+        case "C42":communityBlockedUsers
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards

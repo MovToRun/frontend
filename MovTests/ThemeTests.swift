@@ -18,6 +18,46 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityModerationReportReasonsDetailAndLimits() {
+        let target=WCommunityReportTarget.member("fixture-member-ga-on")
+        for reason in WLocalCommunityModerationProvider.reportReasons {
+            var provider=WLocalCommunityModerationProvider()
+            XCTAssertTrue(provider.submitReport(target,reason:reason,detail:"상세 내용"),reason)
+            XCTAssertEqual(provider.reports.first?.detail,"상세 내용")
+        }
+        var provider=WLocalCommunityModerationProvider()
+        XCTAssertTrue(provider.submitReport(target,reason:"기타",detail:String(repeating:"가",count:300)))
+        XCTAssertFalse(provider.submitReport(target,reason:"기타",detail:String(repeating:"가",count:301)))
+        XCTAssertFalse(provider.submitReport(target,reason:"기타 아님",detail:""))
+    }
+
+    func testCommunityModerationBlockIsSymmetricAndUnblockRestoresVisibility() {
+        let me="fixture-member-current",target="fixture-member-ga-on",known=Set([me,target])
+        var provider=WLocalCommunityModerationProvider()
+        XCTAssertFalse(provider.block(me,viewerID:me,knownUsers:known))
+        XCTAssertFalse(provider.block("unknown",viewerID:me,knownUsers:known))
+        XCTAssertTrue(provider.block(target,viewerID:me,anonymous:true,knownUsers:known))
+        XCTAssertFalse(provider.block(target,viewerID:me,knownUsers:known))
+        XCTAssertTrue(provider.shouldHide(authorID:target,viewerID:me,ownerID:me))
+        XCTAssertTrue(provider.shouldHide(authorID:me,viewerID:target,ownerID:me))
+        XCTAssertTrue(provider.anonymousBlockedMemberIDs.contains(target))
+        XCTAssertTrue(provider.unblock(target,viewerID:me))
+        XCTAssertFalse(provider.shouldHide(authorID:target,viewerID:me,ownerID:me))
+        XCTAssertFalse(provider.shouldHide(authorID:me,viewerID:target,ownerID:me))
+        XCTAssertFalse(provider.unblock(target,viewerID:me))
+    }
+
+    func testCommunityAnonymousOriginCannotOpenProfileButNamedProfilesCan() {
+        let me="fixture-member-current",target="fixture-member-ga-on",known=Set([me,target])
+        var provider=WLocalCommunityModerationProvider()
+        XCTAssertTrue(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+        XCTAssertFalse(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:true))
+        XCTAssertTrue(provider.block(target,viewerID:me,knownUsers:known))
+        XCTAssertFalse(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+        XCTAssertTrue(provider.unblock(target,viewerID:me))
+        XCTAssertTrue(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+    }
+
     func testCommunityProfileDraftDetectsEveryFieldAndReversion() {
         let saved=WLocalProfile()
         var draft=WCommunityProfileDraft(profile:saved)
