@@ -344,6 +344,10 @@ struct WireframeRoot:View {
             model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"가볍게 달린 아침",memo:"가상 예시 기록",seconds:1808,kilometers:4.82,segments:[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)],isExample:true)]
             model.persist()
         }
+        if args.contains("-wire-legacy-invalid-run") {
+            model.records=[RunRecord(date:ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!,title:"기존 기록",seconds:312,kilometers:0)]
+            model.persist()
+        }
         if args.contains("-wire-fixture"), defaultsSelection.suiteName != nil,
            let i=args.firstIndex(of:"-wire-home-weekly-example"),args.indices.contains(i+1) {
             let date=ISO8601DateFormatter().date(from:"2026-09-29T07:12:00+09:00")!

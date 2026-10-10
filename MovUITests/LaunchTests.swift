@@ -504,6 +504,21 @@ import UIKit
         capture("L05-invalid-gap-copy")
     }
 
+    func testLegacyInvalidRunUsesZeroPlaceholderInSplitAverageAndRow() {
+        app.launchArguments=["-wire-screen","L04","-wire-fixture","-wire-reset","-wire-legacy-invalid-run","-wire-test-store-suite","mov.records.splits.legacy.\(UUID().uuidString)","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:10))
+        XCTAssertTrue(waitHittable(app.buttons["editTitle"],timeout:8),app.debugDescription)
+        let splitButtons=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","구간 기록"))
+        for _ in 0..<3 where !splitButtons.allElementsBoundByIndex.contains(where:{$0.isHittable}) { app.swipeUp() }
+        XCTAssertTrue(waitForLayout({splitButtons.allElementsBoundByIndex.contains(where:{$0.isHittable})},timeout:5),app.debugDescription)
+        splitButtons.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L05"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["splitAverageLabel"].label,"0:00 /km")
+        XCTAssertTrue(app.staticTexts["유효 기록 없음"].exists)
+        XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
+    }
+
     func testPaceChartReflowsOnCompactDarkViewport() {
         app.launchArguments=["-wire-screen","L05","-wire-fixture","-wire-reset","-wire-test-store-suite","mov.records.splits.compact.\(UUID().uuidString)","-wire-compact-review","-wire-reduced","-appearance","dark"]
         app.launch()
