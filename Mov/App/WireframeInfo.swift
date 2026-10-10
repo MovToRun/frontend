@@ -3,6 +3,18 @@ struct WInfo {
     var title:String;var heading:String;var text:String;var notice:String="";var buttons:[(String,String,Int)]=[]
 }
 extension WireframeRoot {
+    var consentReview:some View {
+        WPage(title:reviewTools ? "동의 내용 검토":"동의 내용",back:back){
+            WHeading(text:ui.consentTopic)
+            WText(text:reviewTools ? "이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.":"서비스 이용과 개인정보 처리 내용을 확인해 주세요.")
+            VStack(spacing:0){
+                ForEach(["서비스 이용 목적과 범위","회원 식별 및 제공자 연결 정보","위치·경로·운동 기록 처리","선택 체중과 칼로리 추정","기기 저장·보존·삭제 정책","동의 철회와 문의 방법"],id:\.self){item in
+                    Text(item).font(W.font(13)).frame(maxWidth:.infinity,minHeight:52,alignment:.leading).overlay(alignment:.bottom){W.line.frame(height:1)}
+                }
+            }
+            if reviewTools{WAuthNotice(text:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.")}
+        }actions:{Button("확인했어요"){infoAction("consent-reviewed")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("consentReviewed")}
+    }
     var info:WInfo {
         if reviewTools{return reviewInfo}
         switch ui.screen {

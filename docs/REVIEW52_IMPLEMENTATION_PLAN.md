@@ -60,8 +60,8 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift; 각 내용 확인 후 해당 항목 체크, 일부 동의 차단, 전체 동의 순차 모션/취소 복구 |
 | [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 닉네임 필수/길이 검증, 검토모드 전용 fixture 충돌 점검, 선택 체중, 원본 완료 문구 |
 | [x] | `A04` | 로그인 실패 | `loginFailure` — WireframeAuth.swift; 취소·연결 끊김 문구 및 A01 재시도 로컬 흐름 |
-| [ ] | `A06` | 약관·개인정보 검토 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `A07` | 이메일 회원가입 | `authForm` — WireframeAuth.swift |
+| [x] | `A06` | 약관·개인정보 검토 | `consentReview` — 주제별 내용 확인 후 해당 필수 동의만 반영 |
+| [x] | `A07` | 이메일 회원가입 | `authForm` — 8~20자 ASCII 영문·숫자 필수, 기호 선택 |
 | [ ] | `A10` | 비밀번호 재설정 요청 | `authForm` — WireframeAuth.swift |
 | [ ] | `A11` | 재설정 요청 확인 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `A12` | 새 비밀번호 예시 | `authForm` — WireframeAuth.swift |
@@ -71,11 +71,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `A16` | 이메일 로그인 연결 | `authForm` — WireframeAuth.swift |
 | [ ] | `A17` | 이메일 비밀번호 관리 | `authForm` — WireframeAuth.swift |
 | [ ] | `A18` | 이메일 설정 완료 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `A19` | 회원가입 이메일 인증 | `verification` — WireframeAuth.swift |
-| [ ] | `A20` | 이메일 인증 코드 오류 | `verification` — WireframeAuth.swift |
-| [ ] | `A21` | 이메일 인증 코드 만료 | `verification` — WireframeAuth.swift |
-| [ ] | `A22` | 이메일 인증 시도 제한 | `verification` — WireframeAuth.swift |
-| [ ] | `A23` | 이메일 인증 코드 재요청 | `verification` — WireframeAuth.swift |
+| [x] | `A19` | 회원가입 이메일 인증 | `verification` — 6자리 자동 확인, 성공 모션 후 A02 |
+| [x] | `A20` | 이메일 인증 코드 오류 | `verification` — 실패 횟수 안내와 입력 복구 |
+| [x] | `A21` | 이메일 인증 코드 만료 | `verification` — 5분 만료 상태와 재요청 |
+| [x] | `A22` | 이메일 인증 시도 제한 | `verification` — 5회 실패 잠금 |
+| [x] | `A23` | 이메일 인증 코드 재요청 | `verification` — 60초 간격, 이전 코드 폐기 |
 
 ### 홈 · 러닝 · 목표 · `Home / Run / Goals`
 
@@ -243,4 +243,4 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C42` | 차단한 사용자 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C43` | 내 활동 기록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 
-인증·가입 화면은 서버/API에 연결되어 있지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.
+인증·가입 화면은 서버/API나 실제 이메일 발송에 연결되어 있지 않습니다. OTP의 mock generator는 한 가입 challenge 안에서 발급 순번을 올리고 이미 내보낸 여섯 자리 값을 건너뜁니다. 실제 발급 권위는 서버에 두어야 하며, 5분 만료·60초 재요청·5회 잠금은 로컬 검토용 흐름으로 보안 인증 구현이 아닙니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

@@ -273,8 +273,8 @@ enum WRootTab: Int, CaseIterable {
     var consentTopic="이용약관"
     var nickname="";var introduction="";var region="";var weight=""
     var title="";var memo="";var photo:Data?
-    var challengeIssued:Date?;var challengeCode="482619"
-    var authErrorField="";var authFilled=false;var authEmail="";var authPassword="";var authConfirm="";var authCurrent="";var revealedFields:Set<String>=[];var settingsGrant=false;var otpSuccess=false;var otpFocused=false;var code="";var codeAttempts=0;var verified=false
+    var challengeIssued:Date?;var challengeCode="482619";var otpCodeIssuer=WLocalOTPCodeIssuer()
+    var authErrorField="";var authFilled=false;var authEmail="";var authPassword="";var authConfirm="";var authCurrent="";var revealedFields:Set<String>=[];var settingsGrant=false;var otpSuccess=false;var otpFocused=false;var otpVerifying=false;var otpVerificationID:UUID?;var lastAttemptedOTP:String?;var code="";var codeAttempts=0;var verified=false
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
@@ -297,11 +297,13 @@ enum WRootTab: Int, CaseIterable {
         profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;store.persist();save();clearShare();go("H00")
     }
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
-    func clearAuthSecrets(){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];code="";otpFocused=false}
+    func clearAuthSecrets(preservingOTP:Bool=false){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];if !preservingOTP{code="";otpFocused=false;lastAttemptedOTP=nil}}
     func leaveAuth(for next:String){
         if screen=="A02" && next != "A02",consentSequenceID != nil{consentTerms=consentSequenceOriginalTerms;consentPrivacy=consentSequenceOriginalPrivacy;consentSequenceID=nil;consentBusy=false}
-        clearAuthSecrets();otpSuccess=false
-        if !Self.otpScreens.contains(next){challengeIssued=nil;codeAttempts=0;authEmail=""}
+        let preservingOTP=Self.otpScreens.contains(screen) && Self.otpScreens.contains(next)
+        if !preservingOTP{otpSuccess=false;otpVerifying=false;otpVerificationID=nil}
+        clearAuthSecrets(preservingOTP:preservingOTP)
+        if !Self.otpScreens.contains(next){challengeIssued=nil;challengeCode="482619";otpCodeIssuer.reset();codeAttempts=0;lastAttemptedOTP=nil;authEmail=""}
         if !["A16","A17","A18","T15","T06"].contains(next){settingsGrant=false}
     }
     static let providerRoutes:Set<String>=["T06","T07","T08","T09","T15","T17","A16","A17","A18"]
@@ -408,7 +410,7 @@ struct WireframeRoot:View {
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
-                    if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.challengeIssued=Date().addingTimeInterval(ui.screen=="A21" ? -301:0);ui.challengeCode=ui.screen=="A23" ? "731204":"482619"}
+                    if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
                     if args.contains("-wire-collapsed"){ui.collapsed=true}
                     if ui.screen.hasPrefix("R") || ["H05","H06","S03"].contains(ui.screen){
                         store.session=DemoSession(startedAt:Date().addingTimeInterval(-302),segmentStart:["R01","R02","R03","R07","R08"].contains(ui.screen) ? Date():nil,accumulated:ui.screen=="R12" ? 0:ui.screen=="R01" ? 4:302,goal:store.goal,distance:ui.screen=="R12" || ui.screen=="R01" ? 0:0.81)
@@ -419,7 +421,7 @@ struct WireframeRoot:View {
                         if ui.screen=="A03"{ui.nickname=""}
                         if ui.screen=="A14"{ui.provider=""}
                         if ui.screen=="S03"{ui.selected=store.records.first?.id}
-                        if ui.screen.hasPrefix("A2") || ui.screen=="A19"{ui.code="";ui.error="";ui.challengeIssued=nil}
+                        if WireState.otpScreens.contains(ui.screen){ui.code="";ui.error="";ui.challengeIssued=nil}
 
                     }
                     if ui.screen=="S05"{var record=current;record.kilometers=0;record.seconds=312;record.segments=[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")];store.records=[record];ui.selected=record.id}
@@ -509,6 +511,7 @@ struct WireframeRoot:View {
         case "A01","A07","A10","A12","A16","A17":authForm
         case "A04":loginFailure
         case "A02":consents
+        case "A06":consentReview
         case "A19","A20","A21","A22","A23":verification
         case "C01":community
         default:informationPage

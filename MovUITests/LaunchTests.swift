@@ -425,7 +425,7 @@ import UIKit
     }
     func testAuthenticationConsentAndProviderProtection(){
         open("A01");app.buttons["회원가입"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5));app.buttons["가상 예시값 채우기"].tap();capture("A07-filled");app.buttons["authPrimary"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
-        app.buttons["예시 코드 입력"].tap();app.buttons["인증하고 계속"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].exists)
+        app.buttons["fillDemoEmailCode"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
         app.buttons["모두 동의하고 계속"].doubleTap();XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5));let nickname=app.textFields.firstMatch;nickname.tap();nickname.typeText("아침러너");app.buttons["계속"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].exists);capture("A15")
         app.buttons["홈으로"].tap();tap("tab-4");tap("설정");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap();capture("T05")
     }
@@ -595,31 +595,35 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
 
-    func testEmailCodeLockExpiryResendAndCancel() {
+    func testEmailCodeLockExpiryResendAndReentry() {
         open("A19")
-        let code=app.textFields["인증 코드 6자리"]
-        code.tap();code.typeText("111111");app.descendants(matching:.any)["screen-A19"].scrollViews.firstMatch.swipeUp()
-        for attempt in 1...5 {
-            tap("인증하고 계속")
+        let code=app.textFields["emailOtpInput"]
+        code.tap();code.typeText("111111")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A20"].waitForExistence(timeout:5))
+        code.tap();code.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertEqual(app.staticTexts["otpDigit-5"].label," ","Deleting the last OTP digit clears the final slot")
+        code.typeText("1")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A20"].waitForExistence(timeout:5))
+        for attempt in 3...5 {
+            code.tap();code.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:6)+"11111\(attempt)")
             XCTAssertTrue(app.descendants(matching:.any)[attempt==5 ? "screen-A22":"screen-A20"].waitForExistence(timeout:5))
         }
-        XCTAssertFalse(app.buttons["인증하고 계속"].isEnabled)
+        XCTAssertFalse(code.isEnabled)
         capture("A22-actual-locked")
         app.terminate();open("A21")
-        XCTAssertFalse(app.buttons["인증하고 계속"].isEnabled)
-        let oldCode=app.staticTexts["publicDemoEmailCode"].label.components(separatedBy:" ").last!
+        XCTAssertFalse(app.textFields["emailOtpInput"].isEnabled)
+        let oldCode="482619"
         tap("requestNewEmailCode")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A23"].waitForExistence(timeout:5))
-        let newCode=app.staticTexts["publicDemoEmailCode"].label.components(separatedBy:" ").last!
-        XCTAssertNotEqual(newCode,oldCode,"A resend must invalidate the previously issued code")
         capture("A23-actual-resent")
-        let otp=app.textFields["emailOtpInput"];otp.tap();otp.typeText(oldCode)
-        app.buttons["verifyEmailCode"].tap()
+        code.tap();code.typeText(oldCode)
         XCTAssertTrue(app.descendants(matching:.any)["screen-A20"].waitForExistence(timeout:5),"The old code must be rejected after resend")
-        tap("fillDemoEmailCode");tap("verifyEmailCode")
+        tap("fillDemoEmailCode")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
-        app.terminate();open("A19");tap("가입 취소")
-        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+        app.terminate();open("A19");tap("emailReentry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5))
+        app.buttons["authPrimary"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].exists,"Returning to signup clears challenge and credentials")
     }
     func testProviderLinkCancelUnlinkAndLastMethodProtection() {
         open("T05")
@@ -672,7 +676,7 @@ extension LaunchTests {
         openAuthFixture("A01",suite:"mov.wireframe.test.a02-motion-cancel")
         tap("회원가입");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
-        tap("예시 코드 입력");tap("인증하고 계속")
+        tap("fillDemoEmailCode")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
         tap("consentContinue")
         XCTAssertFalse(app.buttons["consentContinue"].isEnabled,"The CTA stays locked while both consent marks animate")
@@ -688,7 +692,7 @@ extension LaunchTests {
         tap("가입 취소");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
         tap("회원가입");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
-        tap("예시 코드 입력");tap("인증하고 계속")
+        tap("fillDemoEmailCode")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
         XCTAssertEqual(app.descendants(matching:.any)["consent-row-terms"].value as? String,"동의 안 함")
         XCTAssertEqual(app.descendants(matching:.any)["consent-row-privacy"].value as? String,"동의 안 함")
@@ -814,7 +818,11 @@ extension LaunchTests {
         XCTAssertEqual(app.secureTextFields.count,2)
         tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].exists)
-        tap("가상 예시값 채우기");tap("authPrimary");tap("가입 취소")
+        tap("가상 예시값 채우기")
+        app.textFields["auth-email"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["가입 취소"].isHittable,"The A07 cancel action remains reachable with the keyboard open")
+        tap("가입 취소")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
     func testSocialReloginAndConsentPartialValidationBothThemes() {
@@ -1269,10 +1277,10 @@ extension LaunchTests {
         userOpen("A01");tap("회원가입");fillUserAuth(confirm:true);tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5),app.debugDescription)
         let otp=app.descendants(matching:.any)["emailOtpInput"];XCTAssertTrue(otp.waitForExistence(timeout:5));XCTAssertFalse(app.buttons["fillDemoEmailCode"].exists)
-        otp.tap();otp.typeText("000000");tap("인증하고 계속");XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","코드가 일치하지")).firstMatch.exists)
-        otp.tap();otp.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:6)+"482619");tap("인증하고 계속")
+        otp.tap();otp.typeText("000000");XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","코드가 일치하지")).firstMatch.waitForExistence(timeout:5))
+        otp.tap();otp.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:6)+"482619");XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5),"Pasting all six digits verifies and opens consent automatically")
         tap("모두 동의하고 계속");let nickname=app.textFields.firstMatch;XCTAssertTrue(nickname.waitForExistence(timeout:5));nickname.tap();nickname.typeText("검수러너");tap("계속")
-        XCTAssertTrue(app.buttons["홈으로"].waitForExistence(timeout:5));tap("뒤로");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5));capture("User-signup-home")
+        XCTAssertTrue(app.buttons["시작하기"].waitForExistence(timeout:5));tap("시작하기");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5));capture("User-signup-home")
         userOpen("A01");tap("비밀번호 찾기");let email=app.textFields["auth-email"];email.tap();email.typeText("runner@example.test\n");tap("authPrimary");tap("계속");fillUserAuth(confirm:true);tap("authPrimary");tap("뒤로")
         XCTAssertTrue(app.buttons["로그인"].waitForExistence(timeout:5));capture("User-reset-login")
     }
@@ -1289,6 +1297,53 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testSignupOtpAutoVerifyAndConsentReviewNavigation() {
+        openAuthFixture("A01",suite:"mov.auth.otp.signup-journey")
+        app.buttons["회원가입"].tap()
+        XCTAssertFalse(app.buttons["auth-reveal-auth-password"].exists)
+        app.buttons["가상 예시값 채우기"].tap()
+        XCTAssertTrue(app.buttons["auth-reveal-auth-password"].exists)
+        app.buttons["authPrimary"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["verifyEmailCode"].exists)
+        XCTAssertTrue(app.buttons["이메일 다시 입력"].exists)
+        XCTAssertFalse(app.buttons["가입 취소"].exists)
+        let otp=app.textFields["emailOtpInput"]
+        XCTAssertFalse(app.buttons["verifyEmailCode"].isEnabled)
+        otp.tap();otp.typeText("482619")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+
+        app.buttons["내용 확인"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A06"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["이용약관"].exists)
+        app.buttons["consentReviewed"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.otherElements["consent-row-terms"].value as? String,"동의함")
+        XCTAssertEqual(app.otherElements["consent-row-privacy"].value as? String,"동의 안 함")
+    }
+
+    func testOtpResendAndExpiryFixtureTransitions() {
+        app.launchArguments=["-wire-screen","A19","-wire-fixture","-wire-otp-resend-ready","-wire-test-store-suite","mov.auth.otp.resend","-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:15))
+        let resend=app.buttons["requestNewEmailCode"]
+        XCTAssertTrue(resend.isEnabled)
+        resend.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A23"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["publicDemoEmailCode"].exists)
+        let otp=app.textFields["emailOtpInput"]
+        otp.tap();otp.typeText("482619")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A20"].waitForExistence(timeout:5),"The old code is invalid after resend")
+        app.buttons["fillDemoEmailCode"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+
+        app.launchArguments=["-wire-screen","A21","-wire-fixture","-wire-test-store-suite","mov.auth.otp.expired","-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A21"].waitForExistence(timeout:15))
+        XCTAssertFalse(app.textFields["emailOtpInput"].isEnabled)
+        XCTAssertTrue(app.buttons["requestNewEmailCode"].isEnabled)
+    }
+
     func testReview52A01LayoutAndPasswordControls() {
         userOpen("A01",captureViewport:true)
         XCTAssertEqual(app.secureTextFields["auth-password"].placeholderValue,"8자 이상 입력")
