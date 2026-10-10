@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import SwiftUI
+import AVFoundation
 import UniformTypeIdentifiers
 import ImageIO
 @testable import Mov
@@ -93,6 +94,81 @@ final class ThemeTests:XCTestCase {
         XCTAssertTrue(store.contains(published[0].url),"Discard never removes a published post's file")
         store.releaseRemovedPublished(published,keeping:[])
         XCTAssertFalse(store.contains(published[0].url),"A saved edit removes a published file after replacement")
+    }
+
+    func testCommunityVideoPolicyEnforcesInputOutputAndMixedAttachmentLimits() throws {
+        XCTAssertNoThrow(try WCommunityVideoPolicy.validateSource(size:50_000_000,duration:15,videoTrackCount:1))
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateSource(size:50_000_001,duration:15,videoTrackCount:1)){XCTAssertEqual($0 as? WCommunityVideoError,.inputTooLarge)}
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateSource(size:1,duration:15.01,videoTrackCount:1)){XCTAssertEqual($0 as? WCommunityVideoError,.duration)}
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateSource(size:1,duration:1,videoTrackCount:0)){XCTAssertEqual($0 as? WCommunityVideoError,.noVideoTrack)}
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateSource(size:0,duration:1,videoTrackCount:1)){XCTAssertEqual($0 as? WCommunityVideoError,.invalidVideo)}
+        XCTAssertNoThrow(try WCommunityVideoPolicy.validateOutput(size:20_000_000,width:1920,height:1080))
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateOutput(size:20_000_001,width:1920,height:1080)){XCTAssertEqual($0 as? WCommunityVideoError,.outputTooLarge)}
+        XCTAssertThrowsError(try WCommunityVideoPolicy.validateOutput(size:10,width:2560,height:1440)){XCTAssertEqual($0 as? WCommunityVideoError,.outputDimensions)}
+        XCTAssertFalse(WCommunityVideoPolicy.canAppend(currentCount:9,currentBytes:0,addingCount:2,addingBytes:1))
+        XCTAssertFalse(WCommunityVideoPolicy.canAppend(currentCount:1,currentBytes:99_000_000,addingCount:1,addingBytes:1_000_001))
+        XCTAssertTrue(WCommunityVideoPolicy.canAppend(currentCount:10,currentBytes:100_000_000,addingCount:0,addingBytes:0))
+    }
+
+    func testCommunityVideoRejectsCorruptSyntheticSource() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("community-video-corrupt-\(UUID().uuidString)",isDirectory:true)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer{try? FileManager.default.removeItem(at:root)}
+        let url=root.appendingPathComponent("corrupt.mp4")
+        try Data("synthetic corrupt video".utf8).write(to:url)
+        do{_ = try await WCommunityVideoTranscoder.inspectSource(url);XCTFail("Corrupt bytes must not be accepted as video")}
+        catch let error as WCommunityVideoError{XCTAssertEqual(error,.invalidVideo)}
+    }
+
+    @MainActor func testCommunityVideoImportGenerationRejectsStaleRequests() {
+        let coordinator=WCommunityMediaImportCoordinator()
+        let first=coordinator.beginRequest()
+        XCTAssertTrue(coordinator.accepts(first))
+        let second=coordinator.beginRequest()
+        XCTAssertFalse(coordinator.accepts(first),"A new picker selection invalidates work for the previous selection")
+        XCTAssertTrue(coordinator.accepts(second))
+        coordinator.invalidate()
+        XCTAssertFalse(coordinator.accepts(second),"Discarding or changing draft invalidates pending conversion")
+    }
+
+    @MainActor func testCommunityVideoFileLifecycleUsesSyntheticMovieAndPoster() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("community-video-store-\(UUID().uuidString)",isDirectory:true)
+        let store=WCommunityAttachmentStore(rootURL:root)
+        defer{store.cleanup()}
+        let draft=try store.makeReviewVideoFixture()
+        XCTAssertTrue(store.contains(draft.url));XCTAssertTrue(store.contains(draft.posterURL));XCTAssertTrue(store.isDraft(draft.url))
+        XCTAssertTrue(WCommunityVideoPolicy.canAppend(currentCount:0,currentBytes:0,addingCount:1,addingBytes:draft.byteCount))
+        let inspected=try await WCommunityVideoTranscoder.inspectOutput(draft.url)
+        XCTAssertEqual(inspected.width,320);XCTAssertEqual(inspected.height,240);XCTAssertLessThanOrEqual(inspected.duration,15)
+        XCTAssertFalse(WCommunityVideoPolicy.isDuplicate(draft,in:[]))
+        let committed=try store.commit([.video(draft)],forPost:"video-post")
+        let first:WCommunityAttachment=try XCTUnwrap(committed.first)
+        guard case .video(let published)=first else{return XCTFail("Committed attachment remains a video")}
+        XCTAssertTrue(store.isPublished(published.url));XCTAssertTrue(store.isPublished(published.posterURL))
+        XCTAssertTrue(WCommunityVideoPolicy.isDuplicate(published,in:committed))
+        store.discardDraft(committed)
+        XCTAssertTrue(store.contains(published.url),"Discard cannot delete committed media")
+        store.releaseRemovedPublished(committed,keeping:[])
+        XCTAssertFalse(store.contains(published.url));XCTAssertFalse(store.contains(published.posterURL))
+    }
+
+    @MainActor func testCommunityVideoTranscoderConvertsSyntheticMovieToBoundedMP4() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("community-video-convert-\(UUID().uuidString)",isDirectory:true)
+        let store=WCommunityAttachmentStore(rootURL:root)
+        defer{store.cleanup()}
+        let source=try store.makeVideoWorkingURL()
+        try WCommunityVideoFixtureFactory.writeMP4(to:source)
+        let coordinator=WCommunityMediaImportCoordinator(),request=coordinator.beginRequest()
+        let converted=try await WCommunityVideoTranscoder.convert(sourceURL:source,sourceIdentifier:"synthetic-fixture",store:store,coordinator:coordinator,request:request)
+        XCTAssertFalse(store.contains(source),"The imported source is removed after conversion")
+        XCTAssertTrue(store.contains(converted.url));XCTAssertTrue(store.contains(converted.posterURL))
+        XCTAssertTrue(store.isDraft(converted.url));XCTAssertEqual(converted.sourceIdentifier,"synthetic-fixture")
+        XCTAssertLessThanOrEqual(converted.byteCount,WCommunityVideoPolicy.maximumConvertedBytes)
+        XCTAssertLessThanOrEqual(max(converted.width,converted.height),WCommunityVideoPolicy.maximumLongEdge)
+        XCTAssertLessThanOrEqual(min(converted.width,converted.height),WCommunityVideoPolicy.maximumShortEdge)
+        XCTAssertLessThanOrEqual(converted.duration,WCommunityVideoPolicy.maximumDuration)
+        let inspected=try await WCommunityVideoTranscoder.inspectOutput(converted.url)
+        XCTAssertEqual(inspected.size,converted.byteCount)
     }
 
     func testCommunityComposerSnapshotIncludesAttachmentIdentityAndOrder() {

@@ -308,8 +308,13 @@ struct WCommunityVerificationState:Codable,Equatable {
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
     var communityAttachmentStore=WCommunityAttachmentStore()
-    var communityDraftAttachments:[WCommunityPhotoAttachment]=[]
+    var communityDraftAttachments:[WCommunityAttachment]=[]
+    var communityMediaImportCoordinator=WCommunityMediaImportCoordinator()
+    var communityMediaImporting=false
+    var communityDraftSessionID=UUID().uuidString
+    var communityVideoPlayback=WCommunityVideoPlaybackController()
     var communityImageViewerIndex=0
+    var communityImageViewerIsDraft=false
     var communityImageZoomScale:CGFloat=1
     var communityNotificationCenter=WCommunityNotificationCenter()
     var communityNotificationError=""
@@ -405,9 +410,11 @@ struct WCommunityVerificationState:Codable,Equatable {
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
     init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
-    func seedCommunityPhotoFixtures(draft:Bool,post:Bool){
-        if draft,let photos=try? communityAttachmentStore.makeReviewFixtures(){communityDraftAttachments=photos;communityDraftTitle="사진 첨부 예시";communityDraftBody=""}
-        if post,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let draft=try? communityAttachmentStore.makeReviewFixtures(count:1),let photos=try? communityAttachmentStore.commit(draft,forPost:"p1"){communityPosts[index].attachments=photos}
+    func seedCommunityPhotoFixtures(draft:Bool,post:Bool,videoPost:Bool=false,videoDraft:Bool=false){
+        if draft,let photos=try? communityAttachmentStore.makeReviewFixtures(){communityDraftAttachments=photos.map(WCommunityAttachment.photo);communityDraftTitle="사진 첨부 예시";communityDraftBody=""}
+        if post,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let draft=try? communityAttachmentStore.makeReviewFixtures(count:1),let photos=try? communityAttachmentStore.commit(draft,forPost:"p1"){communityPosts[index].attachments=photos.map(WCommunityAttachment.photo)}
+        if videoPost,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let fixture=try? communityAttachmentStore.makeReviewVideoFixture(),let attachments=try? communityAttachmentStore.commit([.video(fixture)],forPost:"p1"){communityPosts[index].attachments += attachments}
+        if videoDraft,let fixture=try? communityAttachmentStore.makeReviewVideoFixture(){communityDraftAttachments=[.video(fixture)];communityDraftTitle="영상 첨부 예시";communityDraftBody=""}
     }
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     func submitCommunityVerification()->Bool{
@@ -596,7 +603,7 @@ struct WireframeRoot:View {
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot,crewID:original.crewID)}
                     if reviewTools && args.contains("-wire-community-crew-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}){ui.communityPosts[index].crewID="dawn";ui.communityPosts[index].crewBoardID="dawn-board-2";ui.communityPosts[index].isCrewOnly=true;ui.communityPosts[index].comments.append(WCommunityComment(id:"c1-reply",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"네, 다음에 함께 달려요.",date:"10.05 08:50",parentID:"c1"))}
                     if reviewTools && args.contains("-wire-community-empty-hot") {for index in ui.communityPosts.indices{ui.communityPosts[index].hot=false}}
-                    if reviewTools{ui.seedCommunityPhotoFixtures(draft:args.contains("-wire-community-photo-draft-fixture"),post:args.contains("-wire-community-photo-post-fixture"))}
+                    if reviewTools{ui.seedCommunityPhotoFixtures(draft:args.contains("-wire-community-photo-draft-fixture"),post:args.contains("-wire-community-photo-post-fixture"),videoPost:args.contains("-wire-community-video-post-fixture"),videoDraft:args.contains("-wire-community-video-draft-fixture"))}
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
@@ -667,6 +674,7 @@ struct WireframeRoot:View {
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
     }
     func resetCommunityComposerDraft(){
+        ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString
         ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true

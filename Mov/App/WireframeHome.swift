@@ -432,7 +432,7 @@ struct WCommunityPost:Identifiable {
     var views:Int
     var comments:[WCommunityComment]
     var imageName:String?=nil
-    var attachments:[WCommunityPhotoAttachment]=[]
+    var attachments:[WCommunityAttachment]=[]
     var hot:Bool=false
     var isCrewOnly:Bool=false
     var course:WCommunityCourse?=nil
@@ -449,7 +449,7 @@ enum WCommunityPostManagementPolicy {
         canEdit(post,viewerID:viewerID) || (post.crewID != nil && canManageCrew)
     }
 
-    @discardableResult static func update(_ postID:String,by viewerID:String,board:String,title:String,text:String,crewBoardID:String?=nil,attachments:[WCommunityPhotoAttachment]?=nil,posts:inout [WCommunityPost])->Bool {
+    @discardableResult static func update(_ postID:String,by viewerID:String,board:String,title:String,text:String,crewBoardID:String?=nil,attachments:[WCommunityAttachment]?=nil,posts:inout [WCommunityPost])->Bool {
         guard let index=posts.firstIndex(where:{$0.id==postID}),canEdit(posts[index],viewerID:viewerID) else{return false}
         let cleanTitle=title.trimmingCharacters(in:.whitespacesAndNewlines),cleanText=text.trimmingCharacters(in:.whitespacesAndNewlines)
         let resultingAttachments=attachments ?? posts[index].attachments
@@ -461,6 +461,10 @@ enum WCommunityPostManagementPolicy {
         posts[index].text=cleanText
         if let attachments{posts[index].attachments=attachments}
         return true
+    }
+
+    @discardableResult static func update(_ postID:String,by viewerID:String,board:String,title:String,text:String,crewBoardID:String?=nil,attachments:[WCommunityPhotoAttachment],posts:inout [WCommunityPost])->Bool {
+        update(postID,by:viewerID,board:board,title:title,text:text,crewBoardID:crewBoardID,attachments:attachments.map(WCommunityAttachment.photo),posts:&posts)
     }
 
     @discardableResult static func delete(_ postID:String,by viewerID:String,canManageCrew:Bool,posts:inout [WCommunityPost])->Bool {
@@ -1891,16 +1895,16 @@ extension WireframeRoot {
             }.padding(.top,8).padding(.bottom,12)
         }.overlay(alignment:.bottom){W.line.frame(height:1)}
     }
-    func beginCommunityCompose(board:String?=nil){ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communityDraftPostID=nil;ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")}
+    func beginCommunityCompose(board:String?=nil){ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communityDraftPostID=nil;ui.communityDraftCrewID=nil;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")}
     func beginCommunityCrewCompose(_ crew:WCommunityCrew,board:WCommunityCrewBoard){
         guard communityCrewIsMember(crew),board.status == .active,board.kind != .notice || communityCrewCanManage(crew) else{return}
-        ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftPostID=nil;ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")
+        ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftPostID=nil;ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")
     }
     func beginCommunityPostEdit(_ post:WCommunityPost){
         guard ui.screen=="C04",communityCanReadPost(post),WCommunityPostManagementPolicy.canEdit(post,viewerID:ui.communityViewerMemberID) else{return}
         ui.communitySelectedPostID=post.id;ui.communityDraftPostID=post.id;ui.communityDraftCrewID=post.crewID;ui.communityDraftBoard=post.board
         if let crewID=post.crewID,let crew=communityCrew(crewID){ui.communitySelectedCrewID=crewID;ui.communityCrewBoardID=post.crewBoardID ?? crew.boards.first(where:{$0.title==post.board})?.id ?? ""}
-        ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=post.attachments
+        ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=post.attachments
         ui.communityDraftTitle=post.title;ui.communityDraftBody=post.text;ui.communityError="";ui.communityCourseDraft=false
         communityComposerOriginal=communityComposerSnapshot(for:"C05");ui.communityMoreMenu=nil;go("C05")
     }
@@ -1910,16 +1914,22 @@ extension WireframeRoot {
         return sources
     }
     @ViewBuilder func communityPhotoImage(_ source:WCommunityPhotoSource)->some View {
-        if let imageName=source.imageName {Image(imageName).resizable().scaledToFill()}
-        else if let attachment=source.attachment,let image=UIImage(contentsOfFile:attachment.path) {Image(uiImage:image).resizable().scaledToFill()}
-        else {ZStack{W.soft;Image(systemName:"photo").foregroundStyle(W.muted)}}
+        ZStack(alignment:.center){
+            Group {
+                if let imageName=source.imageName {Image(imageName).resizable().scaledToFill()}
+                else if let video=source.video,let image=UIImage(contentsOfFile:video.posterPath){Image(uiImage:image).resizable().scaledToFill()}
+                else if let photo=source.attachment?.photo,let image=UIImage(contentsOfFile:photo.path){Image(uiImage:image).resizable().scaledToFill()}
+                else {ZStack{W.soft;Image(systemName:"photo").foregroundStyle(W.muted)}}
+            }
+            if source.video != nil{Image(systemName:"play.fill").font(.system(size:20,weight:.bold)).foregroundStyle(.white).padding(15).background(.black.opacity(0.58),in:Circle()).accessibilityHidden(true)}
+        }
     }
     func communityFeedPhotoRow(_ post:WCommunityPost)->some View {
         let photos=communityPhotoSources(for:post)
         return GeometryReader { geo in
             let cardWidth=photos.count==1 ? geo.size.width:geo.size.width*0.84
             ScrollView(.horizontal,showsIndicators:false){HStack(spacing:12){ForEach(Array(photos.enumerated()),id:\.element.id){index,source in
-                Button{openCommunityPost(post)}label:{communityPhotoImage(source).frame(width:cardWidth,height:194).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 열기 · \(index+1)/\(photos.count)").accessibilityIdentifier(index==0 && post.imageName != nil ? "communityFeedImageOpen-\(post.id)":"communityFeedImageOpen-\(post.id)-\(index)")
+                Button{openCommunityPost(post)}label:{communityPhotoImage(source).frame(width:cardWidth,height:194).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 \(source.video == nil ? "사진":"영상") 열기 · \(index+1)/\(photos.count)").accessibilityIdentifier(index==0 && post.imageName != nil ? "communityFeedImageOpen-\(post.id)":"communityFeedImageOpen-\(post.id)-\(index)")
             }}}
         }.frame(height:194).padding(.top,8)
     }
@@ -1928,7 +1938,7 @@ extension WireframeRoot {
         return GeometryReader { geo in
             let cardWidth=photos.count==1 ? geo.size.width:geo.size.width*0.84
             ScrollView(.horizontal,showsIndicators:false){HStack(spacing:12){ForEach(Array(photos.enumerated()),id:\.element.id){index,source in
-                Button{openCommunityPhoto(at:index)}label:{communityPhotoImage(source).frame(width:cardWidth,height:cardWidth*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 확대 · \(index+1)/\(photos.count)").accessibilityIdentifier(index==0 && post.imageName != nil ? "communityDetailImageOpen":"communityDetailPhotoOpen-\(index)")
+                Button{openCommunityPhoto(at:index)}label:{communityPhotoImage(source).frame(width:cardWidth,height:cardWidth*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 \(source.video == nil ? "사진 확대":"영상 보기") · \(index+1)/\(photos.count)").accessibilityIdentifier(index==0 && post.imageName != nil ? "communityDetailImageOpen":"communityDetailPhotoOpen-\(index)")
             }}}
         }.frame(height:(UIScreen.main.bounds.width-40)*0.75).accessibilityIdentifier("communityDetailPhotos")
     }
@@ -1937,39 +1947,47 @@ extension WireframeRoot {
         return GeometryReader { geo in
             let cardWidth=photos.count==1 ? geo.size.width:geo.size.width*0.84
             ScrollView(.horizontal,showsIndicators:false){HStack(spacing:12){ForEach(Array(photos.enumerated()),id:\.element.id){index,source in
-                communityPhotoImage(source).frame(width:cardWidth,height:cardWidth*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12)).accessibilityLabel("미리보기 사진 · \(index+1)/\(photos.count)").accessibilityIdentifier("communityPreviewPhoto-\(source.id)")
+                Button{openCommunityDraftMedia(at:index)}label:{communityPhotoImage(source).frame(width:cardWidth,height:cardWidth*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("미리보기 \(source.video == nil ? "사진":"영상") 열기 · \(index+1)/\(photos.count)").accessibilityIdentifier("communityPreviewPhoto-\(source.id)")
             }}}
         }.frame(height:(UIScreen.main.bounds.width-40)*0.75).accessibilityIdentifier("communityPreviewPhotos")
     }
     var communityComposePhotoStrip:some View {
         VStack(alignment:.leading,spacing:10){
-            HStack{Text("사진 \(ui.communityDraftAttachments.count)/\(WCommunityPhotoPolicy.maximumAttachments)").font(W.font(13,.medium)).accessibilityIdentifier("communityComposePhotoCount");Spacer();WCommunityPhotoPickerControl(attachments:$ui.communityDraftAttachments,error:$ui.communityError,store:ui.communityAttachmentStore)}
+            HStack{Text(communityAttachmentCountLabel()).font(W.font(13,.medium)).accessibilityIdentifier("communityComposePhotoCount");Spacer();WCommunityPhotoPickerControl(attachments:$ui.communityDraftAttachments,error:$ui.communityError,isImporting:$ui.communityMediaImporting,draftSessionID:$ui.communityDraftSessionID,store:ui.communityAttachmentStore,coordinator:ui.communityMediaImportCoordinator)}
+            if ui.communityMediaImporting{HStack(spacing:8){ProgressView().tint(W.ink);Text("첨부를 준비하고 있어요. 이 화면을 벗어나면 취소돼요.").font(W.font(12)).foregroundStyle(W.muted)}.accessibilityIdentifier("communityMediaImportProgress")}
             if !ui.communityDraftAttachments.isEmpty {
                 GeometryReader { geo in
                     let width=geo.size.width*0.84
                     ScrollView(.horizontal,showsIndicators:false){HStack(alignment:.top,spacing:12){ForEach(Array(ui.communityDraftAttachments.enumerated()),id:\.element.id){index,item in
-                        VStack(spacing:8){communityPhotoImage(WCommunityPhotoSource(attachment:item)).frame(width:width,height:width*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityDraftPhotoImage-\(item.id)");HStack(spacing:8){Button{moveCommunityDraftPhoto(from:index,by:-1)}label:{Image(systemName:"arrow.left").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==0).accessibilityLabel("사진을 앞으로 이동").accessibilityIdentifier("communityDraftPhotoMoveLeft-\(index)");Button{moveCommunityDraftPhoto(from:index,by:1)}label:{Image(systemName:"arrow.right").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==ui.communityDraftAttachments.count-1).accessibilityLabel("사진을 뒤로 이동").accessibilityIdentifier("communityDraftPhotoMoveRight-\(index)");Spacer();Button(role:.destructive){removeCommunityDraftPhoto(at:index)}label:{Label("삭제",systemImage:"trash").font(W.font(12,.medium)).frame(height:36).padding(.horizontal,10).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.accessibilityIdentifier("communityDraftPhotoRemove-\(index)")}.buttonStyle(.plain)}.frame(width:width)
+                        VStack(spacing:8){Button{openCommunityDraftMedia(at:index)}label:{communityPhotoImage(WCommunityPhotoSource(attachment:item)).frame(width:width,height:width*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityDraftPhotoImage-\(item.id)");HStack(spacing:8){Button{moveCommunityDraftPhoto(from:index,by:-1)}label:{Image(systemName:"arrow.left").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==0 || ui.communityMediaImporting).accessibilityLabel("첨부를 앞으로 이동").accessibilityIdentifier("communityDraftPhotoMoveLeft-\(index)");Button{moveCommunityDraftPhoto(from:index,by:1)}label:{Image(systemName:"arrow.right").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==ui.communityDraftAttachments.count-1 || ui.communityMediaImporting).accessibilityLabel("첨부를 뒤로 이동").accessibilityIdentifier("communityDraftPhotoMoveRight-\(index)");Spacer();Button(role:.destructive){removeCommunityDraftPhoto(at:index)}label:{Label("삭제",systemImage:"trash").font(W.font(12,.medium)).frame(height:36).padding(.horizontal,10).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(ui.communityMediaImporting).accessibilityIdentifier("communityDraftPhotoRemove-\(index)")}.buttonStyle(.plain)}.frame(width:width)
                     }}}
                 }.frame(height:(UIScreen.main.bounds.width-40)*0.84*0.75+46)
             }
-            Text("사진 원본은 장당 20 MB 이하예요. 이 기기에서 JPEG/PNG로 정리해 글에 첨부해요. 영상 첨부는 후속 작업이에요.").font(W.font(11)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
+            Text("사진 원본은 장당 20 MB, 영상 원본은 50 MB·15초 이하예요. 영상은 MP4·1080p·20 MB 이하로 변환해요. 사진과 영상은 합쳐 10개·100 MB까지 이 기기에만 저장돼요.").font(W.font(11)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
         }.padding(.vertical,4)
+    }
+    func communityAttachmentCountLabel()->String {
+        let hasVideo=ui.communityDraftAttachments.contains(where:\.isVideo)
+        return "\(hasVideo ? "사진·영상":"사진") \(ui.communityDraftAttachments.count)/\(WCommunityPhotoPolicy.maximumAttachments)"
     }
     func moveCommunityDraftPhoto(from index:Int,by offset:Int){let target=index+offset;guard ui.communityDraftAttachments.indices.contains(index),ui.communityDraftAttachments.indices.contains(target) else{return};ui.communityDraftAttachments.swapAt(index,target)}
     func removeCommunityDraftPhoto(at index:Int){guard ui.communityDraftAttachments.indices.contains(index) else{return};let removed=ui.communityDraftAttachments.remove(at:index);ui.communityAttachmentStore.discardDraft([removed])}
     func openCommunityPhoto(at index:Int){
         guard let post=currentCommunityPost(),communityPhotoSources(for:post).indices.contains(index) else{return}
-        ui.communityImageViewerIndex=index;ui.communityImageZoomScale=1;go("C04-IMAGE")
+        ui.communityImageViewerIsDraft=false;ui.communityImageViewerIndex=index;ui.communityImageZoomScale=1;go("C04-IMAGE")
+    }
+    func openCommunityDraftMedia(at index:Int){guard ui.communityDraftAttachments.indices.contains(index) else{return};ui.communityImageViewerIsDraft=true;ui.communityImageViewerIndex=index;ui.communityImageZoomScale=1;go("C04-IMAGE")}
+    func communityViewerSources()->[WCommunityPhotoSource]{
+        if ui.communityImageViewerIsDraft{return ui.communityDraftAttachments.map(WCommunityPhotoSource.init(attachment:))}
+        guard let post=currentCommunityPost() else{return []};return communityPhotoSources(for:post)
     }
     func communityViewerPhoto()->WCommunityPhotoSource? {
-        guard let post=currentCommunityPost() else{return nil}
-        let photos=communityPhotoSources(for:post)
+        let photos=communityViewerSources()
         guard photos.indices.contains(ui.communityImageViewerIndex) else{return photos.first}
         return photos[ui.communityImageViewerIndex]
     }
     func changeCommunityViewerPhoto(by offset:Int){
-        guard let post=currentCommunityPost() else{return}
-        let photos=communityPhotoSources(for:post);guard !photos.isEmpty else{return}
+        let photos=communityViewerSources();guard !photos.isEmpty else{return}
         ui.communityImageViewerIndex=(ui.communityImageViewerIndex+offset+photos.count)%photos.count;ui.communityImageZoomScale=1
     }
     var communityComposerBoardOptions:[String]{
@@ -1984,9 +2002,12 @@ extension WireframeRoot {
         if ui.communityViewCountProvider.recordDetailView(viewerMemberID:ui.communityViewerMemberID,postID:post.id,authorMemberID:post.authorMemberID,date:Date()) {ui.communityPosts[index].views+=1}
     }
     func publishCommunityDraft(){
+        guard !ui.communityMediaImporting else{ui.communityError="첨부 준비가 끝나면 게시할 수 있어요.";return}
         let title=ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines),body=ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !title.isEmpty else{ui.communityError="제목을 입력해 주세요.";return}
-        guard !body.isEmpty || !ui.communityDraftAttachments.isEmpty else{ui.communityError="내용이나 사진을 추가해 주세요.";return}
+        let attachmentBytes=ui.communityDraftAttachments.reduce(0){$0+$1.byteCount}
+        guard WCommunityVideoPolicy.canAppend(currentCount:0,currentBytes:0,addingCount:ui.communityDraftAttachments.count,addingBytes:attachmentBytes) else{ui.communityError="사진과 영상은 최대 10개, 전체 100 MB까지 첨부할 수 있어요.";return}
+        guard !body.isEmpty || !ui.communityDraftAttachments.isEmpty else{ui.communityError="내용이나 첨부를 추가해 주세요.";return}
         guard title.count<=60,body.count<=2000 else{ui.communityError="제목은 60자, 내용은 2,000자 이내로 입력해 주세요.";return}
         if let postID=ui.communityDraftPostID {
             guard let post=ui.communityPosts.first(where:{$0.id==postID}),communityCanReadPost(post),WCommunityPostManagementPolicy.canEdit(post,viewerID:ui.communityViewerMemberID) else{ui.communityError="수정할 수 있는 게시글을 찾지 못했어요.";return}
@@ -2014,14 +2035,14 @@ extension WireframeRoot {
             guard let crew=communityCrew(crewID),communityCrewIsMember(crew),let board=crew.boards.first(where:{$0.id==ui.communityCrewBoardID}),board.status == .active,board.title==ui.communityDraftBoard,board.kind != .notice || communityCrewCanManage(crew) else{ui.communityError="이 크루 게시판에 글을 쓸 수 없어요.";return}
             let author=communityRunner(ui.communityViewerMemberID)
             let postID=UUID().uuidString
-            let committed:[WCommunityPhotoAttachment]
+            let committed:[WCommunityAttachment]
             do{committed=try ui.communityAttachmentStore.commit(ui.communityDraftAttachments,forPost:postID)}catch{ui.communityError=error.localizedDescription;return}
             let post=WCommunityPost(id:postID,authorMemberID:ui.communityViewerMemberID,author:author.name,rank:author.rank,board:board.title,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[],attachments:committed,isCrewOnly:true,crewID:crewID,crewBoardID:board.id)
             ui.communityPosts.insert(post,at:0);ui.communitySelectedCrewID=crewID
             let targetIndex=ui.path.lastIndex(of:"C19");resetCommunityComposerDraft();communityComposerOriginal=nil;go("C19");if let targetIndex{ui.path=Array(ui.path.prefix(targetIndex))};return
         }
         let postID=UUID().uuidString
-        let committed:[WCommunityPhotoAttachment]
+        let committed:[WCommunityAttachment]
         do{committed=try ui.communityAttachmentStore.commit(ui.communityDraftAttachments,forPost:postID)}catch{ui.communityError=error.localizedDescription;return}
         ui.communityPosts.insert(WCommunityPost(id:postID,authorMemberID:ui.communityViewerMemberID,author:"나",rank:"시작러너",board:ui.communityDraftBoard,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[],attachments:committed),at:0)
         resetCommunityComposerDraft();communityComposerOriginal=nil;go("C01")
@@ -2520,13 +2541,16 @@ extension WireframeRoot {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing:0){
-                HStack{if let post=currentCommunityPost(){Text("\(ui.communityImageViewerIndex+1) / \(communityPhotoSources(for:post).count)").font(W.font(13,.medium)).foregroundStyle(.white).accessibilityIdentifier("communityImageCount")};Spacer();Button{ui.communityImageZoomScale=1;performBack()}label:{Image(systemName:"xmark").font(.system(size:18,weight:.semibold)).foregroundStyle(.white).frame(width:48,height:48).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("확대 사진 닫기").accessibilityIdentifier("communityImageClose")}.padding(.horizontal,12).padding(.top,8).zIndex(2)
+                HStack{let count=communityViewerSources().count;if count>0{Text("\(ui.communityImageViewerIndex+1) / \(count)").font(W.font(13,.medium)).foregroundStyle(.white).accessibilityIdentifier("communityImageCount")};Spacer();Button{ui.communityVideoPlayback.stopAll();ui.communityImageZoomScale=1;performBack()}label:{Image(systemName:"xmark").font(.system(size:18,weight:.semibold)).foregroundStyle(.white).frame(width:48,height:48).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("첨부 닫기").accessibilityIdentifier("communityImageClose")}.padding(.horizontal,12).padding(.top,8).zIndex(2)
                 Spacer(minLength:12)
-                if let source=communityViewerPhoto(){communityPhotoImage(source).scaledToFit().frame(maxWidth:.infinity,maxHeight:.infinity).scaleEffect(ui.communityImageZoomScale).gesture(MagnificationGesture().onChanged{ui.communityImageZoomScale=min(4,max(1,$0))}.onEnded{_ in ui.communityImageZoomScale=min(4,max(1,ui.communityImageZoomScale))}).onTapGesture(count:2){ui.communityImageZoomScale=ui.communityImageZoomScale>1 ? 1:2}.accessibilityLabel("확대된 게시글 사진").accessibilityValue("확대 \(Int(ui.communityImageZoomScale*100))%").accessibilityIdentifier("communityImageZoom")}
+                if let source=communityViewerPhoto(){
+                    if let video=source.video{WCommunityVideoPlaybackView(video:video,controller:ui.communityVideoPlayback).frame(maxWidth:.infinity,maxHeight:.infinity).accessibilityIdentifier("communityVideoViewer")}
+                    else{communityPhotoImage(source).scaledToFit().frame(maxWidth:.infinity,maxHeight:.infinity).scaleEffect(ui.communityImageZoomScale).gesture(MagnificationGesture().onChanged{ui.communityImageZoomScale=min(4,max(1,$0))}.onEnded{_ in ui.communityImageZoomScale=min(4,max(1,ui.communityImageZoomScale))}).onTapGesture(count:2){ui.communityImageZoomScale=ui.communityImageZoomScale>1 ? 1:2}.accessibilityLabel("확대된 게시글 사진").accessibilityValue("확대 \(Int(ui.communityImageZoomScale*100))%").accessibilityIdentifier("communityImageZoom")}
+                }
                 Spacer(minLength:12)
-                if let post=currentCommunityPost(),communityPhotoSources(for:post).count>1{HStack(spacing:28){Button{changeCommunityViewerPhoto(by:-1)}label:{Image(systemName:"chevron.left").foregroundStyle(.white).frame(width:48,height:44)}.accessibilityLabel("이전 사진").accessibilityIdentifier("communityImagePrevious");Button{changeCommunityViewerPhoto(by:1)}label:{Image(systemName:"chevron.right").foregroundStyle(.white).frame(width:48,height:44)}.accessibilityLabel("다음 사진").accessibilityIdentifier("communityImageNext")}.padding(.bottom,18).zIndex(2)}
+                if communityViewerSources().count>1{HStack(spacing:28){Button{ui.communityVideoPlayback.stopAll();changeCommunityViewerPhoto(by:-1)}label:{Image(systemName:"chevron.left").foregroundStyle(.white).frame(width:48,height:44)}.accessibilityLabel("이전 첨부").accessibilityIdentifier("communityImagePrevious");Button{ui.communityVideoPlayback.stopAll();changeCommunityViewerPhoto(by:1)}label:{Image(systemName:"chevron.right").foregroundStyle(.white).frame(width:48,height:44)}.accessibilityLabel("다음 첨부").accessibilityIdentifier("communityImageNext")}.padding(.bottom,18).zIndex(2)}
             }
-        }
+        }.onDisappear{ui.communityVideoPlayback.stopAll()}
     }
 
     var communityCompose:some View {
@@ -2537,17 +2561,17 @@ extension WireframeRoot {
             WField(label:"제목",text:$ui.communityDraftTitle,placeholder:"제목을 입력해 주세요",limit:60,accessibilityID:"communityComposeTitle")
             VStack(alignment:.leading,spacing:8){Text(ui.communityDraftAttachments.isEmpty ? "내용":"내용 (선택)").font(W.font(14,.medium));TextEditor(text:$ui.communityDraftBody).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:178).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBody");Text("\(ui.communityDraftBody.count)/2000").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
             communityComposePhotoStrip
-            WText(text:"사진은 이 기기에 로컬로 저장돼요. 영상 첨부와 서버 게시 기능은 연결되어 있지 않아요.",small:true)
+            WText(text:"사진과 영상 첨부는 이 기기에 로컬로 저장돼요. 서버 게시 기능은 연결되어 있지 않아요.",small:true)
             if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}
         }actions:{
-            Button("미리보기"){guard !ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="제목을 입력해 주세요.";return};guard !ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !ui.communityDraftAttachments.isEmpty else{ui.communityError="내용이나 사진을 추가해 주세요.";return};ui.communityError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && ui.communityDraftAttachments.isEmpty)).accessibilityIdentifier("communityPreviewButton")
+            Button("미리보기"){guard !ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityError="제목을 입력해 주세요.";return};guard !ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !ui.communityDraftAttachments.isEmpty else{ui.communityError="내용이나 첨부를 추가해 주세요.";return};ui.communityError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(ui.communityMediaImporting || ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && ui.communityDraftAttachments.isEmpty)).accessibilityIdentifier("communityPreviewButton")
             Button("취소"){back()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityComposeCancel")
         }
         .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
         .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
         .onAppear{captureCommunityComposerBaseline(for:"C05")}
     }
-    var communityPreview:some View {WPage(title:"미리보기",back:back){Text(ui.communityDraftCrewID == nil ? "커뮤니티에 공개":"크루 멤버에게 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");if !(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).isEmpty{Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody")};if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{if !ui.communityDraftAttachments.isEmpty{communityPreviewPhotoRow()};WNotice(text:ui.communityDraftCrewID == nil ? "게시물은 이 기기의 로컬 예시 데이터로 추가돼요.":"크루 게시물은 해당 크루 멤버만 볼 수 있고 이 기기에 로컬 저장돼요.")};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityCourseDraft ? "코스 공유하기":ui.communityDraftPostID == nil ? "게시하기":"수정 완료"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":ui.communityDraftPostID == nil ? "communityPublishButton":"communityEditPostSave");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1))}}
+    var communityPreview:some View {WPage(title:"미리보기",back:back){Text(ui.communityDraftCrewID == nil ? "커뮤니티에 공개":"크루 멤버에게 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");if !(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).isEmpty{Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody")};if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{if !ui.communityDraftAttachments.isEmpty{communityPreviewPhotoRow()};WNotice(text:ui.communityDraftCrewID == nil ? "사진과 영상은 이 기기에 로컬 저장돼요. 서버 전송이나 업로드는 연결하지 않았어요.":"크루 게시물은 해당 크루 멤버만 볼 수 있고, 첨부는 이 기기에 로컬 저장돼요.")};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityCourseDraft ? "코스 공유하기":ui.communityDraftPostID == nil ? "게시하기":"수정 완료"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).disabled(ui.communityMediaImporting).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":ui.communityDraftPostID == nil ? "communityPublishButton":"communityEditPostSave");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityMediaImporting)}}
 }
 
 struct WCalendar:View {

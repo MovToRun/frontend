@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import ImageIO
 import PhotosUI
@@ -11,13 +12,26 @@ struct WCommunityPhotoAttachment:Identifiable,Equatable {
     var url:URL { URL(fileURLWithPath:path) }
 }
 
-struct WCommunityPhotoSource:Identifiable {
+enum WCommunityAttachment:Identifiable,Equatable {
+    case photo(WCommunityPhotoAttachment)
+    case video(WCommunityVideoAttachment)
+
+    var id:String { switch self { case .photo(let value):value.id;case .video(let value):value.id } }
+    var byteCount:Int { switch self { case .photo(let value):value.byteCount;case .video(let value):value.byteCount } }
+    var isVideo:Bool { if case .video=self{return true};return false }
+    var photo:WCommunityPhotoAttachment? { if case .photo(let value)=self{return value};return nil }
+    var video:WCommunityVideoAttachment? { if case .video(let value)=self{return value};return nil }
+}
+
+struct WCommunityMediaSource:Identifiable {
     let id:String
     let imageName:String?
-    let attachment:WCommunityPhotoAttachment?
+    let attachment:WCommunityAttachment?
     init(imageName:String){self.id="fixture-\(imageName)";self.imageName=imageName;self.attachment=nil}
-    init(attachment:WCommunityPhotoAttachment){self.id=attachment.id;self.imageName=nil;self.attachment=attachment}
+    init(attachment:WCommunityAttachment){self.id=attachment.id;self.imageName=nil;self.attachment=attachment}
+    var video:WCommunityVideoAttachment?{attachment?.video}
 }
+typealias WCommunityPhotoSource=WCommunityMediaSource
 
 enum WCommunityPhotoError:LocalizedError,Equatable {
     case inputTooLarge
@@ -134,6 +148,91 @@ enum WCommunityPhotoPolicy {
         } catch { throw WCommunityPhotoError.storageUnavailable }
     }
 
+    func makeVideoWorkingURL()throws->URL {
+        do {
+            try fileManager.createDirectory(at:draftURL,withIntermediateDirectories:true)
+            return draftURL.appendingPathComponent("video-work-\(UUID().uuidString)").appendingPathExtension("mp4")
+        } catch { throw WCommunityVideoError.storageUnavailable }
+    }
+
+    func removeTemporaryVideoFile(_ url:URL) {
+        let candidate=url.standardizedFileURL
+        guard candidate.path.hasPrefix(draftURL.standardizedFileURL.path+"/"),
+              (candidate.lastPathComponent.hasPrefix("video-work-") || candidate.lastPathComponent.hasPrefix("source-")) else{return}
+        try? fileManager.removeItem(at:candidate)
+    }
+
+    func stageConvertedVideo(at workingURL:URL,posterData:Data,metadata:WCommunityVideoMetadata,sourceIdentifier:String?,fingerprint:String)throws->WCommunityVideoAttachment {
+        let id=UUID().uuidString
+        let videoURL=draftURL.appendingPathComponent(id).appendingPathExtension("mp4")
+        let posterURL=draftURL.appendingPathComponent(id+"-poster").appendingPathExtension("jpg")
+        do {
+            guard workingURL.standardizedFileURL.path.hasPrefix(draftURL.standardizedFileURL.path+"/"),
+                  workingURL.lastPathComponent.hasPrefix("video-work-"),
+                  fileManager.fileExists(atPath:workingURL.path),!posterData.isEmpty else{throw WCommunityPhotoError.unmanagedFile}
+            try fileManager.moveItem(at:workingURL,to:videoURL)
+            try posterData.write(to:posterURL,options:.atomic)
+            return WCommunityVideoAttachment(id:id,path:videoURL.path,posterPath:posterURL.path,byteCount:metadata.size,duration:metadata.duration,width:metadata.width,height:metadata.height,sourceIdentifier:sourceIdentifier,sourceFingerprint:fingerprint)
+        } catch {
+            try? fileManager.removeItem(at:videoURL);try? fileManager.removeItem(at:posterURL)
+            if let error=error as? WCommunityVideoError{throw error}
+            throw WCommunityVideoError.storageUnavailable
+        }
+    }
+
+    func commit(_ attachments:[WCommunityAttachment],forPost postID:String)throws->[WCommunityAttachment] {
+        let postFolder=publishedURL.appendingPathComponent(Self.safeComponent(postID),isDirectory:true)
+        var committed:[WCommunityAttachment]=[]
+        var moved:[(URL,URL)]=[]
+        do {
+            for item in attachments {
+                let paths:[URL]
+                switch item {case .photo(let value):paths=[value.url];case .video(let value):paths=[value.url,value.posterURL]}
+                guard paths.allSatisfy({isOwned($0) && fileManager.fileExists(atPath:$0.path)}) else{throw WCommunityPhotoError.unmanagedFile}
+                let alreadyPublished=paths.allSatisfy{$0.standardizedFileURL.path.hasPrefix(postFolder.standardizedFileURL.path+"/")}
+                if alreadyPublished {committed.append(item);continue}
+                guard paths.allSatisfy({$0.standardizedFileURL.path.hasPrefix(draftURL.standardizedFileURL.path+"/")}) else{throw WCommunityPhotoError.unmanagedFile}
+                try fileManager.createDirectory(at:postFolder,withIntermediateDirectories:true)
+                var destinations:[URL]=[]
+                for source in paths {
+                    let destination=postFolder.appendingPathComponent(source.lastPathComponent)
+                    try fileManager.moveItem(at:source,to:destination);moved.append((source,destination));destinations.append(destination)
+                }
+                switch item {
+                case .photo(let value):committed.append(.photo(WCommunityPhotoAttachment(id:value.id,path:destinations[0].path,byteCount:value.byteCount)))
+                case .video(let value):committed.append(.video(WCommunityVideoAttachment(id:value.id,path:destinations[0].path,posterPath:destinations[1].path,byteCount:value.byteCount,duration:value.duration,width:value.width,height:value.height,sourceIdentifier:value.sourceIdentifier,sourceFingerprint:value.sourceFingerprint)))
+                }
+            }
+            return committed
+        } catch {
+            for (source,destination) in moved.reversed() {
+                try? fileManager.createDirectory(at:source.deletingLastPathComponent(),withIntermediateDirectories:true)
+                try? fileManager.moveItem(at:destination,to:source)
+            }
+            if let error=error as? WCommunityPhotoError{throw error}
+            throw WCommunityVideoError.storageUnavailable
+        }
+    }
+
+    func discardDraft(_ attachments:[WCommunityAttachment]) {
+        for item in attachments {
+            switch item {case .photo(let photo):if isDraft(photo.url){try? fileManager.removeItem(at:photo.url)}
+            case .video(let video):if isDraft(video.url){try? fileManager.removeItem(at:video.url)};if isDraft(video.posterURL){try? fileManager.removeItem(at:video.posterURL)}}
+        }
+    }
+
+    func releaseRemovedPublished(_ previous:[WCommunityAttachment],keeping current:[WCommunityAttachment]) {
+        let kept=Set(current.map(\.id))
+        for item in previous where !kept.contains(item.id){removePublished(item)}
+    }
+
+    func deletePublished(_ attachments:[WCommunityAttachment]) {attachments.forEach(removePublished)}
+
+    private func removePublished(_ item:WCommunityAttachment) {
+        switch item {case .photo(let photo):if isPublished(photo.url){try? fileManager.removeItem(at:photo.url)}
+        case .video(let video):if isPublished(video.url){try? fileManager.removeItem(at:video.url)};if isPublished(video.posterURL){try? fileManager.removeItem(at:video.posterURL)}}
+    }
+
     func commit(_ attachments:[WCommunityPhotoAttachment],forPost postID:String)throws->[WCommunityPhotoAttachment] {
         let postFolder=publishedURL.appendingPathComponent(Self.safeComponent(postID),isDirectory:true)
         var committed:[WCommunityPhotoAttachment]=[]
@@ -194,6 +293,18 @@ enum WCommunityPhotoPolicy {
         }
     }
 
+    func makeReviewVideoFixture()throws->WCommunityVideoAttachment {
+        let working=try makeVideoWorkingURL()
+        defer{removeTemporaryVideoFile(working)}
+        try WCommunityVideoFixtureFactory.writeMP4(to:working)
+        let asset=AVURLAsset(url:working),generator=AVAssetImageGenerator(asset:asset)
+        generator.appliesPreferredTrackTransform=true
+        let frame:CGImage
+        do{frame=try generator.copyCGImage(at:.zero,actualTime:nil)}catch{throw WCommunityVideoError.conversionFailed}
+        guard let poster=UIImage(cgImage:frame).jpegData(compressionQuality:0.82),let size=(try? working.resourceValues(forKeys:[.fileSizeKey]))?.fileSize else{throw WCommunityVideoError.conversionFailed}
+        return try stageConvertedVideo(at:working,posterData:poster,metadata:WCommunityVideoMetadata(size:size,duration:2,width:320,height:240),sourceIdentifier:"synthetic-review-video",fingerprint:"synthetic-review-video-fingerprint")
+    }
+
     private func isOwned(_ url:URL)->Bool { url.standardizedFileURL.path.hasPrefix(rootURL.standardizedFileURL.path+"/") }
     private static func safeComponent(_ value:String)->String {
         let safe=value.filter{$0.isASCII && ($0.isLetter || $0.isNumber || $0=="-" || $0=="_")}
@@ -214,39 +325,95 @@ struct WImportedCommunityPhoto:Transferable {
     }
 }
 
+struct WImportedCommunityVideo:Transferable {
+    let sourceURL:URL
+    let sourceIdentifier:String?
+    static var transferRepresentation:some TransferRepresentation {
+        FileRepresentation(importedContentType:.movie) { received in
+            let attributes=try received.file.resourceValues(forKeys:[.fileSizeKey])
+            guard let size=attributes.fileSize,size>0 else{throw WCommunityVideoError.invalidVideo}
+            guard size<=WCommunityVideoPolicy.maximumOriginalBytes else{throw WCommunityVideoError.inputTooLarge}
+            return WImportedCommunityVideo(sourceURL:try WCommunityVideoTemporaryFiles.importedSourceURL(for:received.file),sourceIdentifier:nil)
+        }
+    }
+}
+
 @MainActor struct WCommunityPhotoPickerControl:View {
-    @Binding var attachments:[WCommunityPhotoAttachment]
+    @Binding var attachments:[WCommunityAttachment]
     @Binding var error:String
+    @Binding var isImporting:Bool
+    @Binding var draftSessionID:String
     var store:WCommunityAttachmentStore
-    @State private var selection:[PhotosPickerItem]=[]
+    var coordinator:WCommunityMediaImportCoordinator
+    @State private var photoSelection:[PhotosPickerItem]=[]
+    @State private var videoSelection:[PhotosPickerItem]=[]
 
     var body:some View {
-        PhotosPicker(selection:$selection,maxSelectionCount:max(1,WCommunityPhotoPolicy.maximumAttachments-attachments.count),matching:.images){
-            Label("사진 추가",systemImage:"photo").font(W.font(13,.medium)).padding(.horizontal,14).frame(height:42).background(W.soft,in:RoundedRectangle(cornerRadius:10))
+        HStack(spacing:8){
+            PhotosPicker(selection:$photoSelection,maxSelectionCount:max(1,WCommunityPhotoPolicy.maximumAttachments-attachments.count),matching:.images){
+                Label("사진 추가",systemImage:"photo").font(W.font(13,.medium)).padding(.horizontal,12).frame(height:42).background(W.soft,in:RoundedRectangle(cornerRadius:10))
+            }
+            .disabled(attachments.count>=WCommunityPhotoPolicy.maximumAttachments || isImporting)
+            .accessibilityIdentifier("communityComposeAddPhotos")
+            PhotosPicker(selection:$videoSelection,maxSelectionCount:max(1,WCommunityPhotoPolicy.maximumAttachments-attachments.count),matching:.videos){
+                Label("영상 추가",systemImage:"video").font(W.font(13,.medium)).padding(.horizontal,12).frame(height:42).background(W.soft,in:RoundedRectangle(cornerRadius:10))
+            }
+            .disabled(attachments.count>=WCommunityPhotoPolicy.maximumAttachments || isImporting)
+            .accessibilityIdentifier("communityComposeAddVideos")
         }
-        .disabled(attachments.count>=WCommunityPhotoPolicy.maximumAttachments)
-        .accessibilityIdentifier("communityComposeAddPhotos")
-        .task(id:selection){await importSelection(selection)}
+        .task(id:photoSelection){await importPhotos(photoSelection)}
+        .task(id:videoSelection){await importVideos(videoSelection)}
     }
 
-    private func importSelection(_ items:[PhotosPickerItem])async {
+    private func importPhotos(_ items:[PhotosPickerItem])async {
         guard !items.isEmpty else{return}
+        let token=coordinator.beginRequest(),sessionID=draftSessionID
+        isImporting=true
+        var staged:[WCommunityAttachment]=[]
+        defer{if !staged.isEmpty{store.discardDraft(staged)};if coordinator.accepts(token){isImporting=false}}
         let initialBytes=attachments.reduce(0){$0+$1.byteCount}
         guard WCommunityPhotoPolicy.canAppend(currentCount:attachments.count,currentBytes:initialBytes,addingCount:items.count,addingBytes:1) else {
             error="사진은 최대 10장까지 첨부할 수 있어요."
-            selection=[]
+            photoSelection=[]
             return
         }
         error=""
         for item in items {
             do {
                 guard let imported=try await item.loadTransferable(type:WImportedCommunityPhoto.self) else{throw WCommunityPhotoError.unsupportedImage}
-                guard !Task.isCancelled else{return}
-                let currentBytes=attachments.reduce(0){$0+$1.byteCount}
-                guard WCommunityPhotoPolicy.canAppend(currentCount:attachments.count,currentBytes:currentBytes,addingCount:1,addingBytes:imported.convertedData.count) else{throw WCommunityPhotoError.outputTooLarge}
-                attachments.append(try store.saveDraft(imported.convertedData))
-            } catch {if !Task.isCancelled{self.error=error.localizedDescription}}
+                guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
+                let item=try store.saveDraft(imported.convertedData)
+                staged.append(.photo(item))
+            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=error.localizedDescription};return}
         }
-        if selection==items{selection=[]}
+        guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
+        let currentBytes=attachments.reduce(0){$0+$1.byteCount},addingBytes=staged.reduce(0){$0+$1.byteCount}
+        guard WCommunityVideoPolicy.canAppend(currentCount:attachments.count,currentBytes:currentBytes,addingCount:staged.count,addingBytes:addingBytes) else{error="사진과 영상은 최대 10개, 전체 100 MB까지 첨부할 수 있어요.";return}
+        attachments += staged;staged=[]
+        if photoSelection==items,coordinator.accepts(token),sessionID==draftSessionID{photoSelection=[]}
+    }
+
+    private func importVideos(_ items:[PhotosPickerItem])async {
+        guard !items.isEmpty else{return}
+        let token=coordinator.beginRequest(),sessionID=draftSessionID
+        isImporting=true
+        var staged:[WCommunityAttachment]=[]
+        defer{if !staged.isEmpty{store.discardDraft(staged)};if coordinator.accepts(token){isImporting=false}}
+        error=""
+        for item in items {
+            do {
+                guard let imported=try await item.loadTransferable(type:WImportedCommunityVideo.self) else{throw WCommunityVideoError.invalidVideo}
+                guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{store.removeTemporaryVideoFile(imported.sourceURL);return}
+                let converted=try await WCommunityVideoTranscoder.convert(sourceURL:imported.sourceURL,sourceIdentifier:imported.sourceIdentifier ?? item.itemIdentifier,store:store,coordinator:coordinator,request:token)
+                guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{store.discardDraft([.video(converted)]);return}
+                guard !WCommunityVideoPolicy.isDuplicate(converted,in:attachments+staged) else{store.discardDraft([.video(converted)]);throw WCommunityVideoError.duplicate}
+                staged.append(.video(converted))
+            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=error.localizedDescription};return}
+        }
+        guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
+        let currentBytes=attachments.reduce(0){$0+$1.byteCount},addingBytes=staged.reduce(0){$0+$1.byteCount}
+        guard WCommunityVideoPolicy.canAppend(currentCount:attachments.count,currentBytes:currentBytes,addingCount:staged.count,addingBytes:addingBytes) else{error="사진과 영상은 최대 10개, 전체 100 MB까지 첨부할 수 있어요.";return}
+        attachments += staged;staged=[]
+        if videoSelection==items,coordinator.accepts(token),sessionID==draftSessionID{videoSelection=[]}
     }
 }

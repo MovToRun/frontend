@@ -523,7 +523,7 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false,videoPostFixture:Bool=false,videoDraftFixture:Bool=false) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
@@ -535,6 +535,8 @@ import UIKit
         if let crewBoardID{app.launchArguments += ["-wire-community-board",crewBoardID]}
         if photoDraftFixture{app.launchArguments.append("-wire-community-photo-draft-fixture")}
         if photoPostFixture{app.launchArguments.append("-wire-community-photo-post-fixture")}
+        if videoPostFixture{app.launchArguments.append("-wire-community-video-post-fixture")}
+        if videoDraftFixture{app.launchArguments.append("-wire-community-video-draft-fixture")}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
@@ -1161,6 +1163,46 @@ import UIKit
         app.buttons["communityImageClose"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         capture("community-detail-image-compact-dark")
+    }
+
+    func testCommunityVideoOpensPlaysPausesAndStopsWhenViewerCloses() {
+        launchCommunity("C01",videoPostFixture:true)
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.descendants(matching:.any)["communityDetailPhotos"].swipeLeft()
+        let video=app.buttons["communityDetailPhotoOpen-1"]
+        XCTAssertTrue(video.waitForExistence(timeout:5),app.debugDescription)
+        video.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04-IMAGE"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityVideoViewer"].waitForExistence(timeout:5),app.debugDescription)
+        let play=app.buttons["communityVideoPlay"]
+        XCTAssertTrue(play.waitForExistence(timeout:5))
+        play.tap()
+        let pause=app.buttons["communityVideoPause"]
+        XCTAssertTrue(pause.waitForExistence(timeout:3),"Playback toggles into the playing state")
+        pause.tap()
+        XCTAssertTrue(app.buttons["communityVideoPlay"].waitForExistence(timeout:3),"Playback can be paused")
+        app.buttons["communityImageClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.descendants(matching:.any)["communityDetailPhotos"].swipeLeft()
+        app.buttons["communityDetailPhotoOpen-1"].tap()
+        XCTAssertTrue(app.buttons["communityVideoPlay"].waitForExistence(timeout:5),"Reopening the viewer starts paused from the beginning")
+    }
+
+    func testCommunityVideoDraftPreviewPlaysLocally() {
+        launchCommunity("C05",videoDraftFixture:true)
+        XCTAssertTrue(app.descendants(matching:.any)["communityComposePhotoCount"].waitForExistence(timeout:5))
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        let previewVideo=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityPreviewPhoto-")).firstMatch
+        XCTAssertTrue(previewVideo.waitForExistence(timeout:5),app.debugDescription)
+        previewVideo.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04-IMAGE"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityVideoPlay"].waitForExistence(timeout:5))
+        app.buttons["communityVideoPlay"].tap()
+        XCTAssertTrue(app.buttons["communityVideoPause"].waitForExistence(timeout:3))
+        app.buttons["communityImageClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
     }
 
     func testCommunityViewCountRunsLocalKSTPolicyOnlyOnDetailEntry() {
