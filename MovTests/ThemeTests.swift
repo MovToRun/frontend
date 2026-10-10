@@ -47,6 +47,17 @@ final class ThemeTests:XCTestCase {
         XCTAssertFalse(provider.unblock(target,viewerID:me))
     }
 
+    func testCommunityAnonymousOriginCannotOpenProfileButNamedProfilesCan() {
+        let me="fixture-member-current",target="fixture-member-ga-on",known=Set([me,target])
+        var provider=WLocalCommunityModerationProvider()
+        XCTAssertTrue(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+        XCTAssertFalse(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:true))
+        XCTAssertTrue(provider.block(target,viewerID:me,knownUsers:known))
+        XCTAssertFalse(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+        XCTAssertTrue(provider.unblock(target,viewerID:me))
+        XCTAssertTrue(provider.canOpenProfile(memberID:target,viewerID:me,ownerID:me,anonymousOrigin:false))
+    }
+
     func testCommunityProfileDraftDetectsEveryFieldAndReversion() {
         let saved=WLocalProfile()
         var draft=WCommunityProfileDraft(profile:saved)
