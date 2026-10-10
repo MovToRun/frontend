@@ -21,6 +21,7 @@ struct WCommunityComposerSnapshot:Equatable {
     var body:String
     var recordID:String
     var hideEnds:Bool
+    var attachmentIDs:[String]=[]
 }
 
 enum WWireDefaults {
@@ -306,6 +307,10 @@ struct WCommunityVerificationState:Codable,Equatable {
     var path:[String]=[]
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
+    var communityAttachmentStore=WCommunityAttachmentStore()
+    var communityDraftAttachments:[WCommunityPhotoAttachment]=[]
+    var communityImageViewerIndex=0
+    var communityImageZoomScale:CGFloat=1
     var communityNotificationCenter=WCommunityNotificationCenter()
     var communityNotificationError=""
     var communitySelectedPostID="p1"
@@ -400,6 +405,10 @@ struct WCommunityVerificationState:Codable,Equatable {
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
     init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
+    func seedCommunityPhotoFixtures(draft:Bool,post:Bool){
+        if draft,let photos=try? communityAttachmentStore.makeReviewFixtures(){communityDraftAttachments=photos;communityDraftTitle="사진 첨부 예시";communityDraftBody=""}
+        if post,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let draft=try? communityAttachmentStore.makeReviewFixtures(count:1),let photos=try? communityAttachmentStore.commit(draft,forPost:"p1"){communityPosts[index].attachments=photos}
+    }
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     func submitCommunityVerification()->Bool{
         switch communityVerification.submit(communityVerification.note){
@@ -587,6 +596,7 @@ struct WireframeRoot:View {
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot,crewID:original.crewID)}
                     if reviewTools && args.contains("-wire-community-crew-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}){ui.communityPosts[index].crewID="dawn";ui.communityPosts[index].crewBoardID="dawn-board-2";ui.communityPosts[index].isCrewOnly=true;ui.communityPosts[index].comments.append(WCommunityComment(id:"c1-reply",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"네, 다음에 함께 달려요.",date:"10.05 08:50",parentID:"c1"))}
                     if reviewTools && args.contains("-wire-community-empty-hot") {for index in ui.communityPosts.indices{ui.communityPosts[index].hot=false}}
+                    if reviewTools{ui.seedCommunityPhotoFixtures(draft:args.contains("-wire-community-photo-draft-fixture"),post:args.contains("-wire-community-photo-post-fixture"))}
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
@@ -640,7 +650,7 @@ struct WireframeRoot:View {
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
         if screen=="C13"{return WCommunityComposerSnapshot(screen:screen,board:"",crewID:nil,postID:nil,title:ui.communityCourseTitle,body:ui.communityCourseIntroduction,recordID:ui.communityCourseRecordID,hideEnds:ui.communityCourseHideEnds)}
-        return WCommunityComposerSnapshot(screen:"C05",board:ui.communityDraftBoard,crewID:ui.communityDraftCrewID,postID:ui.communityDraftPostID,title:ui.communityDraftTitle,body:ui.communityDraftBody,recordID:"",hideEnds:false)
+        return WCommunityComposerSnapshot(screen:"C05",board:ui.communityDraftBoard,crewID:ui.communityDraftCrewID,postID:ui.communityDraftPostID,title:ui.communityDraftTitle,body:ui.communityDraftBody,recordID:"",hideEnds:false,attachmentIDs:ui.communityDraftAttachments.map(\.id))
     }
     func captureCommunityComposerBaseline(for screen:String){
         guard ["C05","C13"].contains(screen),communityComposerOriginal?.screen != screen else{return}
@@ -657,6 +667,7 @@ struct WireframeRoot:View {
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
     }
     func resetCommunityComposerDraft(){
+        ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true
     }

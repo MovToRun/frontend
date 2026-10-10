@@ -143,3 +143,11 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - Result bundle: `/tmp/mov-c19-post-detail-20261010/C19-post-detail-focused.xcresult`. `git diff --check` passed after the run.
 - C19 and C04 now read/write the same in-memory `WireState.communityPosts` and preserve stable `crewID`/`crewBoardID` references across board renames. Posts remain stored during board archive and reappear when restored. No server calls or media attachments were added; the app's local fixture state resets on process restart.
 - The existing PhotosPicker main-actor/sendable warning in `WireframeProfile.swift` remains unrelated. Full source/app pixel and motion QA remains open; functional tests do not claim visual completion. Parent independent verification is pending.
+
+## Community post photo attachments (C05/C09/C04)
+
+- Branch: `feature/community-post-photo-attachments`, based on main `2722e27c21eed7cac1a453f885e02560f89f11e9`.
+- Clean isolated Xcode run: 84/84 passed (81 `ThemeTests` + 3 focused UI tests, 0 failed, 0 skipped) on the existing iPhone 17 Pro simulator / iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used app bundle ID `local.mov.prototype.Mov.communityphotos`, unit-test bundle ID `local.mov.prototype.MovTests.communityphotos`, UI-test bundle ID `local.mov.prototype.MovUITests.communityphotos`, and fixture-only storage.
+- Result bundle: `/tmp/mov-community-photos.iGge9r/C05-photo-final-clean.xcresult`.
+- Policy coverage includes 10-photo count, 20 MB source cap, 5 MB converted-image cap, 100 MB aggregate cap, PNG alpha preservation, GPS metadata removal, EXIF orientation normalization, long-edge/pixel resizing, and draft/published file cleanup. UI coverage exercises C05 photo ordering and preview, C26 discard confirmation, photo-only publishing, C04 photo navigation/zoom/delete, and edit discard versus save cleanup.
+- Photos are converted and retained in app-owned local temporary storage; posts and attachments are not sent to a server and the local fixture resets on a fresh launch. C05/C09/C04 video attachment and playback remain unimplemented and server-blocked. Full source/app pixel and motion QA remains open; functional tests do not claim visual completion. Parent independent verification is pending.
