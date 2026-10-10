@@ -427,7 +427,10 @@ import UIKit
         open("A01");app.buttons["회원가입"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5));app.buttons["가상 예시값 채우기"].tap();capture("A07-filled");app.buttons["authPrimary"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
         app.buttons["fillDemoEmailCode"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
         app.buttons["모두 동의하고 계속"].doubleTap();XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5));let nickname=app.textFields.firstMatch;nickname.tap();nickname.typeText("아침러너");app.buttons["계속"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].exists);capture("A15")
-        app.buttons["홈으로"].tap();tap("tab-4");tap("설정");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap();capture("T05")
+        let signupCompletion=app.buttons["signupCompletionStart"]
+        XCTAssertTrue(signupCompletion.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(signupCompletion.label,"시작하기","The accessibility ID stays stable while the approved CTA copy remains visible")
+        signupCompletion.tap();tap("tab-4");tap("설정");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","로그인 수단")).firstMatch.tap();capture("T05")
     }
     func testNotificationReadAndProfileValidation(){
         open("M01");tap("알림");let first=app.buttons["notification-0"];XCTAssertTrue(first.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(waitHittable(first,timeout:5),app.debugDescription);XCTAssertTrue(first.label.contains("러닝 목표 안내"),first.debugDescription);first.tap();capture("N01-read-one");app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].exists)
@@ -1739,7 +1742,7 @@ extension LaunchTests {
             tap("tab-4");tap("설정");tap("로그아웃");tap("로그아웃")
             XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:5))
             tap("authPrimary")
-            XCTAssertTrue(app.staticTexts["예시 이메일을 입력해 주세요."].exists)
+            XCTAssertTrue(app.staticTexts["이메일을 입력해 주세요."].exists)
             tap("회원가입");tap("가입 취소")
             XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:5))
             tap("가상 예시값 채우기");tap("authPrimary")
@@ -1908,7 +1911,7 @@ extension LaunchTests {
         replaceInput(weight,"");tap("signupContinue")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요."].exists)
-        XCTAssertTrue(app.buttons["시작하기"].exists)
+        XCTAssertEqual(app.buttons["signupCompletionStart"].label,"시작하기")
     }
 
     func testUserFlowSignupDoesNotAssumeGlobalNicknameAvailability() {
@@ -2427,7 +2430,7 @@ extension LaunchTests {
     }
     func fillUserAuth(confirm:Bool=false,current:Bool=false){
         if app.textFields["auth-email"].exists{let f=app.textFields["auth-email"];f.tap();f.typeText("runner@example.test");XCTAssertEqual(f.value as? String,"runner@example.test")}
-        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;field.tap();field.typeText("MovReview482619");if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}}
+        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;replaceInput(field,"MovReview482619");if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}}
         if current{enterPassword("auth-current")}
         if app.secureTextFields["auth-password"].exists{enterPassword("auth-password")}
         if confirm{enterPassword("auth-confirm")}
@@ -2464,7 +2467,7 @@ extension LaunchTests {
             XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","확인된 유효 구간만")).firstMatch.exists)
         }
     }
-    func testUserLoginSignupResetAndBack(){
+    func testUserLoginSignupAndPasswordResetCancelBack(){
         userOpen("A01");XCTAssertFalse(app.buttons["가상 예시값 채우기"].exists);XCTAssertTrue(app.buttons["로그인"].exists)
         fillUserAuth();tap("authPrimary");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5))
         userOpen("A01");tap("회원가입");fillUserAuth(confirm:true);tap("authPrimary")
@@ -2474,7 +2477,12 @@ extension LaunchTests {
         otp.tap();otp.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:6)+"482619");XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5),"Pasting all six digits verifies and opens consent automatically")
         tap("모두 동의하고 계속");let nickname=app.textFields.firstMatch;XCTAssertTrue(nickname.waitForExistence(timeout:5));nickname.tap();nickname.typeText("검수러너");tap("계속")
         XCTAssertTrue(app.buttons["시작하기"].waitForExistence(timeout:5));tap("시작하기");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5));capture("User-signup-home")
-        userOpen("A01");tap("비밀번호 찾기");let email=app.textFields["auth-email"];email.tap();email.typeText("runner@example.test\n");tap("authPrimary");tap("계속");fillUserAuth(confirm:true);tap("authPrimary");tap("뒤로")
+        userOpen("A01");tap("비밀번호 찾기")
+        let resetEmail=app.textFields["reset-email"]
+        XCTAssertTrue(resetEmail.waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["fillDemoResetCode"].exists,"A normal user flow does not expose fixture-only reset codes")
+        tap("취소")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["로그인"].waitForExistence(timeout:5));capture("User-reset-login")
     }
     func testUserProviderCompletionCancelAndLogout(){

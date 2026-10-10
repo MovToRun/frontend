@@ -7,8 +7,18 @@
 - UI coverage: C01 search entry → C29 query groups → C04 post detail → search return; C29 → C07 profile preview → query return; C29 → C16 crew intro → query return; all-empty search results; C01 → C41 → C04 and back; empty HOT preview/list; and anonymous-post exclusion from public feed, HOT, and search while anonymous detail and block-list masking stay intact.
 - Policy coverage: trimmed NFC normalization and Korean-locale case-insensitive matching, blank-query safety, public-only post search, blocked-profile/crew-owner exclusion, anonymous/crew-only visibility filtering, and explicit HOT flags retaining input order with no score/fallback.
 - Result bundles: `/tmp/mov-community-discovery.rLTh71/CommunityDiscovery-focused.xcresult` (3 passed, 0 failed, 0 skipped); `/tmp/mov-community-discovery.rLTh71/CommunityDiscovery-final3.xcresult` (72 unit tests passed; broad UI run subsequently reported an unrelated auth test failure and was stopped while an unrelated UI case was in progress).
-- The existing `testAuthenticationConsentAndProviderProtection` fails because it expects a `홈으로` control after signup, while the completion screen exposes `시작하기` and has already routed to H00. The same isolated failure reproduces with the merged-main Swift sources and the unchanged test method (`/tmp/mov-community-baseline-check/AuthBaseline.xcresult`), so it is baseline behavior rather than this discovery change.
+- At the time of this C29/C41 run, `testAuthenticationConsentAndProviderProtection` failed because it expected a `홈으로` control after signup, while the completion screen exposes `시작하기` and has already routed to H00. The same isolated failure reproduced with the merged-main Swift sources and unchanged test method (`/tmp/mov-community-baseline-check/AuthBaseline.xcresult`), confirming baseline behavior rather than a discovery regression. The follow-up in the next section resolves the stale selector and passes the test.
 - The reference `community-model.js` defines HOT as the public feed filtered by its existing `hot` marker and does not compute a rank. The local screen follows that fixture-only policy; live search and popularity aggregation remain unconnected. This run verifies functional flows, not source/app pixel or motion parity; full visual QA remains open.
+
+## Authentication success action and UI-test maintenance
+
+- Branch: `feature/fix-auth-success-accessibility`, based on merged PR #37 main SHA `78f84e1f3e87f27b8b0da1ccc1e4a6e07ea75c47`.
+- Draft PR: #38.
+- A15's existing `시작하기` button now has the stable accessibility ID `signupCompletionStart`; its visible copy and route to H00 are unchanged. The regression uses the ID and separately asserts the visible label.
+- Updated stale auth-test expectations to the current empty-email copy, made password entry replace any existing value, and aligned the ordinary user reset test with the actual `reset-email` field and fixture-only code visibility. Ordinary user flow covers reset entry/cancel/back; complete reset, code resend, password policy, and return-to-login are covered in the dedicated fixture-backed reset UI tests.
+- Verification: 80/80 passed (72 unit tests + 8 focused auth UI tests, 0 failed, 0 skipped) on the existing iPhone 17 Pro, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used unique app, unit-test, and UI-test bundle IDs with isolated fixture storage.
+- Result bundle: `/tmp/mov-auth-selector-fix/AuthRegression-final.xcresult`.
+- The pre-existing Swift concurrency warning for the PhotosPicker sendable closure referencing main-actor profile data in `WireframeProfile.swift:156` remains a separate follow-up and is outside this test-maintenance patch. These functional tests do not constitute full source/app pixel or motion QA.
 
 ## Crew information and member application list (C32–C33)
 
