@@ -600,14 +600,34 @@ final class PasswordResetFlowTests:XCTestCase {
         let start=Date(timeIntervalSince1970:1_800_000_000)
         var reset=WPasswordResetSession()
         XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
-        XCTAssertEqual(reset.issuedCode,"482619")
+        XCTAssertEqual(reset.issuedCode,"700000")
         let oldCode=reset.issuedCode
         XCTAssertTrue(reset.resend(now:start.addingTimeInterval(60)))
-        XCTAssertEqual(reset.issuedCode,"482620")
+        XCTAssertEqual(reset.issuedCode,"700001")
         XCTAssertEqual(reset.verify(oldCode,now:start.addingTimeInterval(61)),.rejected)
         XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(62)),.accepted)
         XCTAssertTrue(reset.hasProof)
         XCTAssertFalse(reset.resend(now:start.addingTimeInterval(123)),"A verified challenge cannot be replaced while its proof is in use")
+    }
+
+    func testResetSessionsUseDistinctCodesFromSignupAndPreviousResetFlow() {
+        let start=Date(timeIntervalSince1970:1_800_000_000)
+        var signup=WLocalOTPCodeIssuer()
+        let signupCode=try! XCTUnwrap(signup.issueNext())
+        XCTAssertEqual(signupCode,"482619")
+
+        var reset=WPasswordResetSession()
+        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
+        let firstResetCode=reset.issuedCode
+        XCTAssertNotEqual(firstResetCode,signupCode)
+        XCTAssertEqual(reset.verify(signupCode,now:start.addingTimeInterval(1)),.rejected)
+        XCTAssertEqual(reset.verify(firstResetCode,now:start.addingTimeInterval(2)),.accepted)
+
+        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start.addingTimeInterval(70)))
+        let latestResetCode=reset.issuedCode
+        XCTAssertNotEqual(latestResetCode,firstResetCode)
+        XCTAssertEqual(reset.verify(firstResetCode,now:start.addingTimeInterval(71)),.rejected)
+        XCTAssertEqual(reset.verify(latestResetCode,now:start.addingTimeInterval(72)),.accepted)
     }
 
     func testResetEmailChangeAndCancellationInvalidateDelayedCompletion() {

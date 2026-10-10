@@ -19,8 +19,8 @@ extension WireframeRoot {
         if reviewTools{return reviewInfo}
         switch ui.screen {
         case "A06":return .init(title:"동의 내용",heading:ui.consentTopic,text:"서비스 이용과 개인정보 처리 내용을 확인해 주세요.",notice:"운동 기록과 프로필은 이 기기에 저장돼요. 앱 삭제 시 복구가 어려울 수 있어요.",buttons:[("확인했어요","consent-reviewed",0)])
-        case "A11":return .init(title:"비밀번호 재설정",heading:"새 비밀번호를\n설정해 주세요",text:"입력한 이메일을 확인하고 계속해 주세요.",buttons:[("인증 코드 확인","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소","reset-cancel",3)])
-        case "A13":return .init(title:"비밀번호 재설정",heading:"다시 로그인해 주세요",text:"설정을 마쳤어요. 로그인 화면으로 돌아가요.",buttons:[("로그인으로","A01",0)])
+        case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
+        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜 계정":ui.provider)+"로\n계속할까요?",text:"선택한 로그인 수단으로 시작해요.",buttons:[((ui.provider.isEmpty ? "선택한 계정":ui.provider)+"로 계속","social-success",0),("취소","A01",1)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "다시 로그인해 주세요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "설정을 마쳤어요. 로그인 화면으로 돌아가요.":"로그인 수단에서 연결 상태를 확인할 수 있어요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
@@ -46,8 +46,8 @@ extension WireframeRoot {
         switch ui.screen {
         case "A04":return .init(title:WLoginFailureCopy.title,heading:WLoginFailureCopy.heading,text:WLoginFailureCopy.body,notice:WLoginFailureCopy.notice,buttons:[("다시 시도","A01",0)])
         case "A06":return .init(title:"동의 내용 검토",heading:ui.consentTopic,text:"이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.",notice:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.",buttons:[("확인했어요","consent-reviewed",0)])
-        case "A11":return .init(title:"재설정 요청",heading:"요청 확인 화면이에요",text:"메일은 발송되지 않았어요.\n계정이 있는지도 확인하지 않았어요.",notice:"아래 버튼으로 새 비밀번호 UI 데모를 확인할 수 있어요. 실제 인증 링크나 토큰은 없어요.",buttons:[("인증 코드 확인 · 예시","reset-verification",0),("예시 이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
-        case "A13":return .init(title:"재설정 완료",heading:"완료 화면까지 확인했어요",text:"이 흐름은 UI 데모예요.\n실제 비밀번호는 바뀌지 않았어요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
+        case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
+        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜":ui.provider)+" 로그인 예시",text:"실제 제공자에 연결하지 않아요.\n아래에서 가상 인증 결과를 선택해 주세요.",buttons:[("인증 성공 · 예시","social-success",0),("인증 오류 · 예시","A04",1),("인증 취소","A01",3)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "변경 완료 화면이에요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "실제 비밀번호는 바뀌지 않았어요.\n변경 데모를 마쳐 다시 로그인해야 해요.\n입력한 비밀번호는 보관하지 않아요.":"이 브라우저의 데모 연결 상태만 바뀌었어요.\n입력한 비밀번호는 보관하지 않아요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
@@ -87,7 +87,7 @@ extension WireframeRoot {
         if ui.screen=="T03"{VStack(spacing:0){WRow(title:"거리",value:"km");WRow(title:"페이스",value:"분/km");WRow(title:"추정 칼로리",value:"kcal");WRow(title:"체중",value:"kg")}}
         if !data.notice.isEmpty{if ui.screen=="L07"{WRecordDeletionParagraph(text:data.notice).offset(y:-3).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4)}else if ui.screen.hasPrefix("A") || ["T06","T07","T08","T10","T13","T15","T16","T17"].contains(ui.screen){WAuthNotice(text:data.notice,danger:ui.screen=="T13",sourceWrapping:["A04","T10","T17"].contains(ui.screen))}else{WNotice(text:data.notice,danger:["P05","R11","T13"].contains(ui.screen))}}
         if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
-        if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A13","A14","A15","A18"].contains(ui.screen){authDemoNote}
+        if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty)}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)

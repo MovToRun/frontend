@@ -25,8 +25,8 @@ extension WireframeRoot {
             if id != "A01"{WHeader(title:title,back:{authBack(id)})}
             ScrollView{VStack(alignment:.leading,spacing:18){
                 if id=="A01"{VStack(alignment:.leading,spacing:24){Color.clear.frame(height:84);Text("오늘의 달리기를\n나의 기록으로").font(W.font(25,.bold)).lineSpacing(6)}}
-                else{WHeading(text:["A07":"모브와 함께 시작해요","A10":"비밀번호를\n다시 설정해요","A12":"새 비밀번호를 설정해요","A16":"이메일로도 로그인해요","A17":"비밀번호를 관리해요"][id] ?? "")}
-                if id != "A01"{WText(text:id=="A07" ? "이메일과 비밀번호로 시작해요.":id=="A10" ? "가입할 때 사용한 이메일을 입력해 주세요.":id=="A16" ? "현재 계정에 이메일 로그인 수단을 추가해요.":"새 비밀번호를 입력하고 확인해 주세요.")}
+                else{WHeading(text:["A07":"모브와 함께 시작해요","A10":"비밀번호를\n다시 설정해요","A12":"새 비밀번호를 입력해요","A16":"이메일로도 로그인해요","A17":"비밀번호를 관리해요"][id] ?? "")}
+                if id != "A01"{WText(text:id=="A07" ? "이메일과 비밀번호로 시작해요.":id=="A10" ? "가입할 때 사용한 이메일을 입력해 주세요.":id=="A12" ? "새 비밀번호를 한 번 더 확인해 주세요.":id=="A16" ? "현재 계정에 이메일 로그인 수단을 추가해요.":"새 비밀번호를 입력하고 확인해 주세요.")}
                 if id != "A07" && !["A10","A12"].contains(id){authDemoNote}
                 VStack(alignment:.leading,spacing:0){
                     VStack(alignment:.leading,spacing:id == "A01" ? 40:16){
@@ -40,7 +40,6 @@ extension WireframeRoot {
                         if id=="A17"{authField("새 비밀번호 확인",value:"")}
                     }
                     if reviewTools{Button{if id=="A10"{ui.passwordReset.email="runner@example.test";ui.passwordReset.error=""}else if id=="A12"{ui.passwordReset.newPassword="MovDemo482619";ui.passwordReset.confirmPassword="MovDemo482619";ui.passwordReset.error=""}else{ui.authFilled=true;ui.authEmail="runner@example.test";ui.authPassword="MovDemo482619";ui.authConfirm=ui.authPassword;ui.authCurrent=ui.authPassword;ui.error=""}}label:{Text("가상 예시값 채우기").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain)}
-                    if id=="A10",reviewTools{Text("메일·서버 연결 없이 비밀번호 재설정 화면을 확인해요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,4)}
                     if !ui.passwordReset.error.isEmpty && ["A10","A12"].contains(id){WAuthNotice(text:ui.passwordReset.error,danger:true).padding(.vertical,8)}
                     if !ui.error.isEmpty && ui.authErrorField.isEmpty{WAuthNotice(text:ui.error,danger:true).padding(.vertical,8)}
                     Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).accessibilityIdentifier("authPrimary")
@@ -83,8 +82,8 @@ extension WireframeRoot {
     }
     @ViewBuilder var authDemoNote:some View {if reviewTools{Text("SIMULATION · 가상 값으로만 확인해 주세요\n실제 가입·인증·메일 발송 없이 동작해요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)}}
     func authSubmitTitle(_ id:String)->String {
-        if reviewTools{return ["A01":"데모 로그인","A07":"다음 · 이메일 인증","A10":"재설정 요청 예시 보기","A12":"변경 완료 화면 보기","A16":"이메일 로그인 연결 · 데모","A17":"변경 완료 화면 보기"][id] ?? "계속"}
-        return ["A01":"로그인","A07":"다음","A10":"계속","A12":"비밀번호 변경","A16":"연결하기","A17":"비밀번호 변경"][id] ?? "계속"
+        if reviewTools{return ["A01":"데모 로그인","A07":"다음 · 이메일 인증","A10":"다음","A12":"비밀번호 재설정","A16":"이메일 로그인 연결 · 데모","A17":"변경 완료 화면 보기"][id] ?? "계속"}
+        return ["A01":"로그인","A07":"다음","A10":"다음","A12":"비밀번호 재설정","A16":"연결하기","A17":"비밀번호 변경"][id] ?? "계속"
     }
     var passwordResetEmailField:some View {
         let email=Binding(get:{ui.passwordReset.email},set:{ui.passwordReset.emailDidChange($0)})
@@ -92,7 +91,6 @@ extension WireframeRoot {
             TextField("",text:email,prompt:Text(verbatim:"runner@example.test").foregroundStyle(W.muted)).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("reset-email").submitLabel(.done)
                 .font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.passwordReset.errorField=="email" && !ui.passwordReset.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line))
             if ui.passwordReset.errorField=="email" && !ui.passwordReset.error.isEmpty{Text(ui.passwordReset.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))}
-            if reviewTools{Text("실제 주소 대신 example.test 예시 주소를 써 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,26)}
         }
     }
     @ViewBuilder func passwordResetPasswordField(_ label:String,confirm:Bool)->some View {
@@ -334,10 +332,13 @@ enum WEmailChallengePolicy {
 }
 struct WLocalOTPCodeIssuer {
     private static let codeSpace=1_000_000
-    private var nextValue=482_619
+    private let startingValue:Int
+    private var nextValue:Int
     private var issuedCodes=Set<String>()
     private var currentCode:String?
-    mutating func reset(){nextValue=482_619;issuedCodes=[];currentCode=nil}
+    init(startingAt:Int=482_619){let value=((startingAt%Self.codeSpace)+Self.codeSpace)%Self.codeSpace;startingValue=value;nextValue=value}
+    mutating func reset(){nextValue=startingValue;issuedCodes=[];currentCode=nil}
+    mutating func revokeCurrent(){currentCode=nil}
     mutating func seed(_ code:String){
         reset()
         guard code.count==6,let value=Int(code),WEmailChallengePolicy.digits(code)==code else{return}
@@ -363,7 +364,7 @@ struct WPasswordResetSession {
     var code=""
     private(set) var issuedCode=""
     private(set) var issuedAt:Date?
-    private var issuer=WLocalOTPCodeIssuer()
+    private var issuer=WLocalOTPCodeIssuer(startingAt:700_000)
     private(set) var attempts=0
     private var lastAttemptedCode:String?
     private(set) var proofID:UUID?
@@ -425,7 +426,7 @@ struct WPasswordResetSession {
         if screen=="A12" || screen=="A13"{_ = verify(issuedCode,now:now)}
         if screen=="A13",let token=beginCompletion(){_ = finishCompletion(token)}
     }
-    mutating func invalidate(){flowID=UUID();email="";code="";issuedCode="";issuedAt=nil;issuer.reset();attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""}
+    mutating func invalidate(){flowID=UUID();email="";code="";issuedCode="";issuedAt=nil;issuer.revokeCurrent();attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""}
 }
 struct WAuthNotice:View {
     let text:String;var danger=false;var sourceWrapping=false
