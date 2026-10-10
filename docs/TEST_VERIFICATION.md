@@ -13,6 +13,7 @@
 ## Authentication success action and UI-test maintenance
 
 - Branch: `feature/fix-auth-success-accessibility`, based on merged PR #37 main SHA `78f84e1f3e87f27b8b0da1ccc1e4a6e07ea75c47`.
+- Draft PR: #38.
 - A15's existing `시작하기` button now has the stable accessibility ID `signupCompletionStart`; its visible copy and route to H00 are unchanged. The regression uses the ID and separately asserts the visible label.
 - Updated stale auth-test expectations to the current empty-email copy, made password entry replace any existing value, and aligned the ordinary user reset test with the actual `reset-email` field and fixture-only code visibility. Ordinary user flow covers reset entry/cancel/back; complete reset, code resend, password policy, and return-to-login are covered in the dedicated fixture-backed reset UI tests.
 - Verification: 80/80 passed (72 unit tests + 8 focused auth UI tests, 0 failed, 0 skipped) on the existing iPhone 17 Pro, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used unique app, unit-test, and UI-test bundle IDs with isolated fixture storage.
