@@ -472,6 +472,7 @@ struct WireframeRoot:View {
         case "T05":providers
         case "T11":deleteAccount
         case "A01","A07","A10","A12","A16","A17":authForm
+        case "A04":loginFailure
         case "A02":consents
         case "A19","A20","A21","A22","A23":verification
         case "C01":community

@@ -1,5 +1,23 @@
 import SwiftUI
+enum WLoginFailureCopy {
+    static let title = "로그인"
+    static let heading = "로그인을 마치지\n못했어요"
+    static let body = "인증이 취소됐거나 연결이 끊겼어요.\n아직 새 계정을 만들지 않았어요."
+    static let notice = "같은 로그인 수단으로 다시 시도하거나 다른 수단을 선택할 수 있어요."
+}
 extension WireframeRoot {
+    var loginFailure:some View {
+        WPage(title:WLoginFailureCopy.title,back:{go("A01")}) {
+            WHeading(text:WLoginFailureCopy.heading).padding(.top,9)
+            WText(text:WLoginFailureCopy.body)
+            WAuthNotice(text:WLoginFailureCopy.notice,sourceWrapping:true)
+        } actions: {
+            Button("다시 시도"){go("A01")}
+                .buttonStyle(WButtonStyle())
+                .accessibilityIdentifier("authFailureRetry")
+        }
+    }
+
     var authForm:some View {
         let id=ui.screen
         let title=["A07":"회원가입","A10":"비밀번호 찾기","A12":"새 비밀번호","A16":"이메일 로그인 연결","A17":"이메일 로그인 관리"][id] ?? ""

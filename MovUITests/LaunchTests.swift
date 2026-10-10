@@ -640,6 +640,15 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testLoginFailureScreenCopyAndRetry() {
+        open("A04")
+        XCTAssertTrue(app.staticTexts["로그인을 마치지\n못했어요"].exists)
+        XCTAssertTrue(app.staticTexts["인증이 취소됐거나 연결이 끊겼어요.\n아직 새 계정을 만들지 않았어요."].exists)
+        XCTAssertTrue(app.staticTexts["같은 로그인 수단으로 다시 시도하거나 다른 수단을 선택할 수 있어요."].exists)
+        tap("authFailureRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+
     func testPasswordResetAndEmailMethodManagement() {
         open("A01");tap("비밀번호 찾기");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A11"].waitForExistence(timeout:5))
