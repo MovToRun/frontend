@@ -1,5 +1,14 @@
 # Test verification history
 
+## Crew settings and board lifecycle (C36–C40)
+
+- Branch: `feature/community-crew-settings`, based on merged PR #34 main SHA `d0e7ddb95999306d7f000affd9d1d2777c6f1c21`.
+- Clean isolated Xcode build: 70/70 passed (67 `ThemeTests`, 3 focused UI tests) on the already-booted iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used unique app/unit/UI test bundle identifiers; no user app data was reset.
+- UI coverage: C36 guidance edit; C37/C38 board create, archive and restore against the active five-board limit; restored populated board post preservation; local C39 announcement display; C40 pending-application review round trip through C22; and existing member-management role flows.
+- Policy unit coverage: archive/restore capacity, backend-compatible board name grapheme bounds and archived rename restriction, guidance/announcement length and manager access.
+- Result bundle: `/tmp/mov-crew-settings-derived-final2/Logs/Test/Test-Mov-2026.10.11_03-09-26-+0900.xcresult`.
+- All changes remain local fixtures. Announcements do not send push notifications, board archive preserves posts, and changes reset when the app process restarts. Full source/app pixel and motion QA remains open.
+
 ## PR #23 — launch screen and startup routing
 
 - Tested commit: `f462a17319ca2417a8fd70d8f7e076159a87314d`
