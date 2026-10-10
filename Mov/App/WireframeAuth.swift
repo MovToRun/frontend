@@ -81,15 +81,16 @@ extension WireframeRoot {
     func acceptConsents(){
         guard ui.screen=="A02", !ui.consentBusy else{return}
         if ui.consentTerms != ui.consentPrivacy{ui.error="필수 항목을 모두 확인해 주세요.";return}
+        ui.error=""
         if ui.consentTerms && ui.consentPrivacy{ui.nickname="";go("A03");return}
-        ui.consentBusy=true
+        let sequenceID=UUID();ui.consentSequenceOriginalTerms=ui.consentTerms;ui.consentSequenceOriginalPrivacy=ui.consentPrivacy;ui.consentSequenceID=sequenceID;ui.consentBusy=true
         Task { @MainActor in
             if !reduceMotion{try? await Task.sleep(for:.milliseconds(40))}
-            guard ui.screen=="A02" else{ui.consentBusy=false;return};withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){ui.consentTerms=true}
+            guard ui.screen=="A02",ui.consentSequenceID==sequenceID else{return};withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){ui.consentTerms=true}
             if !reduceMotion{try? await Task.sleep(for:.milliseconds(90))}
-            guard ui.screen=="A02" else{ui.consentBusy=false;return};withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){ui.consentPrivacy=true}
+            guard ui.screen=="A02",ui.consentSequenceID==sequenceID else{return};withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){ui.consentPrivacy=true}
             if !reduceMotion{try? await Task.sleep(for:.milliseconds(290))}
-            guard ui.screen=="A02" else{ui.consentBusy=false;return};ui.consentBusy=false;ui.nickname="";go("A03")
+            guard ui.screen=="A02",ui.consentSequenceID==sequenceID else{return};ui.consentBusy=false;ui.consentSequenceID=nil;ui.nickname="";go("A03")
         }
     }
     func validateAuth(_ id:String)->Bool {
@@ -108,8 +109,8 @@ extension WireframeRoot {
         return VStack(alignment:.leading,spacing:8){Text(label).font(W.font(13,.medium)).frame(height:18.85,alignment:.leading);HStack{if email{TextField("",text:binding,prompt:Text(verbatim:"runner@example.test").foregroundStyle(W.muted)).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else if revealed{TextField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else{SecureField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textContentType(nil).accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}};if !email && ui.screen != "A01"{Button{if revealed{ui.revealedFields.remove(label)}else{ui.revealedFields.insert(label)}}label:{WEyeIcon(revealed:revealed).stroke(W.muted,style:StrokeStyle(lineWidth:1.125,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:30,height:44)}.accessibilityLabel(label+(revealed ? " 숨기기":" 보기")).accessibilityIdentifier("auth-reveal-\(fieldID)")}}.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.authErrorField==label && !ui.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line));if ui.authErrorField==label && !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).fixedSize(horizontal:false,vertical:true)};if email && reviewTools{Text("실제 주소 대신 example.test 예시 주소를 써 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,26)}}
     }
     func providerMark(_ name:String)->some View {Group{if name=="이메일"{BrandMark(size:28).frame(width:48,height:48).background(W.soft,in:Circle())}else if !name.isEmpty{Image("Provider-"+["카카오":"kakao","네이버":"naver","Google":"google","Apple":"apple"][name,default:"google"]).resizable().scaledToFit().frame(width:48,height:48).clipShape(Circle())}}}
-    var consents:some View {WPage(title:"시작하기",back:back){WText(text:"01 / 02",small:true).offset(y:6);WHeading(text:"먼저 확인해 주세요");WText(text:"필수 항목을 확인하고 동의해 주세요.");consentRow("이용약관 동의 (필수)",value:$ui.consentTerms);consentRow("개인정보 수집·이용 동의 (필수)",value:$ui.consentPrivacy).padding(.top,-18);WText(text:"아래 버튼은 위의 필수 항목 2개에만 적용돼요.",small:true);if !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))};WAuthNotice(text:"운동 기록은 이 기기에 저장돼요. 앱 삭제나 기기 분실 시 복구가 어려울 수 있어요. 클라우드 백업은 별도 검토 중이에요.")}actions:{Button(ui.consentTerms == ui.consentPrivacy ? "모두 동의하고 계속":"동의하고 계속"){acceptConsents()}.buttonStyle(WButtonStyle()).disabled(ui.consentBusy)}}
-    func consentRow(_ label:String,value:Binding<Bool>)->some View {
+    var consents:some View {WPage(title:"시작하기",back:back){WText(text:"01 / 02",small:true).offset(y:6);WHeading(text:"먼저 확인해 주세요");WText(text:"필수 항목을 확인하고 동의해 주세요.\n실제 법적 동의가 아닌 화면 검토입니다.");consentRow("terms","이용약관 동의 (필수)",value:$ui.consentTerms);consentRow("privacy","개인정보 수집·이용 동의 (필수)",value:$ui.consentPrivacy).padding(.top,-18);WText(text:"아래 버튼은 위의 필수 항목 2개에만 적용돼요.",small:true);if !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).accessibilityIdentifier("consentError")};WAuthNotice(text:"운동 기록은 이 기기에 저장돼요. 앱 삭제나 기기 분실 시 복구가 어려울 수 있어요. 클라우드 백업은 별도 검토 중이에요.")}actions:{Button(ui.consentTerms == ui.consentPrivacy ? "모두 동의하고 계속":"동의하고 계속"){acceptConsents()}.buttonStyle(WButtonStyle()).disabled(ui.consentBusy).accessibilityIdentifier("consentContinue")}}
+    func consentRow(_ id:String,_ label:String,value:Binding<Bool>)->some View {
         HStack(alignment:.top,spacing:12){
             WCheck().stroke(value.wrappedValue ? W.lime:W.muted,style:StrokeStyle(lineWidth:2.1,lineCap:.round,lineJoin:.round)).frame(width:21,height:21).padding(.top,1)
             VStack(alignment:.leading,spacing:0){Text(label).font(W.font(14)).kerning(-0.21).frame(height:23.1,alignment:.leading)
@@ -117,8 +118,10 @@ extension WireframeRoot {
             }
             Spacer(minLength:0)
         }.padding(.vertical,18).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
-        .onTapGesture{withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){value.wrappedValue.toggle()}}
+        .onTapGesture{ui.error="";withAnimation(reduceMotion ? nil:.easeOut(duration:0.16)){value.wrappedValue.toggle()}}
         .accessibilityElement(children:.contain).accessibilityLabel(label).accessibilityValue(value.wrappedValue ? "동의함":"동의 안 함")
+        .accessibilityIdentifier("consent-row-\(id)")
+        .disabled(ui.consentBusy)
         .overlay(alignment:.bottom){W.line.frame(height:1)}
     }
     var verification:some View {WSecondTicker{now in

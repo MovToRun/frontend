@@ -110,11 +110,12 @@ struct WField:View {
     var labelSize:CGFloat=14
     var secondaryLabel=""
     var placeholderColor:Color? = nil
+    var accessibilityID:String? = nil
     var body:some View {
         VStack(alignment:.leading,spacing:0){
             (Text(label).font(W.font(labelSize,labelSize==13 ? .regular:.medium))+Text(secondaryLabel.isEmpty ? "":"  "+secondaryLabel).font(W.font(10)).foregroundColor(W.muted)).frame(height:labelSize==13 ? 19:21,alignment:.leading).padding(.bottom,8)
             if multiline{TextEditor(text:$text).font(W.font(textSize)).scrollContentBackground(.hidden).lineSpacing(textSize==16 ? 8:4.2).frame(height:multilineHeight-12).padding(.horizontal,9).padding(.vertical,6).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder))}
-            else{TextField(placeholder,text:$text,prompt:placeholderColor.map{Text(placeholder).foregroundColor($0)}).font(W.font(textSize)).padding(14).frame(minHeight:54).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder))}
+            else{TextField(placeholder,text:$text,prompt:placeholderColor.map{Text(placeholder).foregroundColor($0)}).font(W.font(textSize)).padding(14).frame(minHeight:54).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
             if let limit{Text("\(text.count)/\(limit)").font(W.font(11)).foregroundStyle(text.count>limit ? .red:W.muted).frame(maxWidth:.infinity,minHeight:18,alignment:.trailing).padding(.top,6)}
         }
     }
@@ -198,6 +199,34 @@ enum WProfileValidation {
         return !normalized.isEmpty && normalized.count<=20 && introduction.count<=60
     }
 }
+enum WSignupNicknameValidation {
+    static let reservedNicknames=["달빛러너","RunMate"]
+
+    static func normalized(_ value:String)->String {
+        let scalars=value.precomposedStringWithCanonicalMapping.unicodeScalars.filter { scalar in
+            let code=scalar.value
+            return !(code<=0x1F || (0x7F...0x9F).contains(code) || [0x061C,0x200B,0x200E,0x200F,0x202A,0x202B,0x202C,0x202D,0x202E,0x2066,0x2067,0x2068,0x2069,0xFEFF].contains(code))
+        }
+        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in:.whitespacesAndNewlines)
+    }
+
+    static func canonical(_ value:String)->String {normalized(value).lowercased()}
+
+    static func error(for value:String)->String? {
+        let name=normalized(value)
+        guard !name.isEmpty else{return "닉네임을 입력해 주세요."}
+        guard name.count<=20 else{return "닉네임은 20자까지 입력할 수 있어요."}
+        guard !reservedNicknames.contains(where:{canonical($0)==canonical(name)}) else{return "이미 사용 중인 닉네임이에요."}
+        return nil
+    }
+}
+enum WSignupWeightValidation {
+    static func error(for value:String)->String? {
+        guard !value.isEmpty else{return nil}
+        guard let weight=Double(value),weight.isFinite,(20...300).contains(weight) else{return "20~300 kg 사이로 입력하거나 비워 두세요."}
+        return nil
+    }
+}
 enum WRootTab: Int, CaseIterable {
     case points, run, home, community, profile
     static let homeMarkSize: CGFloat = 26
@@ -236,6 +265,8 @@ enum WRootTab: Int, CaseIterable {
     var month=false
     var gradeExpanded=false;var validityExpanded=false;var consentBusy=false
     var consentTerms=false;var consentPrivacy=false;var deleteConsent=false
+    var consentSequenceID:UUID?
+    var consentSequenceOriginalTerms=false;var consentSequenceOriginalPrivacy=false
     var consentTopic="이용약관"
     var nickname="";var introduction="";var region="";var weight=""
     var title="";var memo="";var photo:Data?
@@ -265,6 +296,7 @@ enum WRootTab: Int, CaseIterable {
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
     func clearAuthSecrets(){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];code="";otpFocused=false}
     func leaveAuth(for next:String){
+        if screen=="A02" && next != "A02",consentSequenceID != nil{consentTerms=consentSequenceOriginalTerms;consentPrivacy=consentSequenceOriginalPrivacy;consentSequenceID=nil;consentBusy=false}
         clearAuthSecrets();otpSuccess=false
         if !Self.otpScreens.contains(next){challengeIssued=nil;codeAttempts=0;authEmail=""}
         if !["A16","A17","A18","T15","T06"].contains(next){settingsGrant=false}

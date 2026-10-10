@@ -4,6 +4,7 @@ import UIKit
     var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    func openAuthFixture(_ screen:String,suite:String){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
@@ -640,6 +641,78 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testA02ConsentReviewPartialRequiredAndCompletion() {
+        openAuthFixture("A02",suite:"mov.wireframe.test.a02-consent-review")
+        XCTAssertTrue(app.staticTexts["필수 항목을 확인하고 동의해 주세요.\n실제 법적 동의가 아닌 화면 검토입니다."].exists)
+        let terms=app.descendants(matching:.any)["consent-row-terms"]
+        let privacy=app.descendants(matching:.any)["consent-row-privacy"]
+        XCTAssertEqual(terms.value as? String,"동의 안 함")
+        XCTAssertEqual(privacy.value as? String,"동의 안 함")
+
+        let links=app.buttons.matching(identifier:"내용 확인")
+        links.element(boundBy:0).tap();XCTAssertTrue(app.descendants(matching:.any)["screen-A06"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["이용약관"].exists);tap("확인했어요")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+        XCTAssertEqual(terms.value as? String,"동의함")
+        XCTAssertEqual(privacy.value as? String,"동의 안 함")
+        XCTAssertEqual(app.buttons["consentContinue"].label,"동의하고 계속")
+        tap("consentContinue")
+        XCTAssertTrue(app.staticTexts["필수 항목을 모두 확인해 주세요."].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].exists)
+
+        app.buttons.matching(identifier:"내용 확인").element(boundBy:1).tap()
+        XCTAssertTrue(app.staticTexts["개인정보 수집·이용"].waitForExistence(timeout:5));tap("확인했어요")
+        XCTAssertEqual(privacy.value as? String,"동의함")
+        XCTAssertEqual(app.buttons["consentContinue"].label,"모두 동의하고 계속")
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5))
+    }
+
+    func testA02SelectAllAnimationBackStopAndReentry() {
+        openAuthFixture("A01",suite:"mov.wireframe.test.a02-motion-cancel")
+        tap("회원가입");tap("가상 예시값 채우기");tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
+        tap("예시 코드 입력");tap("인증하고 계속")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+        tap("consentContinue")
+        XCTAssertFalse(app.buttons["consentContinue"].isEnabled,"The CTA stays locked while both consent marks animate")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.descendants(matching:.any)["consent-row-terms"].value as? String,"동의함")
+        XCTAssertEqual(app.descendants(matching:.any)["consent-row-privacy"].value as? String,"동의함")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A07"].waitForExistence(timeout:5))
+        tap("가입 취소");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+        tap("회원가입");tap("가상 예시값 채우기");tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5))
+        tap("예시 코드 입력");tap("인증하고 계속")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.descendants(matching:.any)["consent-row-terms"].value as? String,"동의 안 함")
+        XCTAssertEqual(app.descendants(matching:.any)["consent-row-privacy"].value as? String,"동의 안 함")
+    }
+
+    func testA03NicknameDuplicateRequiredWeightAndLocalCompletion() {
+        openAuthFixture("A02",suite:"mov.wireframe.test.a03-profile")
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:5))
+        let nickname=app.textFields["signupNicknameInput"]
+        XCTAssertTrue(nickname.waitForExistence(timeout:5))
+        tap("signupContinue")
+        XCTAssertTrue(app.staticTexts["닉네임을 입력해 주세요."].waitForExistence(timeout:5))
+        replaceInput(nickname,"runmate");tap("signupContinue")
+        XCTAssertTrue(app.staticTexts["이미 사용 중인 닉네임이에요."].waitForExistence(timeout:5))
+        replaceInput(nickname,"아침러너")
+        let weight=app.textFields["signupWeightInput"]
+        replaceInput(weight,"19.9");tap("signupContinue")
+        XCTAssertTrue(app.staticTexts["20~300 kg 사이로 입력하거나 비워 두세요."].waitForExistence(timeout:5))
+        replaceInput(weight,"");tap("signupContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["기기 안의 데모 프로필이 준비됐어요.\n실제 회원가입은 하지 않았어요."].exists)
+    }
+
     func testLoginFailureScreenCopyAndRetry() {
         open("A04")
         XCTAssertTrue(app.staticTexts["로그인을 마치지\n못했어요"].exists)
@@ -1300,7 +1373,7 @@ extension LaunchTests {
 
 extension LaunchTests {
     func visible(_ label:String)->Bool {app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).allElementsBoundByIndex.contains{$0.isHittable}}
-    func replaceInput(_ field:XCUIElement,_ text:String){XCTAssertTrue(field.waitForExistence(timeout:5));XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5));let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)}
+    func replaceInput(_ field:XCUIElement,_ text:String){XCTAssertTrue(field.waitForExistence(timeout:5));field.tap();XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5));let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)}
     func testPointsShopAndHeaderRoutes(){
         userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")
         tap("tab-0");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertFalse(visible("설정"));XCTAssertFalse(visible("기록 보기"));XCTAssertTrue(visible("browsePointShop"),app.debugDescription);XCTAssertTrue(app.staticTexts["pointBalance"].exists,app.debugDescription);capture("Points-overview")

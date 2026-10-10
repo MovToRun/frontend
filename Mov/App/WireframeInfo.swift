@@ -10,7 +10,7 @@ extension WireframeRoot {
         case "A11":return .init(title:"비밀번호 재설정",heading:"새 비밀번호를\n설정해 주세요",text:"입력한 이메일을 확인하고 계속해 주세요.",buttons:[("계속","A12",0),("이메일 다시 입력","A10",1),("취소","reset-cancel",3)])
         case "A13":return .init(title:"비밀번호 재설정",heading:"다시 로그인해 주세요",text:"설정을 마쳤어요. 로그인 화면으로 돌아가요.",buttons:[("로그인으로","A01",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜 계정":ui.provider)+"로\n계속할까요?",text:"선택한 로그인 수단으로 시작해요.",buttons:[((ui.provider.isEmpty ? "선택한 계정":ui.provider)+"로 계속","social-success",0),("취소","A01",1)])
-        case "A15":return .init(title:"시작하기",heading:"이제 달려 볼까요?",text:"러닝 프로필이 준비됐어요.",buttons:[("홈으로","H00",0)])
+        case "A15":return .init(title:"시작하기",heading:"이제 달려 볼까요?",text:"기기 안의 데모 프로필이 준비됐어요.\n실제 회원가입은 하지 않았어요.",buttons:[("홈으로","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "다시 로그인해 주세요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "설정을 마쳤어요. 로그인 화면으로 돌아가요.":"로그인 수단에서 연결 상태를 확인할 수 있어요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
         case "H11":return .init(title:"시간대 변경",heading:"주간 기준이\n달라질 수 있어요",text:"통계는 기기의 시간대를 따라요.",buttons:[("확인했어요","H07",0)])
         case "P01":return .init(title:"위치 접근",heading:"달린 길을\n기록할 준비",text:"거리와 경로를 기록하려면 위치 접근이 필요해요.",buttons:[("계속","start-local",0),("지금은 허용하지 않기","P02",1)])
@@ -79,7 +79,7 @@ extension WireframeRoot {
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty)}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)
-    case "consent-reviewed":if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
+    case "consent-reviewed":ui.error="";if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
     case "local-login":ui.profile.logged=true;ui.save();go("H00")
     case "switch-local-account":if reviewTools{ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
     case "save":saveRun()
