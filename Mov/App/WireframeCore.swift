@@ -267,6 +267,7 @@ enum WRootTab: Int, CaseIterable {
     var communityDraftTitle=""
     var communityDraftBody=""
     var communityComment=""
+    var communityReplyToID:String?
     var communityError=""
     var communityLikedPosts:Set<String>=[]
     var selectedPointProductID="line"

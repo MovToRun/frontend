@@ -18,6 +18,21 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityRepliesAreUnlimitedAndDeletionKeepsDescendants() {
+        var comments=[WCommunityComment(id:"root",author:"runner",text:"root text",date:"now")]
+        XCTAssertTrue(WCommunityCommentActions.add(" first ",author:"나",date:"now",parentID:"root",to:&comments))
+        let first=comments[1].id
+        XCTAssertTrue(WCommunityCommentActions.add("second",author:"나",date:"now",parentID:first,to:&comments))
+        let second=comments[2].id
+        XCTAssertTrue(WCommunityCommentActions.add("third",author:"나",date:"now",parentID:second,to:&comments))
+        XCTAssertTrue(WCommunityCommentActions.delete(first,by:"나",to:&comments))
+        XCTAssertTrue(comments.first{$0.id==first}?.isDeleted == true)
+        XCTAssertEqual(comments.first{$0.id==second}?.parentID,first)
+        XCTAssertEqual(comments.first{$0.id=="root"}?.text,"root text")
+        XCTAssertFalse(WCommunityCommentActions.delete("root",by:"나",to:&comments))
+        XCTAssertFalse(WCommunityCommentActions.add("orphan",author:"나",date:"now",parentID:"missing",to:&comments))
+    }
+
     func testCommunityViewCountPolicyUsesMemberPostAndKSTDayAndSkipsAuthor() {
         var provider=WLocalCommunityViewCountProvider()
         let viewer="member-viewer",post="post-1",author="member-author"

@@ -32,3 +32,10 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - UI regressions cover feed-photo and blank-card-area detail navigation, detail photo zoom/close, first-vs-repeat detail view increments, empty-action disabled states, 61/2,001/301-character input attempts, and draft preservation after backing out of preview.
 - The view count remains a review-only in-memory provider. The server remains authoritative; list and preview rendering do not record views.
 - Compact 320 pt dark appearance is exercised by the feed/photo/detail-image UI test. Full pixel/motion QA is not part of this correction.
+
+### Community nested comment replies
+
+- Base tree: merged PR #25 (`0488ef30e17085ec7b1a820b0f7b6dcfa8b1478a`).
+- One existing iPhone 17 Pro simulator: the focused reply-policy unit test and nested-reply UI test passed; the pre-existing local comment-add UI test also passed on rerun.
+- Coverage: three-level reply chain, parent quote/connector accessibility node, author-only local deletion marker, and preserved descendants after deletion. All data remains in WireState memory.
+- `git diff --check` passed. Full pixel/motion QA remains open.
