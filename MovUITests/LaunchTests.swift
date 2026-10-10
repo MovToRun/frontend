@@ -519,10 +519,11 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
+        if emptyHot{app.launchArguments.append("-wire-community-empty-hot")}
         if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
         if twoCourseRecords{app.launchArguments.append("-wire-community-course-two-records")}
         if let viewerID{app.launchArguments += ["-wire-community-viewer",viewerID]}
@@ -1029,6 +1030,80 @@ import UIKit
         XCTAssertTrue(detailCount.label.contains("139"),"Repeat detail entry by the same member on the same KST date counts once: \(detailCount.label)")
     }
 
+    func testCommunitySearchFiltersGroupsNormalizesAndReturnsToQuery() {
+        launchCommunity("C01")
+        tap("communitySearch")
+        XCTAssertTrue(app.textFields["communitySearchField"].waitForExistence(timeout:5),app.debugDescription)
+        let query=app.textFields["communitySearchField"]
+        XCTAssertTrue(app.staticTexts["communitySearchHint"].exists)
+        query.typeText("강변")
+        XCTAssertTrue(app.buttons["communitySearchPost-p1"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["communitySearchPost-p3"].exists)
+        XCTAssertEqual(app.staticTexts["communitySearchCount-posts"].label,"게시물 2")
+        XCTAssertEqual(app.staticTexts["communitySearchCount-profiles"].label,"프로필 0")
+        XCTAssertEqual(app.staticTexts["communitySearchCount-crews"].label,"크루 1")
+        app.buttons["communitySearchPost-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"오늘은 강변을 따라 5 km")
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5))
+        XCTAssertEqual(query.value as? String,"강변","Returning to search preserves the query and result group")
+
+        tap("communitySearchClear")
+        query.typeText("가온러너")
+        let profile=app.buttons["communitySearchProfile-fixture-member-ga-on"]
+        XCTAssertTrue(profile.waitForExistence(timeout:5),app.debugDescription)
+        profile.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C07"].waitForExistence(timeout:5))
+        tap("communityCardClose")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5))
+        XCTAssertEqual(query.value as? String,"가온러너","Profile preview close returns to the same search")
+
+        tap("communitySearchClear")
+        query.typeText("모브 강변")
+        let crew=app.buttons["communityCrewOpen-river"]
+        XCTAssertTrue(crew.waitForExistence(timeout:5),app.debugDescription)
+        crew.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"모브시 강변 · 멤버 2/20명")
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5))
+        XCTAssertEqual(query.value as? String,"모브 강변","Crew introduction returns to the same search")
+
+        tap("communitySearchClear")
+        query.typeText("없는검색어")
+        XCTAssertTrue(app.descendants(matching:.any)["communitySearchNoResults"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communitySearchEmpty-posts"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["communitySearchEmpty-profiles"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["communitySearchEmpty-crews"].exists)
+    }
+
+    func testCommunityHotListUsesExplicitPublicFlagsAndReturnsToFeed() {
+        launchCommunity("C01")
+        XCTAssertTrue(app.buttons["communityHot-p1"].exists)
+        XCTAssertTrue(app.buttons["communityHotMore"].exists)
+        tap("communityHotMore")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C41"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityPostOpen-p1"].exists)
+        XCTAssertTrue(app.buttons["communityPostOpen-p2"].exists)
+        app.buttons["communityPostOpen-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C41"].waitForExistence(timeout:5))
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityHot-p1"].exists)
+
+        launchCommunity("C01",emptyHot:true)
+        XCTAssertTrue(app.staticTexts["communityHotEmpty"].waitForExistence(timeout:5))
+        tap("communityHotMore")
+        XCTAssertTrue(app.descendants(matching:.any)["communityHotListEmpty"].waitForExistence(timeout:5))
+
+        launchCommunity("C41",emptyHot:true)
+        XCTAssertTrue(app.descendants(matching:.any)["communityHotListEmpty"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityPostOpen-")).firstMatch.exists)
+    }
+
     func testCommunitySettingsLikedPostsRespectLikesAndBlockedMembers() {
         launchCommunity("C01")
         app.buttons["communityHot-p1"].tap()
@@ -1246,10 +1321,16 @@ import UIKit
 
     func testCommunityAnonymousPostCannotOpenProfileAndBlockListMasksIdentity() {
         launchCommunity("C01",anonymousPost:true)
-        XCTAssertFalse(app.buttons["communityPostAuthor-p1"].exists,"Anonymous post author row is not a profile link")
-        XCTAssertTrue(app.staticTexts["communityAnonymousAuthor-p1"].exists)
+        XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Anonymous posts do not enter the public HOT list")
+        XCTAssertFalse(app.buttons["communityPostOpen-p1"].exists,"Anonymous posts do not enter the public feed")
         XCTAssertFalse(app.staticTexts["노출되면 안 되는 실명"].exists)
-        app.buttons["communityHot-p1"].tap()
+        tap("communitySearch")
+        let search=app.textFields["communitySearchField"]
+        XCTAssertTrue(search.waitForExistence(timeout:5))
+        search.typeText("강변")
+        XCTAssertFalse(app.buttons["communitySearchPost-p1"].exists,"Anonymous post text is excluded from search")
+        app.terminate()
+        launchCommunity("C04",anonymousPost:true)
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityDetailAuthorCard"].exists,"Anonymous post detail must not open C07")
         XCTAssertTrue(app.staticTexts["communityAnonymousDetailAuthor"].exists)
@@ -1268,10 +1349,13 @@ import UIKit
         app.buttons["communityUnblock-fixture-member-ga-on"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["communityBlockedUsersEmpty"].waitForExistence(timeout:3))
         app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
-        XCTAssertTrue(app.buttons["communityHot-p1"].waitForExistence(timeout:5),"Unblocking restores the anonymous post")
-        app.buttons["communityHot-p1"].tap()
-        XCTAssertTrue(app.staticTexts["communityAnonymousDetailAuthor"].waitForExistence(timeout:5))
-        XCTAssertFalse(app.buttons["communityDetailAuthorCard"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Unblocking does not place anonymous content in the public feed")
+        tap("communitySearch")
+        let searchAfterUnblock=app.textFields["communitySearchField"]
+        XCTAssertTrue(searchAfterUnblock.waitForExistence(timeout:5))
+        searchAfterUnblock.typeText("강변")
+        XCTAssertFalse(app.buttons["communitySearchPost-p1"].exists,"Anonymous content stays out of public search after unblock")
     }
 
     func testCommunityNamedProfileMoreCanReportAndSelectReason() {
