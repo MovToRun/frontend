@@ -31,7 +31,7 @@ enum WReviewClock {
     static var referenceDate: Date { ISO8601DateFormatter().date(from: "2026-10-01T12:00:00+09:00")! }
     static var now: Date {
         let args = ProcessInfo.processInfo.arguments
-        return args.contains("-wire-fixture") && args.contains("-wire-capture-viewport") ? referenceDate : Date()
+        return args.contains("-wire-fixture") && (args.contains("-wire-capture-viewport") || args.contains("-wire-fixed-reference-week")) ? referenceDate : Date()
     }
 }
 struct RunSegment: Codable, Equatable {

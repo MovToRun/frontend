@@ -229,6 +229,56 @@ private struct WReview55GoalSelector: View {
     }
 }
 
+private struct WReview55RingFooter: View {
+    @ScaledMetric(relativeTo:.caption) private var textSize:CGFloat = 12
+    @ScaledMetric(relativeTo:.caption2) private var availabilitySize:CGFloat = 11
+    let targetText:String
+    let percent:Int
+    let identifier:String
+    let overageText:String?
+    let reached:Bool
+    let reservesAvailability:Bool
+
+    init(targetText:String,percent:Int,identifier:String,overageText:String?,reached:Bool,reservesAvailability:Bool,baseSize:CGFloat) {
+        self.targetText=targetText
+        self.percent=percent
+        self.identifier=identifier
+        self.overageText=overageText
+        self.reached=reached
+        self.reservesAvailability=reservesAvailability
+        _textSize=ScaledMetric(wrappedValue:baseSize,relativeTo:.caption)
+    }
+
+    var body:some View {
+        VStack(spacing:0) {
+            HStack(spacing:6) {
+                Text(targetText).accessibilityIdentifier("homeRingTarget-\(identifier)")
+                Text("·").accessibilityHidden(true)
+                Text("\(percent)%").accessibilityIdentifier("homeRingPercent-\(identifier)")
+                if reached { Image(systemName:"checkmark.circle.fill").foregroundStyle(W.lime).accessibilityHidden(true) }
+            }
+            .font(.system(size:textSize)).foregroundStyle(W.muted)
+            .fixedSize(horizontal:false,vertical:true)
+            .padding(.top,8)
+
+            if reservesAvailability {
+                Text(overageText ?? "")
+                    .font(.system(size:textSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true)
+                    .frame(minHeight:18,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(.top,3).accessibilityIdentifier("homeRingOverage-\(identifier)")
+                Text("").font(.system(size:availabilitySize)).frame(height:18,alignment:.leading)
+                    .frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("homeAvailability-\(identifier)")
+            } else if let overageText {
+                Text(overageText).font(.system(size:textSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(.top,6).accessibilityIdentifier("homeRingOverage-\(identifier)")
+            }
+        }
+        .frame(maxWidth:.infinity)
+    }
+}
+
 extension WireframeRoot {
     var home:some View {
         VStack(spacing:0){
@@ -336,23 +386,8 @@ extension WireframeRoot {
             WReview54RingVisual(value:displayed,unit:unit=="km" ? "km":"",progress:WReview54HomeArc.progressRatio(value:value,target:target),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription,reduceMotion:reduceMotion)
             .accessibilityIdentifier("homeRing-\(identifier)")
             if let target,let percent {
-                HStack(spacing:6) {
-                    Text(unit=="km" ? "목표 \(targetText) km":"목표 \(targetText)").accessibilityIdentifier("homeRingTarget-\(identifier)")
-                    Text("·")
-                    Text("\(percent)%").accessibilityIdentifier("homeRingPercent-\(identifier)")
-                    if value>=target { Image(systemName:"checkmark.circle.fill").foregroundStyle(W.lime).accessibilityHidden(true) }
-                }.font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).padding(.top,8)
-                if stableReview55Slots {
-                    Text(value>target ? (unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요"):"")
-                        .font(.system(size:12)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true).frame(minHeight:18,alignment:.leading).padding(.top,3)
-                        .accessibilityIdentifier("homeRingOverage-\(identifier)")
-                    Text("").font(.system(size:11)).frame(height:18,alignment:.leading)
-                        .accessibilityIdentifier("homeAvailability-\(identifier)")
-                } else if value>target {
-                    Text(unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요")
-                        .font(.system(size:size<200 ? 10:12)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true).padding(.top,6)
-                        .accessibilityIdentifier("homeRingOverage-\(identifier)")
-                }
+                let overage=value>target ? (unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요"):nil
+                WReview55RingFooter(targetText:unit=="km" ? "목표 \(targetText) km":"목표 \(targetText)",percent:percent,identifier:identifier,overageText:overage,reached:value>=target,reservesAvailability:stableReview55Slots,baseSize:size<200 ? 10:12)
             }
         }.frame(maxWidth:.infinity).accessibilityElement(children:.contain).accessibilityIdentifier("homeRingMetric-\(identifier)")
     }

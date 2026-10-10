@@ -310,7 +310,8 @@ struct WireframeRoot:View {
             let examples:[String:(Double,Double,Double?,Int?)] = [
                 "below":(12,4500,20,nil), "exact":(20,7500,20,nil), "over":(23,8625,20,nil),
                 "time":(12,5400,nil,120), "both":(12,5400,20,120), "half":(20,5400,20,120),
-                "both-over":(23,9000,20,120), "long-week":(60,36000,nil,600), "unset":(12,4500,nil,nil)
+                "both-over":(23,9000,20,120), "long-week":(60,36000,nil,600),
+                "both-long-over":(60,39600,50,600), "unset":(12,4500,nil,nil)
             ]
             if let example=examples[args[i+1]] {
                 model.weekly.distanceEnabled=example.2 != nil
