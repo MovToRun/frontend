@@ -621,8 +621,23 @@ extension ThemeTests {
     func testOfflineAuthBoundaries() {
         for email in ["runner@example.test","fake+review@EXAMPLE.TEST"]{XCTAssertTrue(WAuthValidation.email(email))}
         for email in ["a@@example.test","@example.test","person@gmail.com","a b@example.test",String(repeating:"a",count:250)+"@example.test"]{XCTAssertFalse(WAuthValidation.email(email))}
-        XCTAssertFalse(WAuthValidation.password("1234567"));XCTAssertTrue(WAuthValidation.password("12345678"))
-        XCTAssertTrue(WAuthValidation.password(String(repeating:"x",count:128)));XCTAssertFalse(WAuthValidation.password(String(repeating:"x",count:129)))
+        XCTAssertFalse(WAuthValidation.password("1234567"));XCTAssertTrue(WAuthValidation.password("MovDemo482619"))
+        XCTAssertTrue(WAuthValidation.password("Run!2026"));XCTAssertFalse(WAuthValidation.password("12345678"))
+        XCTAssertFalse(WAuthValidation.password("abcdefgh"));XCTAssertFalse(WAuthValidation.password("Run 2026"))
+        XCTAssertFalse(WAuthValidation.password("달리기2026"));XCTAssertFalse(WAuthValidation.password("RunDemo12345678901234"))
+    }
+    func testEmailChallengeTimeAndInputPolicy() {
+        let issued=Date(timeIntervalSince1970:1000)
+        XCTAssertEqual(WEmailChallengePolicy.lifetime,300)
+        XCTAssertEqual(WEmailChallengePolicy.resendDelay,60)
+        XCTAssertEqual(WEmailChallengePolicy.maximumAttempts,5)
+        XCTAssertEqual(WEmailChallengePolicy.secondsRemaining(since:issued,now:issued.addingTimeInterval(59.1),duration:60),1)
+        XCTAssertEqual(WEmailChallengePolicy.secondsRemaining(since:issued,now:issued.addingTimeInterval(60),duration:60),0)
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued.addingTimeInterval(299),attempts:4),"pending")
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued.addingTimeInterval(300),attempts:0),"expired")
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued,attempts:5),"locked")
+        XCTAssertEqual(WEmailChallengePolicy.digits("a1 2-3\n456789"),"123456")
+        XCTAssertEqual(WEmailChallengePolicy.digits("１２３４５６"),"")
     }
     @MainActor func testAuthNavigationClearsTransientSecrets() {
         let state=WireState();state.screen="A19";state.path=["A07"]

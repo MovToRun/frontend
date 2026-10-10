@@ -27,7 +27,7 @@ extension WireframeRoot {
                 if id=="A01"{VStack(alignment:.leading,spacing:24){Color.clear.frame(height:84);Text("오늘의 달리기를\n나의 기록으로").font(W.font(25,.bold)).lineSpacing(6)}}
                 else{WHeading(text:["A07":"모브와 함께 시작해요","A10":"비밀번호를\n다시 설정해요","A12":"새 비밀번호를 설정해요","A16":"이메일로도 로그인해요","A17":"비밀번호를 관리해요"][id] ?? "")}
                 if id != "A01"{WText(text:id=="A07" ? "이메일과 비밀번호로 시작해요.":id=="A10" ? "가입할 때 사용한 이메일을 입력해 주세요.":id=="A16" ? "현재 계정에 이메일 로그인 수단을 추가해요.":"새 비밀번호를 입력하고 확인해 주세요.")}
-                authDemoNote
+                if id != "A07"{authDemoNote}
                 VStack(alignment:.leading,spacing:0){
                     VStack(alignment:.leading,spacing:id == "A01" ? 40:16){
                         if !["A12","A17"].contains(id){authField("이메일",value:"",email:true)}
@@ -65,7 +65,7 @@ extension WireframeRoot {
         guard validateAuth(id) else{return}
         switch id {
         case "A01":ui.profile.logged=true;ui.save();go("H00")
-        case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;ui.code="";ui.codeAttempts=0;ui.challengeCode="482619";ui.challengeIssued=Date();go("A19")
+        case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;issueEmailChallenge();go("A19")
         case "A10":go("A11")
         case "A12":ui.profile.logged=false;ui.save();go("A13")
         case "A16":ui.passwordChanged=false;if !ui.profile.providers.contains("이메일"){ui.profile.providers.append("이메일")};ui.save();go("A18")
@@ -96,17 +96,49 @@ extension WireframeRoot {
     func validateAuth(_ id:String)->Bool {
         ui.error="";ui.authErrorField=""
         if !["A12","A17"].contains(id) && !WAuthValidation.email(ui.authEmail){ui.authErrorField="이메일";ui.error=ui.authEmail.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "이메일을 입력해 주세요.":"이메일 형식을 확인해 주세요.";return false}
-        if id=="A17" && !WAuthValidation.password(ui.authCurrent){ui.authErrorField="현재 비밀번호";ui.error="8~128자의 비밀번호를 입력해 주세요.";return false}
-        if id != "A10" && !WAuthValidation.password(ui.authPassword){ui.authErrorField=["A12","A17"].contains(id) ? "새 비밀번호":"비밀번호";ui.error="8~128자의 비밀번호를 입력해 주세요.";return false}
+        if id=="A17" && !WAuthValidation.password(ui.authCurrent){ui.authErrorField="현재 비밀번호";ui.error="8~20자의 영문과 숫자를 포함해 입력해 주세요.";return false}
+        if id != "A10" && !WAuthValidation.password(ui.authPassword){ui.authErrorField=["A12","A17"].contains(id) ? "새 비밀번호":"비밀번호";ui.error="8~20자의 영문과 숫자를 포함해 입력해 주세요.";return false}
         if ["A07","A12","A16","A17"].contains(id) && ui.authPassword != ui.authConfirm{ui.authErrorField=["A12","A17"].contains(id) ? "새 비밀번호 확인":"비밀번호 확인";ui.error="비밀번호가 서로 달라요.";return false}
         return true
+    }
+    func issueEmailChallenge(now:Date=Date(),code:String="482619"){
+        ui.challengeIssued=now;ui.challengeCode=code;ui.code="";ui.codeAttempts=0;ui.lastAttemptedOTP=nil;ui.error="";ui.otpSuccess=false;ui.otpVerifying=false
+    }
+    func requestEmailCodeAgain(now:Date=Date()){
+        guard WireState.otpScreens.contains(ui.screen),WEmailChallengePolicy.secondsRemaining(since:ui.challengeIssued,now:now,duration:WEmailChallengePolicy.resendDelay)==0,!ui.otpVerifying,!ui.otpSuccess else{return}
+        let next=ui.challengeCode=="482619" ? "731204":"482619"
+        issueEmailChallenge(now:now,code:next);go("A23")
+    }
+    func verifyEmailCode(now:Date=Date()){
+        guard WireState.otpScreens.contains(ui.screen),!ui.otpVerifying,!ui.otpSuccess else{return}
+        let submitted=WEmailChallengePolicy.digits(ui.code);ui.code=submitted
+        guard submitted.count==6 else{return}
+        guard let issued=ui.challengeIssued else{ui.error="회원가입 정보 입력부터 다시 시작해 주세요.";return}
+        if now.timeIntervalSince(issued)>=WEmailChallengePolicy.lifetime && ui.screen != "A22"{go("A21");return}
+        if ui.codeAttempts>=WEmailChallengePolicy.maximumAttempts || ui.screen=="A22"{go("A22");return}
+        guard ui.lastAttemptedOTP != submitted else{return}
+        ui.lastAttemptedOTP=submitted;ui.otpVerifying=true
+        if submitted==ui.challengeCode{
+            ui.otpSuccess=true;let sequence=UUID();ui.otpVerificationID=sequence
+            Task{@MainActor in
+                if !reduceMotion{try? await Task.sleep(for:.milliseconds(420))}
+                guard ui.otpVerificationID==sequence,WireState.otpScreens.contains(ui.screen),ui.challengeIssued==issued else{return}
+                ui.otpVerifying=false;ui.otpSuccess=false;ui.verified=true;ui.consentTerms=false;ui.consentPrivacy=false;go("A02")
+            }
+        }else{
+            ui.codeAttempts+=1;let remaining=max(0,WEmailChallengePolicy.maximumAttempts-ui.codeAttempts)
+            let locked=ui.codeAttempts>=WEmailChallengePolicy.maximumAttempts
+            go(locked ? "A22":"A20")
+            ui.error=locked ? "잘못된 입력이 5회 쌓여 현재 코드가 잠겼어요. 새 코드를 요청해 주세요.":"코드가 일치하지 않아요. \(remaining)번 더 시도할 수 있어요."
+            ui.otpVerifying=false
+        }
     }
     func authField(_ label:String,value:String,email:Bool=false)->some View {
         let fieldID=email ? "auth-email":label.contains("확인") ? "auth-confirm":label.contains("현재") ? "auth-current":"auth-password"
         let revealed=ui.revealedFields.contains(label)
         let binding=email ? $ui.authEmail:label.contains("확인") ? $ui.authConfirm:label.contains("현재") ? $ui.authCurrent:$ui.authPassword
-        let placeholder=ui.screen == "A01" ? "8자 이상 입력":"비밀번호 8자 이상"
-        return VStack(alignment:.leading,spacing:8){Text(label).font(W.font(13,.medium)).frame(height:18.85,alignment:.leading);HStack{if email{TextField("",text:binding,prompt:Text(verbatim:"runner@example.test").foregroundStyle(W.muted)).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else if revealed{TextField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else{SecureField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textContentType(nil).accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}};if !email && ui.screen != "A01"{Button{if revealed{ui.revealedFields.remove(label)}else{ui.revealedFields.insert(label)}}label:{WEyeIcon(revealed:revealed).stroke(W.muted,style:StrokeStyle(lineWidth:1.125,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:30,height:44)}.accessibilityLabel(label+(revealed ? " 숨기기":" 보기")).accessibilityIdentifier("auth-reveal-\(fieldID)")}}.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.authErrorField==label && !ui.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line));if ui.authErrorField==label && !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).fixedSize(horizontal:false,vertical:true)};if email && reviewTools{Text("실제 주소 대신 example.test 예시 주소를 써 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,26)}}
+        let placeholder=ui.screen == "A01" ? "8자 이상 입력":"8~20자, 영문과 숫자"
+        return VStack(alignment:.leading,spacing:8){Text(label).font(W.font(13,.medium)).frame(height:18.85,alignment:.leading);HStack{if email{TextField("",text:binding,prompt:Text(verbatim:"runner@example.test").foregroundStyle(W.muted)).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else if revealed{TextField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else{SecureField("",text:binding,prompt:Text(placeholder).foregroundStyle(W.muted)).textContentType(nil).accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}};if !email && ui.screen != "A01" && !binding.wrappedValue.isEmpty{Button{if revealed{ui.revealedFields.remove(label)}else{ui.revealedFields.insert(label)}}label:{WEyeIcon(revealed:revealed).stroke(W.muted,style:StrokeStyle(lineWidth:1.125,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:30,height:44)}.accessibilityLabel(label+(revealed ? " 숨기기":" 보기")).accessibilityIdentifier("auth-reveal-\(fieldID)")}}.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.authErrorField==label && !ui.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line));if ui.authErrorField==label && !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).fixedSize(horizontal:false,vertical:true)};if email && reviewTools{Text("실제 주소 대신 example.test 예시 주소를 써 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,26)}}
     }
     func providerMark(_ name:String)->some View {Group{if name=="이메일"{BrandMark(size:28).frame(width:48,height:48).background(W.soft,in:Circle())}else if !name.isEmpty{Image("Provider-"+["카카오":"kakao","네이버":"naver","Google":"google","Apple":"apple"][name,default:"google"]).resizable().scaledToFit().frame(width:48,height:48).clipShape(Circle())}}}
     var consents:some View {WPage(title:"시작하기",back:back){WText(text:"01 / 02",small:true).offset(y:6);WHeading(text:"먼저 확인해 주세요");WText(text:"필수 항목을 확인하고 동의해 주세요.\n실제 법적 동의가 아닌 화면 검토입니다.");consentRow("terms","이용약관 동의 (필수)",value:$ui.consentTerms);consentRow("privacy","개인정보 수집·이용 동의 (필수)",value:$ui.consentPrivacy).padding(.top,-18);WText(text:"아래 버튼은 위의 필수 항목 2개에만 적용돼요.",small:true);if !ui.error.isEmpty{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).accessibilityIdentifier("consentError")};WAuthNotice(text:"운동 기록은 이 기기에 저장돼요. 앱 삭제나 기기 분실 시 복구가 어려울 수 있어요. 클라우드 백업은 별도 검토 중이에요.")}actions:{Button(ui.consentTerms == ui.consentPrivacy ? "모두 동의하고 계속":"동의하고 계속"){acceptConsents()}.buttonStyle(WButtonStyle()).disabled(ui.consentBusy).accessibilityIdentifier("consentContinue")}}
@@ -125,37 +157,44 @@ extension WireframeRoot {
         .overlay(alignment:.bottom){W.line.frame(height:1)}
     }
     var verification:some View {WSecondTicker{now in
-        let elapsed=ui.challengeIssued.map{now.timeIntervalSince($0)} ?? 0
         let missing=ui.challengeIssued==nil
-        let expired=elapsed>=300
-        let locked=ui.screen=="A22"
-        let disabled=missing || expired || locked
+        let lifetime=WEmailChallengePolicy.secondsRemaining(since:ui.challengeIssued,now:now,duration:WEmailChallengePolicy.lifetime)
+        let resend=WEmailChallengePolicy.secondsRemaining(since:ui.challengeIssued,now:now,duration:WEmailChallengePolicy.resendDelay)
+        let expired=lifetime==0
+        let locked=ui.screen=="A22" || ui.codeAttempts>=WEmailChallengePolicy.maximumAttempts
+        let disabled=missing || expired || locked || ui.otpVerifying || ui.otpSuccess
         WPage(title:"이메일 인증",back:{go("A07")}){
             WHeading(text:"이메일을 확인해요")
             WText(text:ui.authEmail.isEmpty ? "이메일":ui.authEmail)
-            if reviewTools{VStack(alignment:.leading,spacing:3){Text("DEMO · 실제 메일은 발송되지 않아요").font(W.font(13));if !missing{(Text("화면 검토용 공개 예시 코드 ").font(W.font(13))+Text(ui.challengeCode).font(W.font(19,.semibold)).tracking(2)).accessibilityIdentifier("publicDemoEmailCode")}}.lineSpacing(6).frame(maxWidth:.infinity,minHeight:missing ? 22:47,alignment:.leading).padding(.vertical,15).padding(.horizontal,16).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line))}
             if ui.screen=="A23"{Text("새 코드를 준비했어요. 이전 코드는 사용할 수 없어요.").font(W.font(13)).lineSpacing(6).fixedSize(horizontal:false,vertical:true)}
             VStack(alignment:.leading,spacing:0){
                 Text("인증 코드 6자리").font(W.font(13,.medium)).padding(.bottom,10)
                 ZStack{
-                    HStack(spacing:8){ForEach(0..<6){i in Text(ui.code.count>i ? String(Array(ui.code)[i]):" ").font(W.font(24,.medium)).frame(maxWidth:.infinity,minHeight:56).background(W.soft,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(!ui.error.isEmpty && !missing ? Color(red:1,green:90/255,blue:95/255):otpInputFocused && i==min(5,ui.code.count) && !disabled ? W.lime:Color.clear)).animation(reduceMotion ? nil:.easeOut(duration:0.16),value:otpInputFocused)}}
-                    TextField("",text:$ui.code).keyboardType(.numberPad).textContentType(.oneTimeCode).foregroundStyle(.clear).tint(.clear).focused($otpInputFocused).accessibilityLabel("인증 코드 6자리").accessibilityIdentifier("emailOtpInput").disabled(disabled).onChange(of:ui.code){_,v in ui.code=String(v.filter{("0"..."9").contains($0)}.prefix(6));if ui.code.count==6{otpInputFocused=false}}
+                    HStack(spacing:8){ForEach(0..<6){i in Text(ui.code.count>i ? String(Array(ui.code)[i]):" ").font(W.font(24,.medium)).frame(maxWidth:.infinity,minHeight:56).background(W.soft,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(!ui.error.isEmpty && !missing ? Color(red:1,green:90/255,blue:95/255):otpInputFocused && i==min(5,ui.code.count) && !disabled ? W.lime:Color.clear)).animation(reduceMotion ? nil:.easeOut(duration:0.16),value:otpInputFocused).accessibilityIdentifier("otpDigit-\(i)")}}
+                    TextField("",text:$ui.code).keyboardType(.numberPad).textContentType(.oneTimeCode).foregroundStyle(.clear).tint(.clear).focused($otpInputFocused).accessibilityLabel("인증 코드 6자리").accessibilityIdentifier("emailOtpInput").disabled(missing || expired || locked || ui.otpVerifying || ui.otpSuccess).onChange(of:ui.code){_,v in
+                        let digits=WEmailChallengePolicy.digits(v)
+                        if digits != v{ui.code=digits}
+                        if digits.count<6{ui.lastAttemptedOTP=nil;ui.error=""}
+                        if digits.count==6 && !ui.otpVerifying && !ui.otpSuccess{otpInputFocused=false;verifyEmailCode()}
+                    }
                 }.padding(.bottom,12)
                 Text("인증 코드 6자리를 입력해 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,5)
-                Text(missing ? "회원가입 정보 입력부터 다시 시작해 주세요.":expired ? "코드가 만료됐어요. 새 코드를 요청해 주세요.":locked ? "현재 코드는 잠겼어요. 새 코드를 요청해 주세요.":"코드 유효 시간 \(max(0,300-Int(elapsed))/60):\(String(format:"%02d",max(0,300-Int(elapsed))%60))").font(W.font(11)).foregroundStyle(W.muted)
-                if !ui.error.isEmpty && !missing{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).padding(.top,5)}
+                Group{
+                    if ui.otpSuccess{HStack(spacing:7){WCheck().stroke(W.lime,style:StrokeStyle(lineWidth:2,lineCap:.round,lineJoin:.round)).frame(width:15,height:15);Text("이메일 확인 완료").font(W.font(11,.medium))}.accessibilityIdentifier("emailOtpSuccessFeedback")}
+                    else{Text(missing ? "회원가입 정보 입력부터 다시 시작해 주세요.":expired ? "코드가 만료됐어요. 새 코드를 요청해 주세요.":locked ? "현재 코드는 잠겼어요. 새 코드를 요청해 주세요.":"코드 유효 시간 \(max(0,lifetime ?? 0)/60):\(String(format:"%02d",max(0,lifetime ?? 0)%60))").font(W.font(11)).foregroundStyle(W.muted)}
+                }.frame(minHeight:20,alignment:.leading)
+                if !ui.error.isEmpty && !missing{Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).padding(.top,5).accessibilityIdentifier("emailOtpError")}
                 if reviewTools{Button{ui.code=ui.challengeCode}label:{Text("예시 코드 입력").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).disabled(disabled).accessibilityIdentifier("fillDemoEmailCode")}
-                Button("인증하고 계속"){
-                    guard WireState.otpScreens.contains(ui.screen), !disabled else{return}
-                    if ui.code==ui.challengeCode{ui.verified=true;ui.consentTerms=false;ui.consentPrivacy=false;go("A02");ui.otpSuccess=true;Task{@MainActor in try? await Task.sleep(for:.milliseconds(1100));ui.otpSuccess=false}}
-                    else{ui.codeAttempts+=1;ui.screen=ui.codeAttempts>=5 ? "A22":"A20";ui.error=ui.codeAttempts>=5 ? "잘못된 입력이 5회 쌓여 현재 코드가 잠겼어요. 새 코드를 요청해 주세요.":"코드가 일치하지 않아요. \(5-ui.codeAttempts)번 더 시도할 수 있어요."}
-                }.buttonStyle(WButtonStyle()).padding(.top,9).disabled(ui.code.count != 6 || disabled).accessibilityIdentifier("verifyEmailCode")
-                Button(!missing && elapsed<30 ? "새 인증 코드 요청 · \(max(0,30-Int(elapsed)))초 후":"새 인증 코드 요청"){
-                    ui.code="";ui.codeAttempts=0;ui.challengeCode=ui.challengeCode=="482619" ? "731204":"482619";ui.challengeIssued=Date();go("A23")
-                }.buttonStyle(.plain).font(W.font(12)).foregroundStyle(missing || elapsed<30 ? W.muted:W.ink).frame(minHeight:44).disabled(missing || elapsed<30).accessibilityIdentifier("requestNewEmailCode")
-                Text("유효 시간 5분 · 재요청 간격 30초\n코드마다 최대 5회 입력할 수 있어요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,14)
+                Button("인증하기"){verifyEmailCode()}.buttonStyle(WButtonStyle()).padding(.top,9).disabled(ui.code.count != 6 || disabled || ui.lastAttemptedOTP==ui.code).accessibilityIdentifier("verifyEmailCode")
+                Button(resend.map{$0>0 ? "새 인증 코드 요청 · \($0)초 후":"새 인증 코드 요청"} ?? "새 인증 코드 요청"){requestEmailCodeAgain(now:now)}.buttonStyle(.plain).font(W.font(12)).foregroundStyle(missing || (resend ?? 0)>0 ? W.muted:Color.wire(0xA92D32,0xFF9CA3)).frame(minHeight:44).disabled(missing || (resend ?? 0)>0 || ui.otpVerifying || ui.otpSuccess).accessibilityIdentifier("requestNewEmailCode")
+                Text("유효 시간 5분 · 재요청 간격 60초\n코드마다 최대 5회 입력할 수 있어요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,14)
             }
-        }actions:{button("이메일 다시 입력","A07",kind:1);Button("가입 취소"){ui.code="";ui.verified=false;ui.challengeIssued=nil;go("A01")}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}
+        }actions:{Button("이메일 다시 입력"){go("A07")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("emailReentry")}
+        .overlay(alignment:.bottom){if ui.otpSuccess{WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).padding(.bottom,112).allowsHitTesting(false)}}
+        .onChange(of:now){_,tick in
+            guard WireState.otpScreens.contains(ui.screen),ui.screen != "A21",ui.screen != "A22",let issued=ui.challengeIssued,tick.timeIntervalSince(issued)>=WEmailChallengePolicy.lifetime else{return}
+            go("A21")
+        }
     }}
     var providers:some View {WPage(title:"로그인 수단",back:back){Text("하나의 계정에 연결해요").font(W.font(22,.semibold));WText(text:"이름이나 이메일만으로\n계정을 합치지 않아요.");VStack(spacing:0){ForEach(["이메일","카카오","네이버","Google","Apple"],id:\.self){p in Button{ui.provider=p;if p=="이메일"{ui.pending=ui.profile.providers.contains(p) ? "A17":"A16";ui.pendingBack="T05";go("T15")}else if ui.profile.providers.contains(p){go(ui.profile.providers.count>1 ? "T08":"T09")}else{ui.pending="T06";ui.pendingBack="T05";go("T15")}}label:{HStack(spacing:14){providerMark(p);VStack(alignment:.leading,spacing:6){Text(p=="이메일" ? "이메일 · 비밀번호":p).font(W.font(14,.medium));WText(text:ui.profile.providers.contains(p) ? "이 계정에 연결됨":"연결되지 않음",small:true)};Spacer();Text(ui.profile.providers.contains(p) ? (p=="이메일" ? "관리":"해제"):"연결").font(W.font(12))}.frame(minHeight:85).overlay(alignment:.bottom){W.line.frame(height:1)}}}};WAuthNotice(text:"현재 계정을 확인한 뒤 새 로그인 수단을 연결해요.",sourceWrapping:true)}actions:{}}
     var deleteAccount:some View {WPage(title:"회원 탈퇴",back:back){WHeading(text:"계정을 삭제하기 전\n확인해 주세요").padding(.top,9);WText(text:"계정과 연결된 로그인 수단을 삭제하는 흐름이에요. 기기 기록 삭제와 범위가 달라요.");Text("실제 삭제 범위·법정 보존·처리 시간은 출시 정책에서 확정해야 해요. 이 데모는 실제 회원·기록을 삭제하지 않아요.").font(W.font(13)).kerning(-0.195).lineSpacing(6).fixedSize(horizontal:false,vertical:true).offset(y:-1).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4).accessibilityIdentifier("accountDeletionImpactNotice");Button{ui.deleteConsent.toggle()}label:{HStack(alignment:.top){WCheck().stroke(ui.deleteConsent ? W.lime:W.muted,style:StrokeStyle(lineWidth:2.1,lineCap:.round,lineJoin:.round)).frame(width:21,height:21).padding(.trailing,4).padding(.top,2);VStack(alignment:.leading,spacing:4){Text("삭제 흐름의 영향 설명을 확인했어요").font(W.font(14)).kerning(-0.21);Text("실제 삭제가 아닌 시뮬레이션이에요").font(W.font(12)).foregroundStyle(W.muted)}.lineSpacing(5).multilineTextAlignment(.leading)}.frame(minHeight:80,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.bottom){W.line.frame(height:1)}}.buttonStyle(.plain).accessibilityIdentifier("accountDeletionImpactAcknowledgement").accessibilityAddTraits(ui.deleteConsent ? .isSelected:[])}actions:{Button(reviewTools ? "삭제 흐름 확인 · 시뮬레이션":"탈퇴하기"){if reviewTools{go("T16")}else{infoAction("delete-account-demo")}}.buttonStyle(WButtonStyle(kind:2)).disabled(!ui.deleteConsent).accessibilityIdentifier("confirmAccountDeletion");button("계정 유지","T01",kind:1)}}
@@ -167,7 +206,28 @@ enum WAuthValidation {
         let value=value.trimmingCharacters(in:.whitespacesAndNewlines)
         return value.count<=254 && value.range(of:#"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@example\.test$"#,options:[.regularExpression,.caseInsensitive]) != nil
     }
-    static func password(_ value:String)->Bool {(8...128).contains(value.count)}
+    static func password(_ value:String)->Bool {
+        let scalars=Array(value.unicodeScalars)
+        guard (8...20).contains(scalars.count),scalars.allSatisfy({(0x21...0x7E).contains($0.value)}) else{return false}
+        let hasLetter=scalars.contains{(0x41...0x5A).contains($0.value)||(0x61...0x7A).contains($0.value)}
+        let hasDigit=scalars.contains{(0x30...0x39).contains($0.value)}
+        return hasLetter && hasDigit
+    }
+}
+enum WEmailChallengePolicy {
+    static let lifetime:TimeInterval=300
+    static let resendDelay:TimeInterval=60
+    static let maximumAttempts=5
+    static func digits(_ value:String)->String{String(String.UnicodeScalarView(value.unicodeScalars.filter{(0x30...0x39).contains($0.value)}.prefix(6)))}
+    static func secondsRemaining(since issued:Date?,now:Date,duration:TimeInterval)->Int? {
+        guard let issued else{return nil}
+        return max(0,Int(ceil(duration-now.timeIntervalSince(issued))))
+    }
+    static func challengeStatus(issued:Date?,now:Date,attempts:Int)->String {
+        guard let remaining=secondsRemaining(since:issued,now:now,duration:lifetime) else{return "missing"}
+        if attempts>=maximumAttempts{return "locked"}
+        return remaining==0 ? "expired":"pending"
+    }
 }
 struct WAuthNotice:View {
     let text:String;var danger=false;var sourceWrapping=false
