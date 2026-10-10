@@ -489,6 +489,8 @@ struct WireframeRoot:View {
     @State var communityCrewManageExitDestination:String?
     @State var showingCrewBoardArchiveConfirmation=false
     @State var communityCrewPendingArchiveBoardID:String?
+    @State var showingCommunityCrewApplicationCancelConfirmation=false
+    @State var communityCrewPendingCancellationApplicationID:String?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @State var splash=true
@@ -761,6 +763,8 @@ struct WireframeRoot:View {
         case "C08":communityRunnerProfile
         case "C30":communityConnections
         case "C31":communityPhotoViewer
+        case "C32":communityCrewInformation
+        case "C33":communityCrewApplicationList
         case "C23":communityReport
         case "C25":communityReportReceipt
         case "C28":communitySettings

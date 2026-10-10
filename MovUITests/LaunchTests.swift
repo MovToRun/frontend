@@ -561,6 +561,66 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5),"Back preserves navigation and does not submit a request")
     }
 
+    func testCommunityCrewInformationUsesCurrentLocalPolicyAndRoutesFromDetailAndBoard() {
+        launchCommunity("C01")
+        app.buttons["communityOpenCrews"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        app.buttons["communityCrewOpen-dawn"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewInformation"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewInfoName"].label,"모브 새벽 크루")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoRegion"].label.contains("모브시 중앙"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoLevel"].label.contains("운영 기준 미정"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoMembers"].label.contains("1/20명"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoOwner"].label.contains("크루장"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoBoards"].label.contains("4/5개"))
+        XCTAssertTrue(app.staticTexts["communityCrewInfoGuidance"].label.contains("처음 오신 분도 편하게 인사해 주세요."))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        app.buttons["communityCrewInformationFromBoard"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewInfoName"].label,"모브 새벽 크루")
+    }
+
+    func testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation() {
+        launchCommunity("C16")
+        app.buttons["communityCrewJoin"].tap()
+        let memo=app.textViews["communityCrewJoinMemo"]
+        XCTAssertTrue(memo.waitForExistence(timeout:5))
+        memo.tap();memo.typeText("주말에 함께 달리고 싶어요.")
+        app.buttons["communityCrewSubmitApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        app.buttons["communityCrewReturnToFeed"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        app.buttons["communityOpenCrews"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons["communityCrewPending"].label,"신청중 1")
+        app.buttons["communityCrewPending"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C33"].waitForExistence(timeout:5))
+        let openRequest=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityCrewApplicationOpen-")).firstMatch
+        XCTAssertTrue(openRequest.waitForExistence(timeout:5))
+        openRequest.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewApplicationName"].label,"모브 강변 크루")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C33"].waitForExistence(timeout:5))
+        let cancelRequest=app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityCrewApplicationCancel-")).firstMatch
+        XCTAssertTrue(cancelRequest.waitForExistence(timeout:5))
+        cancelRequest.tap()
+        XCTAssertTrue(app.alerts["가입 신청을 취소할까요?"].waitForExistence(timeout:3))
+        app.alerts.buttons["유지"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityCrewApplicationCancel-")).firstMatch.exists,"Dismissing confirmation keeps the pending application")
+        app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityCrewApplicationCancel-")).firstMatch.tap()
+        app.alerts.buttons.matching(identifier:"communityCrewApplicationCancelConfirm").firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationsEmpty"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons["communityCrewPending"].label,"신청중 0")
+    }
+
     func testCommunityCrewMemberBoardShowsOnlyLocalExamplePosts() {
         launchCommunity("C01")
         app.buttons["communityOpenCrews"].tap()
