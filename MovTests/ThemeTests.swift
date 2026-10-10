@@ -18,6 +18,48 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityCourseRequiresValidLocalRecordsAndClampsExamplePlayback() {
+        let date=Date()
+        let valid=RunRecord(date:date,title:"유효 예시",seconds:600,kilometers:2,isExample:true)
+        let zeroDistance=RunRecord(date:date,title:"거리 없음",seconds:600,kilometers:0,isExample:true)
+        let zeroTime=RunRecord(date:date,title:"시간 없음",seconds:0,kilometers:2,isExample:true)
+        XCTAssertEqual(WCommunityCoursePolicy.eligibleRecords([valid,zeroDistance,zeroTime]).map(\.id),[valid.id])
+        XCTAssertEqual(WCommunityCoursePolicy.pace(distance:2,seconds:600),"05:00 /km")
+        XCTAssertEqual(WCommunityCoursePolicy.pace(distance:0,seconds:600),"0:00 /km")
+        XCTAssertEqual(WCommunityCoursePolicy.playbackStep(0,duration:180).time,60)
+        let end=WCommunityCoursePolicy.playbackStep(150,duration:180)
+        XCTAssertEqual(end.time,180);XCTAssertTrue(end.finished)
+    }
+
+    func testCommunityCoursePostsKeepTheirOwnAuthorAndRecordSnapshots() {
+        let first=RunRecord(date:Date(timeIntervalSince1970:100),title:"강변 기록",seconds:1808,kilometers:4.82,isExample:true)
+        let second=RunRecord(date:Date(timeIntervalSince1970:200),title:"공원 기록",seconds:900,kilometers:3.4,isExample:true)
+        let firstCourse=WCommunityCoursePolicy.makeCourse(id:"course-1",authorMemberID:"runner-a",authorName:"러너 A",authorRank:"열정러너",title:"강변 코스",introduction:"강변",hideEnds:true,record:first)
+        let secondCourse=WCommunityCoursePolicy.makeCourse(id:"course-2",authorMemberID:"runner-b",authorName:"러너 B",authorRank:"새싹러너",title:"공원 코스",introduction:"공원",hideEnds:false,record:second)
+        let firstPost=WCommunityPost(id:"post-1",authorMemberID:firstCourse.authorMemberID,author:firstCourse.authorName,rank:firstCourse.authorRank,board:"러닝 인증",title:firstCourse.title,text:firstCourse.introduction,date:"now",likes:0,views:0,comments:[],course:firstCourse)
+        let secondPost=WCommunityPost(id:"post-2",authorMemberID:secondCourse.authorMemberID,author:secondCourse.authorName,rank:secondCourse.authorRank,board:"러닝 인증",title:secondCourse.title,text:secondCourse.introduction,date:"now",likes:0,views:0,comments:[],course:secondCourse)
+        XCTAssertEqual(firstPost.course?.id,"course-1");XCTAssertEqual(firstPost.author,"러너 A")
+        XCTAssertEqual(firstPost.course?.record.title,"강변 기록");XCTAssertEqual(firstPost.course?.record.distance,4.82);XCTAssertEqual(firstPost.course?.record.seconds,1808)
+        XCTAssertEqual(secondPost.course?.id,"course-2");XCTAssertEqual(secondPost.author,"러너 B")
+        XCTAssertEqual(secondPost.course?.record.title,"공원 기록");XCTAssertEqual(secondPost.course?.record.distance,3.4);XCTAssertEqual(secondPost.course?.record.seconds,900)
+        XCTAssertNotEqual(firstPost.course,secondPost.course,"Each post carries its own course snapshot")
+    }
+
+    func testCommunityCoursePublicationRechecksIdentityAndCurrentRecord() {
+        let valid=RunRecord(date:Date(),title:"유효",seconds:500,kilometers:2)
+        let invalid=RunRecord(date:Date(),title:"무효",seconds:0,kilometers:2)
+        XCTAssertTrue(isUnauthenticated(WCommunityCoursePolicy.publicationResult(accountVerified:false,draftOwnerID:"me",viewerID:"me",selectedRecordID:valid.id.uuidString,records:[valid])))
+        XCTAssertTrue(isOwnerChanged(WCommunityCoursePolicy.publicationResult(accountVerified:true,draftOwnerID:"old",viewerID:"me",selectedRecordID:valid.id.uuidString,records:[valid])))
+        XCTAssertTrue(isMissingRecord(WCommunityCoursePolicy.publicationResult(accountVerified:true,draftOwnerID:"me",viewerID:"me",selectedRecordID:UUID().uuidString,records:[valid])))
+        XCTAssertTrue(isInvalidRecord(WCommunityCoursePolicy.publicationResult(accountVerified:true,draftOwnerID:"me",viewerID:"me",selectedRecordID:invalid.id.uuidString,records:[invalid])))
+        guard case .eligible(let selected)=WCommunityCoursePolicy.publicationResult(accountVerified:true,draftOwnerID:"me",viewerID:"me",selectedRecordID:valid.id.uuidString,records:[valid]) else{return XCTFail("Current verified owner can publish an existing valid local record")}
+        XCTAssertEqual(selected.id,valid.id)
+    }
+    private func isUnauthenticated(_ result:WCommunityCoursePublicationResult)->Bool{if case .unauthenticated=result{return true};return false}
+    private func isOwnerChanged(_ result:WCommunityCoursePublicationResult)->Bool{if case .ownerChanged=result{return true};return false}
+    private func isMissingRecord(_ result:WCommunityCoursePublicationResult)->Bool{if case .missingRecord=result{return true};return false}
+    private func isInvalidRecord(_ result:WCommunityCoursePublicationResult)->Bool{if case .invalidRecord=result{return true};return false}
+
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
         var state=WCommunityVerificationState()
         XCTAssertEqual(state.submit(" \n "),.invalidActivity)

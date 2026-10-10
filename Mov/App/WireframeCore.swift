@@ -311,6 +311,18 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityVerification=WCommunityVerificationState()
     var communityVerificationError=""
     var communityAccountVerified:Bool{communityVerification.isVerified}
+    var communityCourseTitle="강변 아침 코스"
+    var communityCourseIntroduction="강변을 따라 편하게 달리는 예시 코스예요."
+    var communityCourseDistance=4.82
+    var communityCourseSeconds=1808.0
+    var communityCourseHideEnds=true
+    var communityCourseRecordID=""
+    var communityCourseDraftOwnerID=""
+    var communitySelectedCourse:WCommunityCourse?
+    var communityCourseDraft=false
+    var communityCoursePlayback=0.0
+    var communityCoursePlaying=false
+    var communityCourseError=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -484,6 +496,7 @@ struct WireframeRoot:View {
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
+                    if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot)}
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
@@ -540,6 +553,8 @@ struct WireframeRoot:View {
         if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)}
         if id=="T02"{ui.weight=ui.profile.weight}
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
+        if id=="C12",ui.communitySelectedCourse==nil{ui.communitySelectedCourse=WCommunityCourseFixtures.sample}
+        if id=="C13"{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID}
     }
     var nav:some View {
         HStack(spacing:0){
@@ -622,6 +637,9 @@ struct WireframeRoot:View {
         case "C06":communityLikedPosts
         case "C10":communityVerificationForm
         case "C11":communityVerificationStatus
+        case "C12":communityCourseDetail
+        case "C13":communityCourseCompose
+        case "C14":communityGhostRun
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections

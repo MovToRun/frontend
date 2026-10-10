@@ -25,17 +25,17 @@
 | 남음 | 기록·공유 `L02–L03`, `L06–L07`, `Q01–Q03` | L05는 정적 source/app 대조 완료. 다른 상태의 원본/SwiftUI 정밀 픽셀·모션 대조는 미완료 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
-| 일부 완료 | 커뮤니티 `C01–C43` | `C01–C09`, `C23`, `C25`, `C27–C28`, `C30–C31`, `C42–C43` 로컬 흐름 구현; 다른 화면과 전체 source/app 픽셀·모션 대조는 남음 |
+| 일부 완료 | 커뮤니티 `C01–C43` | `C01–C14`, `C23`, `C25`, `C27–C28`, `C30–C31`, `C42–C43` 로컬 흐름 구현; 다른 화면과 전체 source/app 픽셀·모션 대조는 남음 |
 
 전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. PR20에서 A02/A03/A15의 내용·구조 대조는 완료했지만, 이들을 포함한 종합 픽셀·모션 QA는 남아 있습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C10–C22`, `C24`, `C26`, `C29`, `C32–C41` 중 미구현 화면입니다. `C28`의 인증 신청 메뉴는 아직 placeholder인 `C10`으로 이동합니다. C06 좋아요 목록, C28 설정 진입, C42 차단 해제, C43 최근 활동은 로컬 fixture로 구현했습니다. 커뮤니티는 백엔드 연결 없이 동작합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C15–C22`, `C24`, `C26`, `C29`, `C32–C41` 중 미구현 화면입니다. C06 좋아요 목록, C28 설정 진입, C42 차단 해제, C43 최근 활동 및 C10–C14 인증·코스 로컬 흐름을 구현했습니다. 커뮤니티는 백엔드 연결 없이 동작합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 C01 feed, C04 post, C06 liked posts, C28 settings, C42 blocked list, C43 activity history와 PR28 moderation flows는 `WireframeHome.swift`의 로컬 fixture/provider로 동작합니다. C10 인증 신청 목적지를 포함한 나머지 검색·프로필·크루 흐름은 후속 범위입니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 C01 feed, C04 post, C06 liked posts, C10–C14 인증·공유 코스 흐름, C28 settings, C42 blocked list, C43 activity history와 PR28 moderation flows는 `WireframeHome.swift`의 로컬 fixture/state로 동작합니다. 나머지 검색·크루 흐름은 후속 범위입니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -220,11 +220,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C07` | 러닝 카드 | `communityCardPreview` — 방문/닫기, 사진 확대 |
 | [x] | `C08` | 러너 프로필 (범위 구현) | 기본 프로필에 더보기 신고/차단 메뉴 연결; 차단은 로컬 콘텐츠를 숨김 |
 | [x] | `C09` | 게시 미리보기 | `communityPreview` — 세션 안 로컬 게시 예시 |
-| [ ] | `C10` | 계정 인증 신청 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C11` | 인증 신청 상태 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C12` | 공유 코스 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C13` | 코스 공유 작성 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C14` | 따라달리기 미리보기 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C10` | 계정 인증 신청 | `communityVerificationForm` — 로컬 신청·중복/길이 검증; PR30 |
+| [x] | `C11` | 인증 신청 상태 | `communityVerificationStatus` — 로컬 대기·승인·반려, review tool 전용 결과 예시; PR30 |
+| [x] | `C12` | 공유 코스 | `communityCourseDetail` — 코스 요약·작성자·경로·따라달리기 |
+| [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — 승인 로컬 계정·유효 기기 기록 선택·끝 위치 숨김·게시 미리보기 |
+| [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 60배속 로컬 시간축, 재생/정지/처음부터/끝 위치 설정 |
 | [ ] | `C15` | 크루 탐색 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C16` | 크루 소개 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C17` | 크루 가입 신청 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
