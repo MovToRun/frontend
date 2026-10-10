@@ -32,7 +32,7 @@ extension WireframeRoot {
     }
     var reviewInfo:WInfo {
         switch ui.screen {
-        case "A04":return .init(title:"로그인",heading:"로그인을 마치지\n못했어요",text:"인증이 취소됐거나 연결이 끊겼어요.\n아직 새 계정을 만들지 않았어요.",notice:"같은 로그인 수단으로 다시 시도하거나 다른 수단을 선택할 수 있어요.",buttons:[("다시 시도","A01",0)])
+        case "A04":return .init(title:WLoginFailureCopy.title,heading:WLoginFailureCopy.heading,text:WLoginFailureCopy.body,notice:WLoginFailureCopy.notice,buttons:[("다시 시도","A01",0)])
         case "A06":return .init(title:"동의 내용 검토",heading:ui.consentTopic,text:"이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.",notice:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.",buttons:[("확인했어요","consent-reviewed",0)])
         case "A11":return .init(title:"재설정 요청",heading:"요청 확인 화면이에요",text:"메일은 발송되지 않았어요.\n계정이 있는지도 확인하지 않았어요.",notice:"아래 버튼으로 새 비밀번호 UI 데모를 확인할 수 있어요. 실제 인증 링크나 토큰은 없어요.",buttons:[("새 비밀번호 UI 데모","A12",0),("예시 이메일 다시 입력","A10",1),("취소하고 돌아가기","reset-cancel",3)])
         case "A13":return .init(title:"재설정 완료",heading:"완료 화면까지 확인했어요",text:"이 흐름은 UI 데모예요.\n실제 비밀번호는 바뀌지 않았어요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])

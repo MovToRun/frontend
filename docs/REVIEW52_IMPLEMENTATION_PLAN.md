@@ -59,7 +59,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `A01` | 로그인 | `authForm` — WireframeAuth.swift |
 | [ ] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift |
 | [ ] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift |
-| [ ] | `A04` | 로그인 실패 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `A04` | 로그인 실패 | `loginFailure` — WireframeAuth.swift; 취소·연결 끊김 문구 및 A01 재시도 로컬 흐름 |
 | [ ] | `A06` | 약관·개인정보 검토 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `A07` | 이메일 회원가입 | `authForm` — WireframeAuth.swift |
 | [ ] | `A10` | 비밀번호 재설정 요청 | `authForm` — WireframeAuth.swift |
