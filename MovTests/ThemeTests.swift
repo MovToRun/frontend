@@ -69,6 +69,31 @@ final class ThemeTests:XCTestCase {
         XCTAssertNotNil(rendered.cgImage, "The bundled logo asset must draw into a local SwiftUI-sized surface")
     }
 
+    func testNativeLaunchScreenUsesAdaptiveSurfaceAndOriginalBrandMark() throws {
+        let bundle=Bundle(for:WireState.self)
+        let launch=try XCTUnwrap(bundle.infoDictionary?["UILaunchScreen"] as? [String:Any])
+        XCTAssertEqual(launch["UIColorName"] as? String,"LaunchBackground")
+        XCTAssertEqual(launch["UIImageName"] as? String,"LaunchMark")
+
+        let background=try XCTUnwrap(UIColor(named:"LaunchBackground",in:bundle,compatibleWith:nil))
+        let light=background.resolvedColor(with:UITraitCollection(userInterfaceStyle:.light))
+        let dark=background.resolvedColor(with:UITraitCollection(userInterfaceStyle:.dark))
+        var red:CGFloat=0,green:CGFloat=0,blue:CGFloat=0,alpha:CGFloat=0
+        XCTAssertTrue(light.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+        XCTAssertEqual([red,green,blue],[1,1,1])
+        XCTAssertTrue(dark.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+        XCTAssertEqual(red,25.0/255.0,accuracy:0.001)
+        XCTAssertEqual(green,25.0/255.0,accuracy:0.001)
+        XCTAssertEqual(blue,25.0/255.0,accuracy:0.001)
+
+        let mark=try XCTUnwrap(UIImage(named:"LaunchMark",in:bundle,compatibleWith:nil))
+        XCTAssertEqual(mark.scale,3)
+        XCTAssertEqual(mark.size,CGSize(width:84,height:84))
+        let pixels=try XCTUnwrap(mark.cgImage)
+        XCTAssertNotEqual(pixels.alphaInfo,.none)
+        XCTAssertFalse(WLocalProfile().logged,"A clean install starts at sign in; test fixtures opt into a saved login explicitly")
+    }
+
     func testReview52RecordExampleMarkerKeepsLegacyLocalRecordsReadable() throws {
         let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1}"#.utf8)
         let decoded = try JSONDecoder().decode(RunRecord.self, from: legacy)

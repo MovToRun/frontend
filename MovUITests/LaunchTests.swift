@@ -594,6 +594,55 @@ extension LaunchTests {
 
 extension LaunchTests {
     // No -wire-screen: use the same splash, root navigation and auth routing as ordinary launch.
+    func testColdLaunchChoosesSavedAuthStateAndDoesNotReplayOnResume() {
+        let suite="mov.launch.cold.\(UUID().uuidString)"
+        let base=["-wire-fixture","-wire-test-store-suite",suite,"-appearance","light","-wire-splash-test-hold"]
+        app.launchArguments=base
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-E02"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["splashWordmark"].exists)
+        XCTAssertTrue(app.staticTexts["splashTagline"].exists)
+        XCTAssertFalse(app.buttons["시작하기"].exists)
+        let introShot=app.screenshot().image
+        XCTAssertTrue(containsBrandGreen(in:introShot,rect:CGRect(origin:.zero,size:introShot.size)),"The cold E02 frame renders the original lime brand mark")
+        capture("E02-cold-launch")
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:10),"A clean install has no saved login and routes to sign in after E02")
+        XCTAssertTrue(app.textFields["auth-email"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","오늘의 달리기를")).firstMatch.exists)
+        tap("가상 예시값 채우기");tap("authPrimary")
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5))
+        app.terminate()
+        app.launchArguments=base
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:10),"The saved login routes to home after a cold launch")
+
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.descendants(matching:.any)["screen-E02"].exists,"Returning to the suspended app does not replay the intro")
+
+        tap("tab-4");tap("설정");tap("로그아웃");tap("로그아웃")
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:5))
+        app.terminate()
+        app.launchArguments=base
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:10),"A saved signed-out state routes back to sign in")
+        app.terminate()
+    }
+
+    func testE02SmallViewportDarkLightAndReducedMotion() {
+        for theme in ["light","dark"] {
+            app.launchArguments=["-wire-screen","E02","-wire-fixture","-wire-test-store-suite","mov.launch.e02.\(theme).\(UUID().uuidString)","-wire-reset","-wire-compact-review","-wire-reduced","-appearance",theme]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-E02"].waitForExistence(timeout:10),app.debugDescription)
+            XCTAssertTrue(app.staticTexts["splashWordmark"].exists)
+            XCTAssertTrue(app.staticTexts["splashTagline"].exists)
+            XCTAssertFalse(app.buttons["시작하기"].exists)
+            capture("E02-compact-\(theme)-reduced")
+            app.terminate()
+        }
+    }
+
     func testNormalEntryAuthenticationNotificationsAndRunBothThemes() {
         for theme in ["light","dark"] {
             app.launchArguments=["-wire-fixture","-wire-reset","-appearance",theme]
