@@ -165,6 +165,46 @@ enum WCommunityFixtures {
     ]
 }
 
+struct WCommunityActivityVisit:Identifiable,Equatable {
+    let postID:String
+    let viewedAt:Date
+    var id:String{postID}
+}
+
+/// Local-only activity fixture for the signed-in community member.
+/// It mirrors the review wireframe's self-only, 90-day, 100-post history policy.
+struct WLocalCommunityActivityProvider {
+    static let retention:TimeInterval=90*24*60*60
+    static let maximumEntries=100
+    let ownerMemberID:String
+    private(set) var visits:[WCommunityActivityVisit]=[]
+
+    init(ownerMemberID:String="fixture-member-current",visits:[WCommunityActivityVisit]=[]) {
+        self.ownerMemberID=ownerMemberID
+        self.visits=Array(visits.sorted{$0.viewedAt>$1.viewedAt}.prefix(Self.maximumEntries))
+    }
+
+    @discardableResult mutating func recordView(viewerMemberID:String,postID:String,date:Date)->Bool {
+        guard viewerMemberID==ownerMemberID,!postID.isEmpty else{return false}
+        let cutoff=date.addingTimeInterval(-Self.retention)
+        visits=visits.filter{$0.viewedAt>=cutoff}
+        if let current=visits.first(where:{$0.postID==postID}),current.viewedAt>date{return false}
+        visits.removeAll{$0.postID==postID}
+        visits.insert(WCommunityActivityVisit(postID:postID,viewedAt:date),at:0)
+        visits.sort{$0.viewedAt>$1.viewedAt}
+        if visits.count>Self.maximumEntries{visits=Array(visits.prefix(Self.maximumEntries))}
+        return true
+    }
+
+    func recentPostIDs(viewerMemberID:String,asOf date:Date)->[String] {
+        guard viewerMemberID==ownerMemberID else{return []}
+        let cutoff=date.addingTimeInterval(-Self.retention)
+        return visits.filter{$0.viewedAt>=cutoff && $0.viewedAt<=date}
+            .sorted{$0.viewedAt>$1.viewedAt}.prefix(Self.maximumEntries).map(\.postID)
+    }
+
+}
+
 enum WCommunityTextLimit {
     static let title=60
     static let body=2000
@@ -744,6 +784,12 @@ extension WireframeRoot {
 
     func communityAvatar(_ name:String)->some View {Text(String(name.prefix(1))).font(W.font(13,.semibold)).foregroundStyle(W.ink).frame(width:38,height:38).background(W.soft,in:Circle()).accessibilityHidden(true)}
     var communityVisiblePosts:[WCommunityPost]{ui.communityPosts.filter{communityCanSeeMember($0.authorMemberID)}}
+    var communityLikedVisiblePosts:[WCommunityPost]{communityVisiblePosts.filter{ui.communityLikedPosts.contains($0.id)}}
+    var communityRecentVisiblePosts:[WCommunityPost]{
+        let postsByID=Dictionary(ui.communityPosts.map{($0.id,$0)},uniquingKeysWith:{$1})
+        return ui.communityActivityProvider.recentPostIDs(viewerMemberID:ui.communityViewerMemberID,asOf:Date())
+            .compactMap{postsByID[$0]}.filter{communityCanSeeMember($0.authorMemberID)}
+    }
     func communityCanSeeMember(_ memberID:String,viewerID:String?=nil)->Bool {
         !ui.communityModerationProvider.shouldHide(authorID:memberID,viewerID:viewerID ?? ui.communityViewerMemberID,ownerID:ui.communityViewerMemberID)
     }
@@ -757,11 +803,28 @@ extension WireframeRoot {
         return result
     }
     func toggleCommunityLike(_ id:String){guard let post=ui.communityPosts.first(where:{$0.id==id}),communityCanSeeMember(post.authorMemberID) else{return};if ui.communityLikedPosts.contains(id){ui.communityLikedPosts.remove(id)}else{ui.communityLikedPosts.insert(id)}}
+    func communityPersonalPostRow(_ post:WCommunityPost)->some View {
+        VStack(alignment:.leading,spacing:0){
+            HStack(spacing:10){
+                if post.board=="익명게시판" {communityAvatar("익명");VStack(alignment:.leading,spacing:2){Text("익명").font(W.font(13,.medium));Text(post.board).font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.date).font(W.font(10)).foregroundStyle(W.muted)}
+                else {Button{openCommunityCard(for:post.authorMemberID,origin:ui.screen)}label:{HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.medium));Text(post.board).font(W.font(10)).foregroundStyle(W.muted)}}.frame(minHeight:44)}.buttonStyle(.plain).accessibilityIdentifier("communityPersonalPostAuthor-\(post.id)");Spacer(minLength:4);Text(post.date).font(W.font(10)).foregroundStyle(W.muted)}
+            }.frame(minHeight:44)
+            Button{openCommunityPost(post)}label:{VStack(alignment:.leading,spacing:6){Text(post.title).font(W.font(16,.semibold)).foregroundStyle(W.ink).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("communityPersonalPostTitle-\(post.id)");Text(post.text).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4).lineLimit(2).frame(maxWidth:.infinity,alignment:.leading)}.padding(.vertical,12).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityPersonalPostOpen-\(post.id)")
+            if let imageName=post.imageName {Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(maxHeight:190).clipped().clipShape(RoundedRectangle(cornerRadius:12)).padding(.vertical,4).accessibilityLabel("게시물 예시 이미지")}
+            HStack(spacing:18){
+                Button{toggleCommunityLike(post.id)}label:{Label("\(post.likes+(ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(11)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}.accessibilityIdentifier("communityPersonalPostLike-\(post.id)")
+                Button{openCommunityPost(post)}label:{Label("\(communityVisibleComments(post).count)",systemImage:"bubble.right").font(W.font(11)).foregroundStyle(W.muted)}.accessibilityIdentifier("communityPersonalPostComments-\(post.id)")
+                Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted).accessibilityIdentifier("communityPersonalPostViews-\(post.id)")
+                Spacer(minLength:0)
+            }.padding(.top,8).padding(.bottom,12)
+        }.overlay(alignment:.bottom){W.line.frame(height:1)}
+    }
     func beginCommunityCompose(board:String?=nil){ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";go("C05")}
     func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID && communityCanSeeMember($0.authorMemberID)}}
     func openCommunityPost(_ post:WCommunityPost){guard communityCanSeeMember(post.authorMemberID) else{return};ui.communitySelectedPostID=post.id;ui.communityCardOriginAnonymous=post.board=="익명게시판";ui.communityCardOriginScreen="C04";go("C04")}
     func recordCommunityDetailView(_ post:WCommunityPost){
         guard communityCanSeeMember(post.authorMemberID),let index=ui.communityPosts.firstIndex(where:{$0.id==post.id}) else{return}
+        ui.communityActivityProvider.recordView(viewerMemberID:ui.communityViewerMemberID,postID:post.id,date:Date())
         if ui.communityViewCountProvider.recordDetailView(viewerMemberID:ui.communityViewerMemberID,postID:post.id,authorMemberID:post.authorMemberID,date:Date()) {ui.communityPosts[index].views+=1}
     }
     func publishCommunityDraft(){
@@ -991,7 +1054,26 @@ extension WireframeRoot {
 
     var communitySettings:some View {
         WPage(title:"커뮤니티 설정",back:back){
+            WRow(title:"좋아요한 게시글",action:{go("C06")},height:58,arrow:true).accessibilityIdentifier("communityLikedPostsRow")
+            WRow(title:"계정 인증",action:{go("C10")},height:58,arrow:true).accessibilityIdentifier("communityVerificationRow")
             WRow(title:"차단한 사용자",action:{go("C42")},height:58,arrow:true).accessibilityIdentifier("communityBlockedUsersRow")
+            WRow(title:"내 활동 기록",action:{go("C43")},height:58,arrow:true).accessibilityIdentifier("communityActivityRow")
+        }actions:{}
+    }
+
+    var communityLikedPosts:some View {
+        let posts=communityLikedVisiblePosts
+        return WPage(title:"좋아요한 글",back:back){
+            if posts.isEmpty {VStack(alignment:.leading,spacing:8){Text("좋아요한 글이 없어요").font(W.font(15,.medium));Text("마음에 드는 글을 여기에 모아 보세요").font(W.font(13)).foregroundStyle(W.muted)}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,28).accessibilityIdentifier("communityLikedPostsEmpty")}
+            else {ForEach(posts){post in communityPersonalPostRow(post)}}
+        }actions:{}
+    }
+
+    var communityActivity:some View {
+        let posts=communityRecentVisiblePosts
+        return WPage(title:"내 활동 기록",back:back){
+            if posts.isEmpty {Text("아직 본 게시물이 없어요").font(W.font(15,.medium)).foregroundStyle(W.muted).frame(maxWidth:.infinity).padding(.vertical,36).accessibilityIdentifier("communityActivityEmpty")}
+            else {ForEach(posts){post in communityPersonalPostRow(post)}}
         }actions:{}
     }
 

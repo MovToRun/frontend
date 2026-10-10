@@ -131,6 +131,30 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(WCommunityTextLimit.apply(String(repeating:"다",count:301),limit:WCommunityTextLimit.comment).count,300)
     }
 
+    func testCommunityActivityHistoryIsPrivateRecentDeduplicatedAndBounded() {
+        let owner="member-owner",other="member-other"
+        let now=ISO8601DateFormatter().date(from:"2026-10-10T00:00:00Z")!
+        var provider=WLocalCommunityActivityProvider(ownerMemberID:owner)
+        XCTAssertFalse(provider.recordView(viewerMemberID:other,postID:"private-post",date:now))
+        XCTAssertEqual(provider.recentPostIDs(viewerMemberID:other,asOf:now),[])
+        XCTAssertTrue(provider.recordView(viewerMemberID:owner,postID:"old-post",date:now.addingTimeInterval(-91*24*60*60)))
+        XCTAssertTrue(provider.recordView(viewerMemberID:owner,postID:"90-day-boundary",date:now.addingTimeInterval(-WLocalCommunityActivityProvider.retention)))
+        XCTAssertTrue(provider.recordView(viewerMemberID:owner,postID:"first",date:now.addingTimeInterval(-120)))
+        XCTAssertTrue(provider.recordView(viewerMemberID:owner,postID:"second",date:now.addingTimeInterval(-60)))
+        XCTAssertTrue(provider.recordView(viewerMemberID:owner,postID:"first",date:now.addingTimeInterval(-30)))
+        XCTAssertEqual(provider.recentPostIDs(viewerMemberID:owner,asOf:now),["first","second","90-day-boundary"])
+        XCTAssertEqual(provider.visits.filter{$0.postID=="first"}.count,1,"A repeat visit moves the post to the newest position without a duplicate")
+
+        var bounded=WLocalCommunityActivityProvider(ownerMemberID:owner)
+        for index in 0...WLocalCommunityActivityProvider.maximumEntries {
+            XCTAssertTrue(bounded.recordView(viewerMemberID:owner,postID:"post-\(index)",date:now.addingTimeInterval(TimeInterval(index))))
+        }
+        let ids=bounded.recentPostIDs(viewerMemberID:owner,asOf:now.addingTimeInterval(TimeInterval(WLocalCommunityActivityProvider.maximumEntries)))
+        XCTAssertEqual(ids.count,WLocalCommunityActivityProvider.maximumEntries)
+        XCTAssertEqual(ids.first,"post-100")
+        XCTAssertFalse(ids.contains("post-0"))
+    }
+
     func testReview54HomeArcUsesSourceSweepAndClampsProgress() {
         XCTAssertEqual(WReview54HomeArc.viewBoxWidth,240)
         XCTAssertEqual(WReview54HomeArc.viewBoxHeight,190)

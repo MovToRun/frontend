@@ -267,6 +267,7 @@ enum WRootTab: Int, CaseIterable {
     var communityProfileEditing=false
     var communityConnectionsKind="followers"
     var communityFollowProvider=WLocalCommunityFollowProvider()
+    var communityActivityProvider=WLocalCommunityActivityProvider()
     var communityModerationProvider=WLocalCommunityModerationProvider()
     var communityReportTarget:WCommunityReportTarget?
     var communityReportReason="욕설·괴롭힘"
@@ -580,6 +581,7 @@ struct WireframeRoot:View {
         case "A19","A20","A21","A22","A23":verification
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
+        case "C06":communityLikedPosts
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
@@ -588,6 +590,7 @@ struct WireframeRoot:View {
         case "C25":communityReportReceipt
         case "C28":communitySettings
         case "C42":communityBlockedUsers
+        case "C43":communityActivity
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards

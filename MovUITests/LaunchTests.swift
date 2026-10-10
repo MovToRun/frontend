@@ -575,6 +575,70 @@ import UIKit
         XCTAssertTrue(detailCount.label.contains("139"),"Repeat detail entry by the same member on the same KST date counts once: \(detailCount.label)")
     }
 
+    func testCommunitySettingsLikedPostsRespectLikesAndBlockedMembers() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityDetailLike"].tap()
+        app.buttons["뒤로"].tap()
+        app.buttons["communityHot-p2"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityDetailLike"].tap()
+        app.buttons["뒤로"].tap()
+        app.buttons["communitySettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityVerificationRow"].exists,"Settings keeps the existing account verification entry")
+        app.buttons["communityLikedPostsRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityPersonalPostOpen-p1"].exists)
+        XCTAssertTrue(app.buttons["communityPersonalPostOpen-p2"].exists)
+        XCTAssertFalse(app.buttons["communityPersonalPostOpen-p3"].exists)
+
+        app.buttons["communityPersonalPostOpen-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuBlockPost"].tap()
+        app.buttons["communityModerationConfirm"].tap()
+        app.buttons["communitySettings"].tap()
+        app.buttons["communityLikedPostsRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from liked posts")
+        XCTAssertTrue(app.buttons["communityPersonalPostOpen-p2"].exists)
+    }
+
+    func testCommunityRecentActivityDeduplicatesOrdersAndHidesBlockedPosts() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        app.buttons["communityHot-p2"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        app.buttons["communitySettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        app.buttons["communityActivityRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
+        let first=app.buttons["communityPersonalPostOpen-p1"],second=app.buttons["communityPersonalPostOpen-p2"]
+        XCTAssertTrue(first.exists);XCTAssertTrue(second.exists)
+        XCTAssertFalse(app.buttons["communityPersonalPostOpen-p3"].exists)
+        XCTAssertEqual(app.buttons.matching(identifier:"communityPersonalPostOpen-p1").count,1,"Repeat visits update recency without duplicate rows")
+        XCTAssertLessThan(first.frame.minY,second.frame.minY,"History is sorted by each post's latest view")
+
+        app.buttons["communityPersonalPostOpen-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuBlockPost"].tap()
+        app.buttons["communityModerationConfirm"].tap()
+        app.buttons["communitySettings"].tap()
+        app.buttons["communityActivityRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from recent activity")
+        XCTAssertTrue(app.buttons["communityPersonalPostOpen-p2"].exists)
+    }
+
     func testCommunityTextLimitsDisableEmptyActionsAndKeepDraftOnBack() {
         launchCommunity("C05")
         let preview=app.buttons["communityPreviewButton"]
