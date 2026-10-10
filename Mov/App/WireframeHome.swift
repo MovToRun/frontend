@@ -1298,6 +1298,20 @@ extension WireframeRoot {
         guard let crew=communityCrew(),let index=ui.communityCrewApplications.lastIndex(where:{$0.crewID==crew.id && $0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}) else{return}
         ui.communityCrewApplications[index].status = .cancelled
     }
+    func requestCommunityCrewApplicationCancellation(_ applicationID:String){
+        guard ui.communityCrewApplications.contains(where:{$0.id==applicationID && $0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}) else{return}
+        communityCrewPendingCancellationApplicationID=applicationID
+        showingCommunityCrewApplicationCancelConfirmation=true
+    }
+    func cancelCommunityCrewApplication(_ applicationID:String){
+        guard let index=ui.communityCrewApplications.firstIndex(where:{$0.id==applicationID && $0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}) else{return}
+        ui.communityCrewApplications[index].status = .cancelled
+    }
+    func confirmCommunityCrewApplicationCancellation(){
+        guard let applicationID=communityCrewPendingCancellationApplicationID else{return}
+        cancelCommunityCrewApplication(applicationID)
+        communityCrewPendingCancellationApplicationID=nil
+    }
 
     var communityCrewOverview:some View {
         WPage(title:"크루",back:back){communityCrewOverviewContent}actions:{}
@@ -1329,8 +1343,7 @@ extension WireframeRoot {
         }
     }
     func openCommunityCrewApplicationList(){
-        guard let application=ui.communityCrewApplications.last(where:{$0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}) else{ui.communityCrewTab="find";return}
-        ui.communitySelectedCrewID=application.crewID;go("C18")
+        go("C33")
     }
     var communityCrewFind:some View {
         let available=communityAllCrews().filter{!communityCrewIsMember($0) && ($0.tags.contains(ui.communityCrewFilter) || ui.communityCrewFilter=="모두")}
@@ -1352,7 +1365,7 @@ extension WireframeRoot {
     var communityCrewDetail:some View {
         guard let crew=communityCrew() else{return AnyView(WPage(title:"크루 소개",back:back){WNotice(text:"크루 정보를 찾을 수 없어요.")}actions:{})}
         let member=communityCrewIsMember(crew),application=communityCrewApplication(for:crew.id),rank=communityCrewRankLevel()
-        return AnyView(WPage(title:"크루 소개",back:back){
+        return AnyView(WPage(title:"크루 소개",back:back,trailing:AnyView(Button{go("C32")}label:{Image(systemName:"info.circle").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("크루 정보").accessibilityIdentifier("communityCrewInformation"))){
             VStack(alignment:.leading,spacing:12){Group{if let data=crew.photoData,let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}else{ZStack{RoundedRectangle(cornerRadius:16).fill(W.soft);Image(systemName:"figure.run").font(.system(size:36,weight:.medium)).foregroundStyle(W.ink).accessibilityLabel("크루 예시 그림")}}}.frame(maxWidth:.infinity).frame(height:145).clipped().clipShape(RoundedRectangle(cornerRadius:16));Text(crew.name).font(W.font(23,.semibold));Text(crew.introduction).font(W.font(14)).lineSpacing(5);Text("\(crew.region) · 멤버 \(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명").font(W.font(12)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewMemberCount")}
             VStack(alignment:.leading,spacing:7){Text("가입 안내").font(W.font(15,.semibold));Text(crew.guidance).font(W.font(13)).foregroundStyle(W.ink).lineSpacing(4).accessibilityIdentifier("communityCrewGuidanceDetails")}.frame(maxWidth:.infinity,alignment:.leading).padding(15).background(W.soft,in:RoundedRectangle(cornerRadius:12))
             if crew.minimumRank>0, WCommunityCrewPolicy.ranks.indices.contains(crew.minimumRank){WText(text:"가입 조건 · \(WCommunityCrewPolicy.ranks[crew.minimumRank]) 이상",small:true)}
@@ -1364,6 +1377,33 @@ extension WireframeRoot {
             else if application?.status == .pending{Button("가입 신청 확인"){go("C18")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewCheckApplication")}
             else{Button(crew.memberIDs.count>=20 ? "정원이 찼어요":rank<crew.minimumRank ? "가입 등급을 확인해 주세요":"가입 신청"){if crew.memberIDs.count>=20{ui.communityCrewJoinError="정원이 모두 찼어요."}else if rank<crew.minimumRank{ui.communityCrewJoinError="가입에 필요한 러닝 등급을 확인해 주세요."}else{ui.communityCrewJoinMemo="";go("C17")}}.buttonStyle(WButtonStyle(kind:crew.memberIDs.count>=20 || rank<crew.minimumRank ? 1:0)).disabled(crew.memberIDs.count>=20 || rank<crew.minimumRank).accessibilityIdentifier("communityCrewJoin")}
         })
+    }
+
+    func communityCrewInformationRow(_ title:String,value:String,identifier:String)->some View {
+        HStack(alignment:.firstTextBaseline,spacing:16){Text(title).font(W.font(13)).foregroundStyle(W.muted);Spacer(minLength:12);Text(value).font(W.font(13)).foregroundStyle(W.ink).multilineTextAlignment(.trailing).lineLimit(3).fixedSize(horizontal:false,vertical:true)}
+            .frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,16).overlay(alignment:.bottom){W.line.frame(height:1)}
+            .accessibilityElement(children:.combine).accessibilityIdentifier(identifier)
+    }
+
+    var communityCrewInformation:some View {
+        guard let crew=communityCrew() else{return AnyView(WPage(title:"크루 정보",back:back){WNotice(text:"크루 정보를 찾을 수 없어요.")}actions:{})}
+        let owner=communityRunner(crew.ownerMemberID)
+        let rank=crew.minimumRank>0 && WCommunityCrewPolicy.ranks.indices.contains(crew.minimumRank) ? "\(WCommunityCrewPolicy.ranks[crew.minimumRank]) 이상":"제한 없음"
+        let activeBoards=WCommunityCrewPolicy.activeBoardCount(in:crew)
+        let page=WPage(title:"크루 정보",back:back){
+            VStack(alignment:.leading,spacing:10){Text(crew.name).font(W.font(22,.semibold)).accessibilityIdentifier("communityCrewInfoName");Text(crew.introduction).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(5).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoIntroduction")}
+            VStack(spacing:0){
+                communityCrewInformationRow("활동 지역",value:crew.region,identifier:"communityCrewInfoRegion")
+                communityCrewInformationRow("크루 레벨",value:"운영 기준 미정",identifier:"communityCrewInfoLevel")
+                communityCrewInformationRow("멤버",value:"\(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명",identifier:"communityCrewInfoMembers")
+                communityCrewInformationRow("가입 등급",value:rank,identifier:"communityCrewInfoRank")
+                communityCrewInformationRow("크루장",value:owner.name,identifier:"communityCrewInfoOwner")
+                communityCrewInformationRow("활성 게시판",value:"\(activeBoards)/\(WCommunityCrewPolicy.boardCapacity)개",identifier:"communityCrewInfoBoards")
+            }
+            VStack(alignment:.leading,spacing:10){Text("가입 안내").font(W.font(14,.medium));Text(crew.guidance.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "등록된 가입 안내가 없어요.":crew.guidance).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(6).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoGuidance")}.frame(maxWidth:.infinity,alignment:.leading).padding(.top,8)
+            WNotice(text:"크루 정보는 이 기기의 로컬 예시예요. 레벨 운영 기준과 서버 상태는 연결되어 있지 않아요.").accessibilityIdentifier("communityCrewInfoLocalNotice")
+        }actions:{}
+        return AnyView(page.accessibilityIdentifier("communityCrewInformation"))
     }
 
     var communityCrewJoinForm:some View {
@@ -1390,13 +1430,34 @@ extension WireframeRoot {
         }
     }
 
+    var communityCrewApplicationList:some View {
+        let pending=ui.communityCrewApplications.filter{$0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}
+        return WPage(title:"신청 중인 크루",back:back){
+            WNotice(text:"가입 신청 상태는 이 기기의 로컬 예시예요. 실제 신청 취소나 크루 알림은 전송되지 않아요.").accessibilityIdentifier("communityCrewApplicationsLocalNotice")
+            if pending.isEmpty{Text("기다리는 가입 신청이 없어요").font(W.font(14)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:120,alignment:.center).accessibilityIdentifier("communityCrewApplicationsEmpty")}
+            else{VStack(spacing:0){ForEach(pending){application in
+                let crew=communityCrew(application.crewID)
+                HStack(spacing:10){
+                    Button{ui.communitySelectedCrewID=application.crewID;go("C18")}label:{HStack(spacing:8){VStack(alignment:.leading,spacing:6){Text(crew?.name ?? "크루 정보 없음").font(W.font(14,.medium)).foregroundStyle(W.ink).lineLimit(2);Text("승인 대기 중").font(W.font(11)).foregroundStyle(W.muted)};Spacer(minLength:6);WChevron().stroke(W.muted,style:StrokeStyle(lineWidth:1.5,lineCap:.round,lineJoin:.round)).frame(width:9,height:15)}.frame(maxWidth:.infinity,minHeight:68,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewApplicationOpen-\(application.id)")
+                    Button("신청 취소"){requestCommunityCrewApplicationCancellation(application.id)}.font(W.font(12,.medium)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).frame(minWidth:68,minHeight:44).contentShape(Rectangle()).buttonStyle(.plain).accessibilityIdentifier("communityCrewApplicationCancel-\(application.id)")
+                }.accessibilityElement(children:.contain).accessibilityIdentifier("communityCrewApplicationRow-\(application.id)")
+                W.line.frame(height:1)
+            }}}
+        }actions:{}
+            .alert("가입 신청을 취소할까요?",isPresented:$showingCommunityCrewApplicationCancelConfirmation){
+                Button("유지",role:.cancel){communityCrewPendingCancellationApplicationID=nil}
+                Button("신청 취소",role:.destructive,action:confirmCommunityCrewApplicationCancellation).accessibilityIdentifier("communityCrewApplicationCancelConfirm")
+            }message:{Text("보낸 신청 메모도 이 신청에서 더 이상 검토하지 않아요.")}
+            .accessibilityIdentifier("communityCrewApplicationList")
+    }
+
     var communityCrewBoard:some View {
         guard let crew=communityCrew() else{return AnyView(WPage(title:"크루 게시판",back:back){WNotice(text:"크루 정보를 찾을 수 없어요.")}actions:{})}
         guard communityCrewIsMember(crew) else{return AnyView(WPage(title:"크루 게시판",back:back){VStack(alignment:.leading,spacing:12){Text("크루 회원에게만 공개돼요").font(W.font(17,.semibold));WNotice(text:"멤버 권한은 로컬 예시로 확인하고 있어요. 실제 크루 회원 인증은 연결되어 있지 않아요.")}.accessibilityIdentifier("communityCrewBoardRestricted")}actions:{Button("크루 소개 보기"){go("C16")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewBoardDetail")})}
         let activeBoards=WCommunityCrewPolicy.activeBoards(in:crew)
         let selected=activeBoards.first(where:{$0.id==ui.communityCrewBoardID}) ?? activeBoards.first
         let posts=(crew.posts+ui.communityLocalCrewPosts[crew.id,default:[]]).filter{$0.boardID==selected?.id}
-        return AnyView(WPage(title:crew.name,back:back){
+        return AnyView(WPage(title:crew.name,back:back,trailing:AnyView(Button{go("C32")}label:{Image(systemName:"info.circle").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("크루 정보").accessibilityIdentifier("communityCrewInformationFromBoard"))){
             if !crew.announcements.isEmpty {
                 VStack(alignment:.leading,spacing:10){Text("크루 알림 예시").font(W.font(13,.semibold));ForEach(crew.announcements.prefix(3)){item in VStack(alignment:.leading,spacing:4){Text(item.title).font(W.font(14,.semibold)).accessibilityIdentifier("communityCrewAnnouncementTitle-\(item.id)");Text(item.text).font(W.font(12)).foregroundStyle(W.muted).lineSpacing(3).accessibilityIdentifier("communityCrewAnnouncementText-\(item.id)");Text("로컬 예시 · 실제 알림은 전송되지 않았어요").font(W.font(10)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewAnnouncementLocalNotice")}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,8).overlay(alignment:.bottom){W.line.frame(height:1)}.accessibilityElement(children:.contain).accessibilityIdentifier("communityCrewAnnouncement-\(item.id)")}}.accessibilityIdentifier("communityCrewAnnouncementList")
             }

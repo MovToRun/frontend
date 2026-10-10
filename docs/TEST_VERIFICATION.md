@@ -1,5 +1,13 @@
 # Test verification history
 
+## Crew information and member application list (C32–C33)
+
+- Branch: `feature/community-crew-info-applications`, based on merged PR #35 main SHA `b682c19f34eb9169e3121eb14ed92fa8a0e8a076`.
+- Final focused suite: 69/69 passed (67 `ThemeTests` + 2 UI tests) on the existing iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It used a temporary source copy with unique app/unit/UI bundle IDs and isolated fixture storage.
+- UI coverage: `testCommunityCrewInformationUsesCurrentLocalPolicyAndRoutesFromDetailAndBoard` checks C16/C19 entry, current member/board policy values, join guidance and the unresolved level label; `testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation` checks current-user filtering, C18 round trip, dismissal without mutation, and confirmed local cancellation.
+- Result bundle: `/tmp/mov-community-crew-info-suite.xcresult`.
+- C32 shows `운영 기준 미정` because crew-level rules are unresolved; it does not infer a level. C33 cancellation only changes the in-memory fixture and does not contact or notify a server. These screens are locally implemented, server-unconnected, and still need source/app pixel and motion comparison.
+
 ## Crew settings and board lifecycle (C36–C40)
 
 - Branch: `feature/community-crew-settings`, based on merged PR #34 main SHA `d0e7ddb95999306d7f000affd9d1d2777c6f1c21`.
