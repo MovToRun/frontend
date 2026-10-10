@@ -23,6 +23,17 @@ struct APIClientConfiguration: Sendable {
             throw APIClientError.invalidBaseURL
         }
         guard scheme == "https" else { throw APIClientError.insecureBaseURL }
+        let encodedPath = components.percentEncodedPath
+        let basePathSegments = encodedPath.split(separator: "/", omittingEmptySubsequences: false)
+        let allowedBasePathCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/")
+        guard !encodedPath.contains("%"),
+              encodedPath.unicodeScalars.allSatisfy(allowedBasePathCharacters.contains),
+              basePathSegments.enumerated().allSatisfy({ index, segment in
+                  if segment.isEmpty { return index == 0 || index == basePathSegments.count - 1 }
+                  return segment != "." && segment != ".."
+              }) else {
+            throw APIClientError.invalidBaseURL
+        }
         guard requestTimeout.isFinite, requestTimeout > 0,
               resourceTimeout.isFinite, resourceTimeout >= requestTimeout else {
             throw APIClientError.invalidTimeout
@@ -71,6 +82,7 @@ enum APIClientError: Error, Equatable {
     case insecureBaseURL
     case invalidTimeout
     case invalidPath
+    case cancelled
     case unexpectedResponse
     case httpStatus(Int)
     case transport(URLError.Code)
@@ -99,7 +111,11 @@ final class APIClient: @unchecked Sendable {
     func makeRequest(path: String, method: String = "GET", body: Data? = nil, headers: [String: String] = [:]) throws -> URLRequest {
         let allowedPathCharacters = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         let pathSegments = path.split(separator: "/", omittingEmptySubsequences: false)
+        let configuredBasePath = configuration.baseURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let repeatsConfiguredBasePath = !configuredBasePath.isEmpty
+            && (path == configuredBasePath || path.hasPrefix(configuredBasePath + "/"))
         guard !path.isEmpty, !path.hasPrefix("/"),
+              !repeatsConfiguredBasePath,
               pathSegments.allSatisfy({ segment in
                   !segment.isEmpty && segment != "." && segment != ".."
                       && segment.unicodeScalars.allSatisfy(allowedPathCharacters.contains)
@@ -131,7 +147,10 @@ final class APIClient: @unchecked Sendable {
             return data
         } catch let error as APIClientError {
             throw error
+        } catch is CancellationError {
+            throw APIClientError.cancelled
         } catch let error as URLError {
+            if error.code == .cancelled { throw APIClientError.cancelled }
             throw APIClientError.transport(error.code)
         } catch {
             throw APIClientError.transport(.unknown)

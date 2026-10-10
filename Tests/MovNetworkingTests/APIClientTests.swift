@@ -36,6 +36,7 @@ private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
     static func respond(statusCode: Int, data: Data = Data()) { Store.shared.configure(statusCode: statusCode, data: data) }
     static func fail(with error: URLError.Code) { Store.shared.configure(error: error) }
+    static func cancel() { Store.shared.configure(error: .cancelled) }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -61,7 +62,7 @@ final class APIClientTests: XCTestCase {
     private func makeClient() throws -> APIClient {
         let configuration = try APIClientConfiguration(
             environment: .development,
-            baseURLString: "https://api-dev.example.invalid/v1/",
+            baseURLString: "https://api-dev.example.invalid/api/v1/",
             requestTimeout: 4,
             resourceTimeout: 9
         )
@@ -71,9 +72,9 @@ final class APIClientTests: XCTestCase {
     }
 
     func testBuildsRelativeRequestUnderConfiguredBasePath() throws {
-        let request = try makeClient().makeRequest(path: "profile", method: "PATCH", body: Data("{}".utf8), headers: ["Content-Type": "application/json"])
-        XCTAssertEqual(request.url?.absoluteString, "https://api-dev.example.invalid/v1/profile")
-        XCTAssertEqual(request.httpMethod, "PATCH")
+        let request = try makeClient().makeRequest(path: "runs", method: "POST", body: Data("{}".utf8), headers: ["Content-Type": "application/json"])
+        XCTAssertEqual(request.url?.absoluteString, "https://api-dev.example.invalid/api/v1/runs")
+        XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.timeoutInterval, 4)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
     }
@@ -81,7 +82,7 @@ final class APIClientTests: XCTestCase {
     func testDefaultSessionUsesConfiguredTimeouts() throws {
         let configuration = try APIClientConfiguration(
             environment: .development,
-            baseURLString: "https://api-dev.example.invalid/v1/",
+            baseURLString: "https://api-dev.example.invalid/api/v1/",
             requestTimeout: 4,
             resourceTimeout: 9
         )
@@ -91,15 +92,20 @@ final class APIClientTests: XCTestCase {
     }
 
     func testNormalizesBaseURLWithoutTrailingSlash() throws {
-        let configuration = try APIClientConfiguration(environment: .production, baseURLString: "https://api.example.invalid/v2", requestTimeout: 5, resourceTimeout: 10)
-        XCTAssertEqual(configuration.baseURL.absoluteString, "https://api.example.invalid/v2/")
-        XCTAssertEqual(try APIClient(configuration: configuration).makeRequest(path: "health").url?.absoluteString, "https://api.example.invalid/v2/health")
+        let configuration = try APIClientConfiguration(environment: .production, baseURLString: "https://api.example.invalid/api/v1", requestTimeout: 5, resourceTimeout: 10)
+        XCTAssertEqual(configuration.baseURL.absoluteString, "https://api.example.invalid/api/v1/")
+        XCTAssertEqual(try APIClient(configuration: configuration).makeRequest(path: "runs").url?.absoluteString, "https://api.example.invalid/api/v1/runs")
     }
 
     func testRejectsMissingOrInsecureBaseURLAndInvalidTimeouts() {
         XCTAssertThrowsError(try APIClientConfiguration(environment: .development, baseURLString: "", requestTimeout: 4, resourceTimeout: 9)) { XCTAssertEqual($0 as? APIClientError, .missingBaseURL) }
         XCTAssertThrowsError(try APIClientConfiguration(environment: .development, baseURLString: "http://localhost", requestTimeout: 4, resourceTimeout: 9)) { XCTAssertEqual($0 as? APIClientError, .insecureBaseURL) }
         XCTAssertThrowsError(try APIClientConfiguration(environment: .development, baseURLString: "https://api.example.invalid", requestTimeout: 10, resourceTimeout: 9)) { XCTAssertEqual($0 as? APIClientError, .invalidTimeout) }
+        for invalidPath in ["/%2e%2e/", "/%2E%2E/", "/%2fadmin/", "/%5cadmin/", "/%3fquery/", "/%23fragment/", "/../", "/api//v1/"] {
+            XCTAssertThrowsError(try APIClientConfiguration(environment: .development, baseURLString: "https://api.example.invalid\(invalidPath)", requestTimeout: 4, resourceTimeout: 9), invalidPath) {
+                XCTAssertEqual($0 as? APIClientError, .invalidBaseURL)
+            }
+        }
     }
 
     func testRejectsAbsoluteAndTraversalPaths() throws {
@@ -111,6 +117,7 @@ final class APIClientTests: XCTestCase {
         XCTAssertThrowsError(try client.makeRequest(path: "%2fadmin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
         XCTAssertThrowsError(try client.makeRequest(path: "users?admin=true")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
         XCTAssertThrowsError(try client.makeRequest(path: "users//admin")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
+        XCTAssertThrowsError(try client.makeRequest(path: "api/v1/runs")) { XCTAssertEqual($0 as? APIClientError, .invalidPath) }
     }
 
     func testReturnsSuccessBodyFromMockedNetwork() async throws {
@@ -138,6 +145,16 @@ final class APIClientTests: XCTestCase {
             XCTFail("Expected a transport error")
         } catch {
             XCTAssertEqual(error as? APIClientError, .transport(.timedOut))
+        }
+    }
+
+    func testMapsMockedCancellationError() async throws {
+        MockURLProtocol.cancel()
+        do {
+            _ = try await makeClient().send(path: "runs")
+            XCTFail("Expected a cancellation error")
+        } catch {
+            XCTAssertEqual(error as? APIClientError, .cancelled)
         }
     }
 }
