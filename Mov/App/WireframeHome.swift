@@ -1061,6 +1061,21 @@ extension WireframeRoot {
         }actions:{}
     }
 
+    var communityVerificationForm:some View {
+        WPage(title:"계정 인증",back:back){
+            WHeading(text:"나의 러닝 활동을\n소개해 주세요")
+            WText(text:"운영자가 신청 내용을 검토해요. 계정 인증은 러닝 등급과 별개예요.")
+            WField(label:"활동 소개",text:$ui.communityVerification.note,limit:300,multiline:true).accessibilityIdentifier("communityVerificationNote")
+            if !ui.communityVerificationError.isEmpty{WNotice(text:ui.communityVerificationError,danger:true).accessibilityIdentifier("communityVerificationError")}
+        }actions:{
+            Button("인증 신청"){if ui.submitCommunityVerification(){go("C11")}}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityVerificationSubmit")
+        }.onChange(of:ui.communityVerification.note){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityVerification.note=limited}}
+    }
+
+    var communityVerificationStatus:some View {
+        WCommunityVerificationStatusPage(state:ui,reviewTools:WReviewMode.tools,back:back,go:go)
+    }
+
     var communityLikedPosts:some View {
         let posts=communityLikedVisiblePosts
         return WPage(title:"좋아요한 글",back:back){

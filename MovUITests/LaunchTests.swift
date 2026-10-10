@@ -639,6 +639,30 @@ import UIKit
         XCTAssertTrue(app.buttons["communityPersonalPostOpen-p2"].exists)
     }
 
+    func testCommunityVerificationSubmitOperatorReviewAndResubmission() {
+        app.launchArguments=["-wire-screen","C10","-wire-fixture","-wire-test-store-suite","mov.community.verification.\(UUID().uuidString)","-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C10"].waitForExistence(timeout:10))
+        let note=app.textViews["communityVerificationNote"]
+        XCTAssertTrue(note.waitForExistence(timeout:5))
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C10"].exists,"Empty application stays on the form")
+        XCTAssertTrue(app.staticTexts["communityVerificationError"].exists)
+        note.tap();note.typeText("주간 러닝 활동을 기록하고 있어요.")
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"인증을 검토하고 있어요")
+        app.buttons["communityVerificationRejectExample"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"신청 내용을 다시 확인해 주세요")
+        XCTAssertTrue(app.staticTexts["communityVerificationMessage"].label.contains("조금 더 구체적으로"))
+        app.buttons["communityVerificationContinue"].tap()
+        XCTAssertTrue(app.textViews["communityVerificationNote"].waitForExistence(timeout:5))
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"인증을 검토하고 있어요")
+        app.buttons["communityVerificationApproveExample"].tap()
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label,"계정 인증이 완료됐어요")
+        XCTAssertEqual(app.staticTexts["communityVerificationMessage"].label,"이제 코스를 공유할 수 있어요.")
+    }
+
     func testCommunityTextLimitsDisableEmptyActionsAndKeepDraftOnBack() {
         launchCommunity("C05")
         let preview=app.buttons["communityPreviewButton"]
