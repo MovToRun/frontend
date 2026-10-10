@@ -695,9 +695,58 @@ import UIKit
         for _ in 0..<5 { nickname.typeText(XCUIKeyboardKey.delete.rawValue) }
         nickname.typeText("저녁러너")
         app.buttons["communityProfileSave"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"A saved profile closes without a discard prompt")
         let savedName=app.descendants(matching:.any)["communityCardName"]
         XCTAssertTrue(savedName.waitForExistence(timeout:5))
         XCTAssertEqual(savedName.label,"저녁러너")
+    }
+
+    func testCommunityProfileCancelConfirmsDiscardAndPreservesDraftOnContinue() {
+        launchCommunity("C01")
+        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["communityProfileEdit"].tap()
+        let nickname=app.textFields["communityEditNickname"]
+        nickname.tap()
+        for _ in 0..<5 { nickname.typeText(XCUIKeyboardKey.delete.rawValue) }
+        nickname.typeText("저녁러너")
+        app.buttons["communityProfileEditCancel"].tap()
+        let prompt=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(prompt.waitForExistence(timeout:3))
+        prompt.buttons["계속 편집"].tap()
+        XCTAssertEqual(app.textFields["communityEditNickname"].value as? String,"저녁러너","Continuing keeps the draft intact")
+        app.buttons["communityProfileEditCancel"].tap()
+        let secondPrompt=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(secondPrompt.waitForExistence(timeout:3))
+        secondPrompt.buttons["버리기"].tap()
+        XCTAssertEqual(app.descendants(matching:.any)["communityCardName"].label,"새벽러너","Discard leaves the saved profile unchanged")
+        app.buttons["communityProfileEdit"].tap()
+        app.buttons["communityProfileEditCancel"].tap()
+        XCTAssertFalse(app.alerts["변경사항을 버릴까요?"].exists,"Closing an unchanged draft is quiet")
+        XCTAssertTrue(app.buttons["communityProfileEdit"].exists)
+    }
+
+    func testCommunityProfileExitRoutesPromptBeforeSettingsOrTabNavigation() {
+        launchCommunity("C01")
+        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["communityProfileEdit"].tap()
+        let nickname=app.textFields["communityEditNickname"]
+        nickname.tap()
+        for _ in 0..<5 { nickname.typeText(XCUIKeyboardKey.delete.rawValue) }
+        nickname.typeText("저녁러너")
+        app.buttons.matching(identifier:"communityOwnProfileSettings").firstMatch.tap()
+        let settingsPrompt=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(settingsPrompt.waitForExistence(timeout:3))
+        settingsPrompt.buttons["계속 편집"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+        XCTAssertEqual(app.textFields["communityEditNickname"].value as? String,"저녁러너")
+        app.buttons["tab-0"].tap()
+        let tabPrompt=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(tabPrompt.waitForExistence(timeout:3))
+        tabPrompt.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5))
+        app.buttons["tab-3"].tap()
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertEqual(app.descendants(matching:.any)["communityCardName"].label,"새벽러너","Leaving via a tab after discard preserves the saved value")
     }
 
     func testCommunityBoardRouteAndLocalPostPreviewPublish() {

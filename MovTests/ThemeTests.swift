@@ -18,6 +18,24 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityProfileDraftDetectsEveryFieldAndReversion() {
+        let saved=WLocalProfile()
+        var draft=WCommunityProfileDraft(profile:saved)
+        XCTAssertFalse(draft.differs(from:saved))
+        draft.nickname="저녁러너"
+        XCTAssertTrue(draft.differs(from:saved))
+        draft.nickname=saved.nickname
+        XCTAssertFalse(draft.differs(from:saved),"Restoring the edited nickname is clean")
+        draft=WCommunityProfileDraft(profile:saved);draft.introduction="오늘도 달려요"
+        XCTAssertTrue(draft.differs(from:saved))
+        draft=WCommunityProfileDraft(profile:saved);draft.region="모브시 남부권"
+        XCTAssertTrue(draft.differs(from:saved))
+        draft=WCommunityProfileDraft(profile:saved);draft.photo=WProfilePhotoPolicy.encode(image:WProfilePhotoPolicy.reviewCaptureFixture(),crop:CGRect(x:0,y:0,width:400,height:400))
+        XCTAssertTrue(draft.differs(from:saved))
+        draft=WCommunityProfileDraft(nickname:saved.nickname,introduction:saved.introduction,region:saved.region,photo:saved.photo)
+        XCTAssertFalse(draft.differs(from:saved),"Restoring every field to its saved value should be clean")
+    }
+
     func testCommunityFollowProviderUpdatesFollowerAndFollowingCounts() {
         var follows=WLocalCommunityFollowProvider()
         let me="fixture-member-current",gaon="fixture-member-ga-on",noeul="fixture-member-no-eul",early="fixture-member-early"
