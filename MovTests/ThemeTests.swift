@@ -595,6 +595,59 @@ final class ThemeTests:XCTestCase {
 
 }
 
+final class PasswordResetFlowTests:XCTestCase {
+    func testResetResendRejectsOldCodeAndAcceptsOnlyCurrentCode() {
+        let start=Date(timeIntervalSince1970:1_800_000_000)
+        var reset=WPasswordResetSession()
+        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
+        XCTAssertEqual(reset.issuedCode,"482619")
+        let oldCode=reset.issuedCode
+        XCTAssertTrue(reset.resend(now:start.addingTimeInterval(60)))
+        XCTAssertEqual(reset.issuedCode,"482620")
+        XCTAssertEqual(reset.verify(oldCode,now:start.addingTimeInterval(61)),.rejected)
+        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(62)),.accepted)
+        XCTAssertTrue(reset.hasProof)
+        XCTAssertFalse(reset.resend(now:start.addingTimeInterval(123)),"A verified challenge cannot be replaced while its proof is in use")
+    }
+
+    func testResetEmailChangeAndCancellationInvalidateDelayedCompletion() {
+        let start=Date(timeIntervalSince1970:1_800_000_000)
+        var reset=WPasswordResetSession()
+        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
+        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(1)),.accepted)
+        let completion=try! XCTUnwrap(reset.beginCompletion())
+        reset.emailDidChange("new@example.test")
+        XCTAssertEqual(reset.email,"new@example.test")
+        XCTAssertFalse(reset.hasProof)
+        XCTAssertFalse(reset.finishCompletion(completion),"An old flow must not complete after the email changes")
+
+        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
+        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(1)),.accepted)
+        let canceled=try! XCTUnwrap(reset.beginCompletion())
+        reset.cancelCompletion()
+        XCTAssertFalse(reset.finishCompletion(canceled),"A canceled delayed completion must be ignored")
+        let abandoned=try! XCTUnwrap(reset.beginCompletion())
+        reset.invalidate()
+        XCTAssertFalse(reset.finishCompletion(abandoned),"A closed flow must invalidate pending completion work")
+    }
+
+    func testResetChallengeExpiryLockAndSharedPasswordPolicy() {
+        let start=Date(timeIntervalSince1970:1_800_000_000)
+        var expired=WPasswordResetSession();XCTAssertTrue(expired.begin(email:"runner@example.test",now:start))
+        XCTAssertEqual(expired.verify(expired.issuedCode,now:start.addingTimeInterval(300)),.expired)
+        XCTAssertTrue(expired.resend(now:start.addingTimeInterval(300)),"Expired challenges can recover by resending after the cooldown")
+        var locked=WPasswordResetSession();XCTAssertTrue(locked.begin(email:"runner@example.test",now:start))
+        for n in 0..<WEmailChallengePolicy.maximumAttempts {
+            XCTAssertEqual(locked.verify(String(format:"%06d",100_000+n),now:start.addingTimeInterval(Double(n+1))),n==WEmailChallengePolicy.maximumAttempts-1 ? .locked:.rejected)
+        }
+        XCTAssertTrue(locked.resend(now:start.addingTimeInterval(60)),"Locked challenges can recover by resending after the cooldown")
+        XCTAssertEqual(locked.attempts,0)
+        XCTAssertTrue(WAuthValidation.password("MovDemo482619"))
+        XCTAssertFalse(WAuthValidation.password("short1"))
+        XCTAssertFalse(WAuthValidation.password("allletters"))
+    }
+}
+
 extension ThemeTests {
     func testProfileValidationBoundaries() {
         XCTAssertFalse(WProfileValidation.isValid(nickname:" \n ",introduction:""))

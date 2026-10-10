@@ -27,15 +27,21 @@ extension WireframeRoot {
                 if id=="A01"{VStack(alignment:.leading,spacing:24){Color.clear.frame(height:84);Text("오늘의 달리기를\n나의 기록으로").font(W.font(25,.bold)).lineSpacing(6)}}
                 else{WHeading(text:["A07":"모브와 함께 시작해요","A10":"비밀번호를\n다시 설정해요","A12":"새 비밀번호를 설정해요","A16":"이메일로도 로그인해요","A17":"비밀번호를 관리해요"][id] ?? "")}
                 if id != "A01"{WText(text:id=="A07" ? "이메일과 비밀번호로 시작해요.":id=="A10" ? "가입할 때 사용한 이메일을 입력해 주세요.":id=="A16" ? "현재 계정에 이메일 로그인 수단을 추가해요.":"새 비밀번호를 입력하고 확인해 주세요.")}
-                if id != "A07"{authDemoNote}
+                if id != "A07" && !["A10","A12"].contains(id){authDemoNote}
                 VStack(alignment:.leading,spacing:0){
                     VStack(alignment:.leading,spacing:id == "A01" ? 40:16){
-                        if !["A12","A17"].contains(id){authField("이메일",value:"",email:true)}
-                        if id != "A10"{authField(id=="A17" ? "현재 비밀번호":id=="A12" ? "새 비밀번호":"비밀번호",value:"")}
-                        if ["A07","A12","A16","A17"].contains(id){authField(id=="A17" ? "새 비밀번호":id=="A12" ? "새 비밀번호 확인":"비밀번호 확인",value:"")}
+                        if id=="A10"{passwordResetEmailField}
+                        else if id=="A12"{passwordResetPasswordField("새 비밀번호",confirm:false);passwordResetPasswordField("새 비밀번호 확인",confirm:true)}
+                        else {
+                            if !["A12","A17"].contains(id){authField("이메일",value:"",email:true)}
+                            if id != "A10"{authField(id=="A17" ? "현재 비밀번호":id=="A12" ? "새 비밀번호":"비밀번호",value:"")}
+                            if ["A07","A12","A16","A17"].contains(id){authField(id=="A17" ? "새 비밀번호":id=="A12" ? "새 비밀번호 확인":"비밀번호 확인",value:"")}
+                        }
                         if id=="A17"{authField("새 비밀번호 확인",value:"")}
                     }
-                    if reviewTools{Button{ui.authFilled=true;ui.authEmail="runner@example.test";ui.authPassword="MovDemo482619";ui.authConfirm=ui.authPassword;ui.authCurrent=ui.authPassword;ui.error=""}label:{Text("가상 예시값 채우기").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain)}
+                    if reviewTools{Button{if id=="A10"{ui.passwordReset.email="runner@example.test";ui.passwordReset.error=""}else if id=="A12"{ui.passwordReset.newPassword="MovDemo482619";ui.passwordReset.confirmPassword="MovDemo482619";ui.passwordReset.error=""}else{ui.authFilled=true;ui.authEmail="runner@example.test";ui.authPassword="MovDemo482619";ui.authConfirm=ui.authPassword;ui.authCurrent=ui.authPassword;ui.error=""}}label:{Text("가상 예시값 채우기").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain)}
+                    if id=="A10",reviewTools{Text("메일·서버 연결 없이 비밀번호 재설정 화면을 확인해요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,4)}
+                    if !ui.passwordReset.error.isEmpty && ["A10","A12"].contains(id){WAuthNotice(text:ui.passwordReset.error,danger:true).padding(.vertical,8)}
                     if !ui.error.isEmpty && ui.authErrorField.isEmpty{WAuthNotice(text:ui.error,danger:true).padding(.vertical,8)}
                     Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).accessibilityIdentifier("authPrimary")
                 }
@@ -50,24 +56,26 @@ extension WireframeRoot {
                 if id=="A17"{VStack(alignment:.leading,spacing:0){Button("비밀번호 재설정"){ui.resetBack="T05";go("A10")}.font(W.font(13)).frame(minHeight:44);Button("이메일 로그인 연결 해제"){ui.provider="이메일";go(ui.profile.providers.count>1 ? "T08":"T09")}.font(W.font(13)).frame(minHeight:44)}}
                 if id=="A16"{authDemoNote}
             }.padding(.horizontal,24).padding(.top,id=="A01" ? 26:24).padding(.bottom,24)}.scrollDismissesKeyboard(.immediately).modifier(WAuthBodyMotion())
-            if id != "A01"{Button(id=="A07" ? "가입 취소":"취소"){ui.authFilled=false;if ["A10","A12"].contains(id){go(ui.resetBack)}else{authBack(id)}}.buttonStyle(WButtonStyle(kind:1)).padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)}}
+            if id != "A01"{Button(id=="A07" ? "가입 취소":"취소"){ui.authFilled=false;if ["A10","A12"].contains(id){ui.passwordReset.invalidate();go(ui.resetBack)}else{authBack(id)}}.buttonStyle(WButtonStyle(kind:1)).padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)}}
         }
     }
     func authBack(_ id:String){
         if ["A16","A17"].contains(id){go("T05")}
-        else if id=="A12"{go("A11")}
+        else if id=="A12"{ui.passwordReset.cancelCompletion();if ui.path.last=="A24"{back()}else{go("A24")}}
         else if ["A07","A10"].contains(id){go(id=="A10" ? ui.resetBack:"A01")}
         else{back()}
     }
     func submitAuth(_ id:String){
         guard ui.screen==id else{return}
+        if id=="A10"{submitPasswordResetRequest();return}
+        if id=="A12"{submitPasswordReset();return}
         if ["A16","A17"].contains(id) && !ui.settingsGrant{ui.pending=id;ui.pendingBack="T05";go("T15");return}
         guard validateAuth(id) else{return}
         switch id {
         case "A01":ui.profile.logged=true;ui.save();go("H00")
         case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;issueEmailChallenge();go("A19")
-        case "A10":go("A11")
-        case "A12":ui.profile.logged=false;ui.save();go("A13")
+        case "A10":submitPasswordResetRequest()
+        case "A12":submitPasswordReset()
         case "A16":ui.passwordChanged=false;if !ui.profile.providers.contains("이메일"){ui.profile.providers.append("이메일")};ui.save();go("A18")
         case "A17":ui.profile.logged=false;ui.save();ui.authFilled=false;ui.passwordChanged=true;go("A18")
         default:break
@@ -77,6 +85,44 @@ extension WireframeRoot {
     func authSubmitTitle(_ id:String)->String {
         if reviewTools{return ["A01":"데모 로그인","A07":"다음 · 이메일 인증","A10":"재설정 요청 예시 보기","A12":"변경 완료 화면 보기","A16":"이메일 로그인 연결 · 데모","A17":"변경 완료 화면 보기"][id] ?? "계속"}
         return ["A01":"로그인","A07":"다음","A10":"계속","A12":"비밀번호 변경","A16":"연결하기","A17":"비밀번호 변경"][id] ?? "계속"
+    }
+    var passwordResetEmailField:some View {
+        let email=Binding(get:{ui.passwordReset.email},set:{ui.passwordReset.emailDidChange($0)})
+        return VStack(alignment:.leading,spacing:8){Text("이메일").font(W.font(13,.medium)).frame(height:18.85,alignment:.leading)
+            TextField("",text:email,prompt:Text(verbatim:"runner@example.test").foregroundStyle(W.muted)).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("reset-email").submitLabel(.done)
+                .font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.passwordReset.errorField=="email" && !ui.passwordReset.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line))
+            if ui.passwordReset.errorField=="email" && !ui.passwordReset.error.isEmpty{Text(ui.passwordReset.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))}
+            if reviewTools{Text("실제 주소 대신 example.test 예시 주소를 써 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,26)}
+        }
+    }
+    @ViewBuilder func passwordResetPasswordField(_ label:String,confirm:Bool)->some View {
+        let fieldID=confirm ? "reset-confirm-password":"reset-new-password"
+        let value=confirm ? Binding(get:{ui.passwordReset.confirmPassword},set:{ui.passwordReset.confirmPassword=$0;ui.passwordReset.error=""}):Binding(get:{ui.passwordReset.newPassword},set:{ui.passwordReset.newPassword=$0;ui.passwordReset.error=""})
+        let revealed=ui.passwordReset.revealedFields.contains(fieldID)
+        VStack(alignment:.leading,spacing:8){Text(label).font(W.font(13,.medium)).frame(height:18.85,alignment:.leading)
+            HStack{if revealed{TextField("",text:value,prompt:Text("8~20자, 영문과 숫자").foregroundStyle(W.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else{SecureField("",text:value,prompt:Text("8~20자, 영문과 숫자").foregroundStyle(W.muted)).textContentType(nil).accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}
+                if !value.wrappedValue.isEmpty{Button{if revealed{ui.passwordReset.revealedFields.remove(fieldID)}else{ui.passwordReset.revealedFields.insert(fieldID)}}label:{WEyeIcon(revealed:revealed).stroke(W.muted,style:StrokeStyle(lineWidth:1.125,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:30,height:44)}.accessibilityLabel(label+(revealed ? " 숨기기":" 보기")).accessibilityIdentifier(fieldID+"-reveal")}
+            }.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.passwordReset.errorField==(confirm ? "confirm":"password") && !ui.passwordReset.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line))
+            if ui.passwordReset.errorField==(confirm ? "confirm":"password") && !ui.passwordReset.error.isEmpty{Text(ui.passwordReset.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))}
+        }
+    }
+    func submitPasswordResetRequest(now:Date=Date()){
+        guard ui.screen=="A10" else{return};ui.passwordReset.error="";ui.passwordReset.errorField=""
+        guard WAuthValidation.email(ui.passwordReset.email)else{ui.passwordReset.errorField="email";ui.passwordReset.error=ui.passwordReset.email.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "이메일을 입력해 주세요.":"이메일 형식을 확인해 주세요.";return}
+        guard ui.passwordReset.begin(email:ui.passwordReset.email,now:now)else{ui.passwordReset.error="코드를 준비하지 못했어요. 다시 시도해 주세요.";return}
+        go("A11")
+    }
+    func submitPasswordReset(){
+        guard ui.screen=="A12",ui.passwordReset.proofID != nil,!ui.passwordReset.isCompleting else{return}
+        ui.passwordReset.error="";ui.passwordReset.errorField=""
+        guard WAuthValidation.password(ui.passwordReset.newPassword)else{ui.passwordReset.errorField="password";ui.passwordReset.error="8~20자의 영문과 숫자를 포함해 입력해 주세요.";return}
+        guard ui.passwordReset.newPassword==ui.passwordReset.confirmPassword else{ui.passwordReset.errorField="confirm";ui.passwordReset.error="비밀번호가 서로 달라요.";return}
+        guard let completion=ui.passwordReset.beginCompletion()else{return}
+        Task{@MainActor in
+            if !reduceMotion{try? await Task.sleep(for:.milliseconds(420))}
+            guard ui.screen=="A12",ui.passwordReset.finishCompletion(completion),ui.screen=="A12" else{return}
+            go("A13")
+        }
     }
     func acceptConsents(){
         guard ui.screen=="A02", !ui.consentBusy else{return}
@@ -200,6 +246,59 @@ extension WireframeRoot {
             go("A21")
         }
     }}
+    func verifyPasswordResetCode(now:Date=Date()){
+        guard ["A24","A25","A26","A27","A28"].contains(ui.screen) else{return}
+        switch ui.passwordReset.verify(ui.passwordReset.code,now:now){
+        case .accepted:go("A12")
+        case .rejected:go("A25");ui.passwordReset.error="코드가 일치하지 않아요. \(WEmailChallengePolicy.maximumAttempts-ui.passwordReset.attempts)번 더 시도할 수 있어요."
+        case .locked:go("A27");ui.passwordReset.error="입력 횟수를 초과했어요. 새 코드를 요청해 주세요."
+        case .expired:go("A26");ui.passwordReset.error="코드가 만료됐어요. 새 코드를 요청해 주세요."
+        case .missing:ui.passwordReset.error="이메일 확인을 다시 시작해 주세요."
+        case .duplicate:break
+        }
+    }
+    func resendPasswordResetCode(now:Date=Date()){
+        guard WireState.passwordResetScreens.contains(ui.screen),ui.passwordReset.resend(now:now)else{return}
+        go("A28")
+    }
+    func changePasswordResetEmail(){
+        ui.passwordReset.invalidate();go("A10");ui.path.removeAll{WireState.passwordResetScreens.contains($0)}
+    }
+    var passwordResetVerification:some View {WSecondTicker{now in
+        let flow=ui.passwordReset
+        let lifetime=WEmailChallengePolicy.secondsRemaining(since:flow.issuedAt,now:now,duration:WEmailChallengePolicy.lifetime)
+        let resend=WEmailChallengePolicy.secondsRemaining(since:flow.issuedAt,now:now,duration:WEmailChallengePolicy.resendDelay)
+        let expired=lifetime==0
+        let locked=flow.attempts>=WEmailChallengePolicy.maximumAttempts || ui.screen=="A27"
+        let missing=flow.issuedAt==nil
+        let disabled=missing || expired || locked
+        let field=Binding(get:{ui.passwordReset.code},set:{ui.passwordReset.code=WEmailChallengePolicy.digits($0);if ui.passwordReset.code.count<6{ui.passwordReset.error=""}})
+        WPage(title:"비밀번호 재설정",back:{back()}){
+            WHeading(text:"이메일을 확인해요")
+            WText(text:flow.email)
+            if ui.screen=="A28"{Text("새 코드를 준비했어요. 이전 코드는 사용할 수 없어요.").font(W.font(13)).lineSpacing(6).fixedSize(horizontal:false,vertical:true)}
+            VStack(alignment:.leading,spacing:0){
+                Text("인증 코드 6자리").font(W.font(13,.medium)).padding(.bottom,10)
+                ZStack{
+                    HStack(spacing:8){ForEach(0..<6){i in Text(flow.code.count>i ? String(Array(flow.code)[i]):" ").font(W.font(24,.medium)).frame(maxWidth:.infinity,minHeight:56).background(W.soft,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(!flow.error.isEmpty ? Color(red:1,green:90/255,blue:95/255):otpInputFocused && i==min(5,flow.code.count) && !disabled ? W.lime:Color.clear)).accessibilityIdentifier("resetOtpDigit-\(i)")}}
+                    TextField("",text:field).keyboardType(.numberPad).textContentType(.oneTimeCode).foregroundStyle(.clear).tint(.clear).focused($otpInputFocused).accessibilityLabel("비밀번호 재설정 코드 6자리").accessibilityIdentifier("resetCodeInput").disabled(disabled).onChange(of:ui.passwordReset.code){_,value in if value.count==6 && !disabled{otpInputFocused=false;verifyPasswordResetCode(now:now)}}
+                }.padding(.bottom,12)
+                Text("인증 코드를 입력해 주세요").font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,5)
+                Text(missing ? "재설정 요청부터 다시 시작해 주세요.":expired ? "코드가 만료됐어요.":locked ? "현재 코드는 잠겼어요.":"유효 시간 \(max(0,lifetime ?? 0)/60):\(String(format:"%02d",max(0,lifetime ?? 0)%60))")
+                    .font(W.font(11)).foregroundStyle(W.muted).frame(minHeight:20,alignment:.leading)
+                if !flow.error.isEmpty{Text(flow.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).padding(.top,5).accessibilityIdentifier("resetOtpError")}
+                if reviewTools{Button{ui.passwordReset.code=ui.passwordReset.issuedCode}label:{Text("예시 코드 입력").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).disabled(disabled).accessibilityIdentifier("fillDemoResetCode")}
+                Button("인증 코드 확인"){verifyPasswordResetCode(now:now)}.buttonStyle(WButtonStyle()).padding(.top,9).disabled(flow.code.count != 6 || disabled).accessibilityIdentifier("verifyResetCode")
+                Button(resend.map{$0>0 ? "새 코드 요청 · \($0)초 후":"새 코드 요청"} ?? "새 코드 요청"){resendPasswordResetCode(now:now)}.buttonStyle(.plain).font(W.font(12)).foregroundStyle(missing || (resend ?? 0)>0 ? W.muted:Color.wire(0xA92D32,0xFF9CA3)).frame(minHeight:44).disabled(missing || (resend ?? 0)>0).accessibilityIdentifier("requestNewResetCode")
+                Text("유효 시간 5분 · 재요청 간격 60초\n코드는 최대 5회까지 입력할 수 있어요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,14)
+                Button("이메일 변경"){changePasswordResetEmail()}.buttonStyle(.plain).font(W.font(12,.semibold)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).accessibilityIdentifier("changeResetEmail")
+            }
+        }actions:{Button("취소하고 돌아가기"){ui.passwordReset.invalidate();go(ui.resetBack)}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("cancelPasswordReset")}
+        .onChange(of:now){_,tick in
+            guard WireState.passwordResetScreens.contains(ui.screen),!expired,let issued=ui.passwordReset.issuedAt,tick.timeIntervalSince(issued)>=WEmailChallengePolicy.lifetime else{return}
+            go("A26");ui.passwordReset.error="코드가 만료됐어요. 새 코드를 요청해 주세요."
+        }
+    }}
     var providers:some View {WPage(title:"로그인 수단",back:back){Text("하나의 계정에 연결해요").font(W.font(22,.semibold));WText(text:"이름이나 이메일만으로\n계정을 합치지 않아요.");VStack(spacing:0){ForEach(["이메일","카카오","네이버","Google","Apple"],id:\.self){p in Button{ui.provider=p;if p=="이메일"{ui.pending=ui.profile.providers.contains(p) ? "A17":"A16";ui.pendingBack="T05";go("T15")}else if ui.profile.providers.contains(p){go(ui.profile.providers.count>1 ? "T08":"T09")}else{ui.pending="T06";ui.pendingBack="T05";go("T15")}}label:{HStack(spacing:14){providerMark(p);VStack(alignment:.leading,spacing:6){Text(p=="이메일" ? "이메일 · 비밀번호":p).font(W.font(14,.medium));WText(text:ui.profile.providers.contains(p) ? "이 계정에 연결됨":"연결되지 않음",small:true)};Spacer();Text(ui.profile.providers.contains(p) ? (p=="이메일" ? "관리":"해제"):"연결").font(W.font(12))}.frame(minHeight:85).overlay(alignment:.bottom){W.line.frame(height:1)}}}};WAuthNotice(text:"현재 계정을 확인한 뒤 새 로그인 수단을 연결해요.",sourceWrapping:true)}actions:{}}
     var deleteAccount:some View {WPage(title:"회원 탈퇴",back:back){WHeading(text:"계정을 삭제하기 전\n확인해 주세요").padding(.top,9);WText(text:"계정과 연결된 로그인 수단을 삭제하는 흐름이에요. 기기 기록 삭제와 범위가 달라요.");Text("실제 삭제 범위·법정 보존·처리 시간은 출시 정책에서 확정해야 해요. 이 데모는 실제 회원·기록을 삭제하지 않아요.").font(W.font(13)).kerning(-0.195).lineSpacing(6).fixedSize(horizontal:false,vertical:true).offset(y:-1).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4).accessibilityIdentifier("accountDeletionImpactNotice");Button{ui.deleteConsent.toggle()}label:{HStack(alignment:.top){WCheck().stroke(ui.deleteConsent ? W.lime:W.muted,style:StrokeStyle(lineWidth:2.1,lineCap:.round,lineJoin:.round)).frame(width:21,height:21).padding(.trailing,4).padding(.top,2);VStack(alignment:.leading,spacing:4){Text("삭제 흐름의 영향 설명을 확인했어요").font(W.font(14)).kerning(-0.21);Text("실제 삭제가 아닌 시뮬레이션이에요").font(W.font(12)).foregroundStyle(W.muted)}.lineSpacing(5).multilineTextAlignment(.leading)}.frame(minHeight:80,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.bottom){W.line.frame(height:1)}}.buttonStyle(.plain).accessibilityIdentifier("accountDeletionImpactAcknowledgement").accessibilityAddTraits(ui.deleteConsent ? .isSelected:[])}actions:{Button(reviewTools ? "삭제 흐름 확인 · 시뮬레이션":"탈퇴하기"){if reviewTools{go("T16")}else{infoAction("delete-account-demo")}}.buttonStyle(WButtonStyle(kind:2)).disabled(!ui.deleteConsent).accessibilityIdentifier("confirmAccountDeletion");button("계정 유지","T01",kind:1)}}
 }
@@ -255,6 +354,78 @@ struct WLocalOTPCodeIssuer {
     func matches(_ candidate:String)->Bool{
         candidate.count==6 && WEmailChallengePolicy.digits(candidate)==candidate && candidate==currentCode
     }
+}
+enum WPasswordResetCodeResult:Equatable {case accepted,rejected,expired,locked,missing,duplicate}
+struct WPasswordResetCompletionToken:Equatable {let flowID:UUID;let proofID:UUID;let completionID:UUID}
+struct WPasswordResetSession {
+    private(set) var flowID=UUID()
+    var email=""
+    var code=""
+    private(set) var issuedCode=""
+    private(set) var issuedAt:Date?
+    private var issuer=WLocalOTPCodeIssuer()
+    private(set) var attempts=0
+    private var lastAttemptedCode:String?
+    private(set) var proofID:UUID?
+    private var completionID:UUID?
+    private(set) var isCompleting=false
+    private(set) var completed=false
+    var newPassword=""
+    var confirmPassword=""
+    var revealedFields:Set<String>=[]
+    var error=""
+    var errorField=""
+    var hasProof:Bool{proofID != nil}
+
+    mutating func begin(email:String,now:Date=Date())->Bool {
+        invalidate();self.email=email.trimmingCharacters(in:.whitespacesAndNewlines)
+        return issue(now:now)
+    }
+    mutating func emailDidChange(_ value:String){guard email != value else{return};invalidate();email=value}
+    private mutating func issue(now:Date)->Bool {
+        guard let value=issuer.issueNext()else{return false}
+        issuedCode=value;issuedAt=now;code="";attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;error="";errorField="";newPassword="";confirmPassword="";revealedFields=[]
+        return true
+    }
+    mutating func resend(now:Date=Date())->Bool {
+        guard WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:WEmailChallengePolicy.resendDelay)==0,
+              proofID==nil,!isCompleting else{return false}
+        return issue(now:now)
+    }
+    mutating func verify(_ candidate:String,now:Date=Date())->WPasswordResetCodeResult {
+        guard let issuedAt else{return .missing}
+        if WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:WEmailChallengePolicy.lifetime)==0{return .expired}
+        if attempts>=WEmailChallengePolicy.maximumAttempts{return .locked}
+        let value=WEmailChallengePolicy.digits(candidate);code=value
+        guard value.count==6 else{return .missing}
+        guard lastAttemptedCode != value else{return .duplicate}
+        lastAttemptedCode=value
+        if issuer.matches(value){proofID=UUID();error="";errorField="";return .accepted}
+        attempts+=1
+        return attempts>=WEmailChallengePolicy.maximumAttempts ? .locked:.rejected
+    }
+    mutating func beginCompletion()->WPasswordResetCompletionToken? {
+        guard let proofID,!isCompleting,!completed else{return nil}
+        let id=UUID();completionID=id;isCompleting=true
+        return WPasswordResetCompletionToken(flowID:flowID,proofID:proofID,completionID:id)
+    }
+    mutating func finishCompletion(_ token:WPasswordResetCompletionToken)->Bool {
+        guard token.flowID==flowID,token.proofID==proofID,token.completionID==completionID,isCompleting else{return false}
+        isCompleting=false;completionID=nil;proofID=nil;completed=true;newPassword="";confirmPassword="";revealedFields=[]
+        return true
+    }
+    mutating func cancelCompletion(){isCompleting=false;completionID=nil}
+    mutating func prepareFixture(screen:String,now:Date=Date(),resendReady:Bool=false){
+        let age:TimeInterval=screen=="A26" ? 301:resendReady || screen=="A28" ? 60:0
+        guard begin(email:"runner@example.test",now:now.addingTimeInterval(-age))else{return}
+        if screen=="A27"{attempts=WEmailChallengePolicy.maximumAttempts;error="입력 횟수를 초과했어요. 새 코드를 요청해 주세요."}
+        if screen=="A25"{error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}
+        if screen=="A28"{_ = resend(now:now)}
+        if screen=="A26"{error="코드가 만료됐어요. 새 코드를 요청해 주세요."}
+        if screen=="A12" || screen=="A13"{_ = verify(issuedCode,now:now)}
+        if screen=="A13",let token=beginCompletion(){_ = finishCompletion(token)}
+    }
+    mutating func invalidate(){flowID=UUID();email="";code="";issuedCode="";issuedAt=nil;issuer.reset();attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""}
 }
 struct WAuthNotice:View {
     let text:String;var danger=false;var sourceWrapping=false

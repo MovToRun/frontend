@@ -19,7 +19,7 @@ extension WireframeRoot {
         if reviewTools{return reviewInfo}
         switch ui.screen {
         case "A06":return .init(title:"동의 내용",heading:ui.consentTopic,text:"서비스 이용과 개인정보 처리 내용을 확인해 주세요.",notice:"운동 기록과 프로필은 이 기기에 저장돼요. 앱 삭제 시 복구가 어려울 수 있어요.",buttons:[("확인했어요","consent-reviewed",0)])
-        case "A11":return .init(title:"비밀번호 재설정",heading:"새 비밀번호를\n설정해 주세요",text:"입력한 이메일을 확인하고 계속해 주세요.",buttons:[("계속","A12",0),("이메일 다시 입력","A10",1),("취소","reset-cancel",3)])
+        case "A11":return .init(title:"비밀번호 재설정",heading:"새 비밀번호를\n설정해 주세요",text:"입력한 이메일을 확인하고 계속해 주세요.",buttons:[("인증 코드 확인","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소","reset-cancel",3)])
         case "A13":return .init(title:"비밀번호 재설정",heading:"다시 로그인해 주세요",text:"설정을 마쳤어요. 로그인 화면으로 돌아가요.",buttons:[("로그인으로","A01",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜 계정":ui.provider)+"로\n계속할까요?",text:"선택한 로그인 수단으로 시작해요.",buttons:[((ui.provider.isEmpty ? "선택한 계정":ui.provider)+"로 계속","social-success",0),("취소","A01",1)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
@@ -46,7 +46,7 @@ extension WireframeRoot {
         switch ui.screen {
         case "A04":return .init(title:WLoginFailureCopy.title,heading:WLoginFailureCopy.heading,text:WLoginFailureCopy.body,notice:WLoginFailureCopy.notice,buttons:[("다시 시도","A01",0)])
         case "A06":return .init(title:"동의 내용 검토",heading:ui.consentTopic,text:"이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.",notice:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.",buttons:[("확인했어요","consent-reviewed",0)])
-        case "A11":return .init(title:"재설정 요청",heading:"요청 확인 화면이에요",text:"메일은 발송되지 않았어요.\n계정이 있는지도 확인하지 않았어요.",notice:"아래 버튼으로 새 비밀번호 UI 데모를 확인할 수 있어요. 실제 인증 링크나 토큰은 없어요.",buttons:[("새 비밀번호 UI 데모","A12",0),("예시 이메일 다시 입력","A10",1),("취소하고 돌아가기","reset-cancel",3)])
+        case "A11":return .init(title:"재설정 요청",heading:"요청 확인 화면이에요",text:"메일은 발송되지 않았어요.\n계정이 있는지도 확인하지 않았어요.",notice:"아래 버튼으로 새 비밀번호 UI 데모를 확인할 수 있어요. 실제 인증 링크나 토큰은 없어요.",buttons:[("인증 코드 확인 · 예시","reset-verification",0),("예시 이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
         case "A13":return .init(title:"재설정 완료",heading:"완료 화면까지 확인했어요",text:"이 흐름은 UI 데모예요.\n실제 비밀번호는 바뀌지 않았어요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜":ui.provider)+" 로그인 예시",text:"실제 제공자에 연결하지 않아요.\n아래에서 가상 인증 결과를 선택해 주세요.",buttons:[("인증 성공 · 예시","social-success",0),("인증 오류 · 예시","A04",1),("인증 취소","A01",3)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
@@ -91,6 +91,8 @@ extension WireframeRoot {
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty)}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)
+    case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
+    case "reset-verification":guard ui.screen=="A11",ui.passwordReset.issuedAt != nil else{return};go("A24")
     case "consent-reviewed":ui.error="";if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
     case "local-login":ui.profile.logged=true;ui.save();go("H00")
     case "switch-local-account":if reviewTools{ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
