@@ -252,16 +252,20 @@ enum WRootTab: Int, CaseIterable {
 }
 
 enum WCommunityVerificationStatus:String,Codable,CaseIterable {case none,pending,approved,rejected}
+enum WCommunityVerificationSubmissionResult:Equatable {case submitted,invalidActivity,alreadyPending,alreadyApproved}
 
 struct WCommunityVerificationState:Codable,Equatable {
     var status:WCommunityVerificationStatus = .none
     var note=""
     var reason=""
+    var isVerified:Bool{status == .approved}
 
-    mutating func submit(_ value:String)->Bool {
+    mutating func submit(_ value:String)->WCommunityVerificationSubmissionResult {
+        guard status != .pending else{return .alreadyPending}
+        guard status != .approved else{return .alreadyApproved}
         let trimmed=value.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !trimmed.isEmpty,trimmed.count<=300,status != .pending,status != .approved else{return false}
-        note=trimmed;reason="";status = .pending;return true
+        guard !trimmed.isEmpty,trimmed.count<=300 else{return .invalidActivity}
+        note=trimmed;reason="";status = .pending;return .submitted
     }
 
     mutating func review(as result:WCommunityVerificationStatus)->Bool {
@@ -306,6 +310,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityLikedPosts:Set<String>=[]
     var communityVerification=WCommunityVerificationState()
     var communityVerificationError=""
+    var communityAccountVerified:Bool{communityVerification.isVerified}
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -328,7 +333,15 @@ struct WCommunityVerificationState:Codable,Equatable {
     var saving=false;var passwordChanged=false;var resetBack="A01"
     init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
-    func submitCommunityVerification()->Bool{guard communityVerification.submit(communityVerification.note)else{communityVerificationError="활동 소개를 300자 안으로 입력해 주세요.";return false};communityVerificationError="";saveCommunityVerification();return true}
+    func submitCommunityVerification()->Bool{
+        switch communityVerification.submit(communityVerification.note){
+        case .submitted:communityVerificationError="";saveCommunityVerification();return true
+        case .invalidActivity:communityVerificationError="활동 소개를 300자 안으로 입력해 주세요."
+        case .alreadyPending:communityVerificationError="인증 신청을 검토하고 있어요."
+        case .alreadyApproved:communityVerificationError="계정 인증이 완료됐어요."
+        }
+        return false
+    }
     func reviewCommunityVerification(as result:WCommunityVerificationStatus){guard communityVerification.review(as:result)else{return};saveCommunityVerification()}
     private func saveCommunityVerification(){if let data=try? JSONEncoder().encode(communityVerification){defaults.set(data,forKey:"mov.wireframe.community-verification.v1")}}
     var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}

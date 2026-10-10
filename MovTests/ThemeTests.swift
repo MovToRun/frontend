@@ -20,17 +20,23 @@ private struct V1PointsFixture: Codable {
 final class ThemeTests:XCTestCase {
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
         var state=WCommunityVerificationState()
-        XCTAssertFalse(state.submit(" \n "))
-        XCTAssertFalse(state.submit(String(repeating:"가",count:301)))
+        XCTAssertEqual(state.submit(" \n "),.invalidActivity)
+        XCTAssertEqual(state.submit(String(repeating:"가",count:301)),.invalidActivity)
         XCTAssertFalse(state.review(as:.approved),"An operator cannot decide before submission")
-        XCTAssertTrue(state.submit("러닝 활동을 소개합니다."))
+        XCTAssertEqual(state.submit("러닝 활동을 소개합니다."),.submitted)
         XCTAssertEqual(state.status,.pending)
-        XCTAssertFalse(state.submit("다른 신청"),"Pending applications cannot be resubmitted")
+        XCTAssertFalse(state.isVerified)
+        XCTAssertEqual(state.submit("다른 신청"),.alreadyPending,"Pending applications get a state error, not an input error")
         XCTAssertTrue(state.review(as:.rejected))
+        XCTAssertFalse(state.isVerified)
         XCTAssertEqual(state.reason,"신청 내용을 조금 더 구체적으로 적어 주세요.")
-        XCTAssertTrue(state.submit("내용을 보완해 다시 신청합니다."))
+        XCTAssertEqual(state.submit("내용을 보완해 다시 신청합니다."),.submitted)
         XCTAssertTrue(state.review(as:.approved))
         XCTAssertEqual(state.status,.approved)
+        XCTAssertTrue(state.isVerified)
+        XCTAssertEqual(state.submit("다시 신청"),.alreadyApproved)
+        let decoded=try? JSONDecoder().decode(WCommunityVerificationState.self,from:JSONEncoder().encode(state))
+        XCTAssertEqual(decoded?.status,.approved,"Approval status survives local serialization")
         XCTAssertFalse(state.review(as:.rejected),"A reviewed application cannot be changed again")
     }
 
