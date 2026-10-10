@@ -114,3 +114,12 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - UI coverage follows post detail → report → receipt/block prompt and post detail → block → C28 → C42 → unblock → feed restoration.
 - The report and block provider stores local in-memory fixture state only. No report is sent to a service. C28 exposes the blocked-user management entry for this slice; other community settings remain outside this implementation.
 - `git diff --check` passed. Independent verification and full pixel/motion QA remain pending.
+
+## Community composer discard confirmation (C26)
+
+- Branch: `feature/community-draft-discard-c26`, based on merged main `3e7ed97b2eadba67df4360fe91c04e02245c740a`.
+- Clean isolated Xcode run: 74/74 passed (70 unit tests and 4 focused UI tests), 0 failed/skipped, on the existing iPhone 17 Pro simulator / iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). The temporary source copy used unique app/unit/UI bundle IDs and fixture-only storage. Result bundle: `/tmp/mov-c26-final.xcresult`.
+- A focused follow-up passed the C13 discard/preview test with a changed selected run record and hide-ends setting: `/tmp/mov-c26-field-regressions.xcresult` (`testCommunityCourseCancelAndBackPreserveOnlyUnpublishedDraft`, 1 passed). The other exploratory follow-up tried to drive the C05 board picker from a direct screen fixture, but that fixture did not expose the picker identifier; it is not counted as a pass. C05 board is included in the draft snapshot comparison, though board-picker interaction is not separately verified here.
+- C05 snapshots board, crew context, title and body; C13 snapshots selected record, title, introduction and hide-ends setting. Back, cancel, route and root-tab exits compare current values with the entry snapshot. No-change and reverted drafts leave immediately; changed drafts can continue without losing values or discard to the pending destination. C09 preview and return preserve the draft without confirmation.
+- Existing crew edit exit and post text-limit/back tests passed in the clean run. The current SwiftUI post detail has no post-edit action, so no existing edit-post behavior was changed. C05 currently exposes no attachment control or attachment draft state; a later media picker must add its media list to the snapshot.
+- Drafts and outcomes stay in local WireState. This verifies functional paths only; complete source/app pixel and motion QA remains open.
