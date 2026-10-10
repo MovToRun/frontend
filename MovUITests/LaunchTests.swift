@@ -55,6 +55,254 @@ import UIKit
             }
         }
     }
+    func testReview55HomeGoalSelectorAndPersistentSummaries() {
+        let suite="mov.wireframe.test.review55-home"
+        func launchExample(_ example:String,appearance:String="light",compact:Bool=false) {
+            app.terminate()
+            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
+                "-wire-reset","-wire-capture-viewport","-wire-home-weekly-example",example,"-appearance",appearance]
+            if compact { app.launchArguments.append("-wire-compact-review") }
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:12),"Home example: \(example)")
+        }
+
+        launchExample("below")
+        XCTAssertTrue(app.staticTexts["homeWeeklyHeading"].exists)
+        XCTAssertFalse(app.buttons["editGoal"].exists,"The home removes the per-run goal card")
+        XCTAssertTrue(app.buttons["homeStartRun"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRingPercent-distance"].exists,app.debugDescription)
+        XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"60%")
+        XCTAssertTrue(app.staticTexts["homeRecentMetadata"].label.contains("07:12 시작 · 75:00 유효 러닝 · 예시"))
+        capture("H00-weekly-below")
+        app.buttons["homeWeeklySummary"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H07"].waitForExistence(timeout:6))
+
+        launchExample("time")
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"1시간 30분 / 2시간 · 75%")
+        XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
+        XCTAssertFalse(app.buttons["homeGoalSelector-distance"].exists,"Single goal keeps the direct large arc")
+
+        launchExample("both")
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeGoalSelector"].label,"크게 볼 주간 목표")
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertEqual(app.buttons["homeGoalSelector-distance"].frame.width,76,accuracy:0.5,"Review55 selector buttons include their horizontal padding in the 76pt minimum")
+        XCTAssertEqual(app.buttons["homeGoalSelector-distance"].frame.height,44,accuracy:0.5)
+        XCTAssertTrue(app.descendants(matching:.any)["homeGoalSummaries"].exists)
+        XCTAssertEqual(app.staticTexts["homeSummaryActual-distance"].label,"12.00 km")
+        XCTAssertEqual(app.staticTexts["homeSummaryTarget-time"].label," / 2시간")
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.buttons["homeEditWeeklyGoal"].exists)
+        XCTAssertLessThanOrEqual(app.descendants(matching:.any)["homeWeeklyRings"].frame.maxX,app.frame.width-22,"The selector and summaries stay within the 22pt content inset")
+        app.buttons["homeGoalSelector-time"].tap()
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-time"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"1시간 30분 / 2시간 · 75%")
+        app.buttons["homeGoalSelector-distance"].tap()
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeAvailability-distance"].exists,"The availability line reserves its source height")
+        capture("H00-review55-selector")
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:6))
+
+        launchExample("both-over")
+        let distanceOverage=app.staticTexts["homeRingOverage-distance"]
+        XCTAssertTrue(distanceOverage.exists)
+        XCTAssertEqual(app.staticTexts["homeSummaryOverage-distance"].label,"3 km 더 달렸어요")
+        XCTAssertEqual(app.staticTexts["homeSummaryOverage-time"].label,"30분 더 달렸어요")
+        app.buttons["homeGoalSelector-time"].tap()
+        let timeOverage=app.staticTexts["homeRingOverage-time"]
+        XCTAssertTrue(timeOverage.exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-time"].value as? String,"2시간 30분 / 2시간 · 125%")
+        XCTAssertEqual(timeOverage.label,"30분 더 달렸어요")
+        XCTAssertEqual(app.staticTexts["homeRingTarget-time"].label,"목표 2시간")
+        XCTAssertGreaterThanOrEqual(app.buttons["homeEditWeeklyGoal"].frame.minY,app.descendants(matching:.any)["homeGoalSummaries"].frame.maxY,"Goal action stays below the persistent summary rows")
+
+        launchExample("unset")
+        XCTAssertTrue(app.buttons["주간 목표 설정 하기"].exists)
+        XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].exists)
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-distance"].label,"이번 주 달린 거리")
+        XCTAssertEqual(app.descendants(matching:.any)["homeRing-distance"].value as? String,"12.00 km")
+        XCTAssertFalse(app.staticTexts["homeRingPercent-distance"].exists)
+
+        launchExample("over")
+        XCTAssertEqual(app.staticTexts["homeRingPercent-distance"].label,"115%")
+        XCTAssertTrue(app.staticTexts["homeRingOverage-distance"].exists)
+        app.buttons["homeStartRun"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:6))
+
+        launchExample("both",appearance:"dark")
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isSelected)
+        XCTAssertTrue(app.descendants(matching:.any)["homeGoalSummaries"].exists)
+        capture("H00-review55-dark")
+
+        launchExample("both",compact:true)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].exists)
+        XCTAssertTrue(app.buttons["homeGoalSelector-distance"].isHittable)
+        XCTAssertTrue(app.buttons["homeGoalSelector-time"].isHittable)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeSummary-time"].exists)
+        capture("H00-review55-compact")
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
+    func testReview55HomeGoalSelectorAccessibility3ReflowsWithoutClipping() {
+        let suite="mov.wireframe.test.review55-a11y3"
+        for compact in [false,true] {
+            app.terminate()
+            app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset",
+                "-wire-test-store-suite",suite,"-wire-home-weekly-example","both-long-over","-wire-large","-wire-fixed-reference-week","-appearance","light"]
+            if !compact { app.launchArguments.append("-wire-capture-viewport") }
+            if compact { app.launchArguments.append("-wire-compact-review") }
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+
+            let distance=app.buttons["homeGoalSelector-distance"]
+            let time=app.buttons["homeGoalSelector-time"]
+            XCTAssertTrue(distance.waitForExistence(timeout:6))
+            XCTAssertTrue(distance.isHittable);XCTAssertTrue(time.isHittable)
+            XCTAssertGreaterThanOrEqual(distance.frame.height,44)
+            XCTAssertGreaterThanOrEqual(time.frame.height,44)
+            XCTAssertLessThan(distance.frame.maxX,time.frame.minX+1,"Selector choices remain side by side without overlapping")
+            XCTAssertGreaterThanOrEqual(distance.frame.minX,0)
+            XCTAssertLessThanOrEqual(time.frame.maxX,app.frame.width)
+
+            let ring=app.descendants(matching:.any)["homeRing-distance"].firstMatch
+            let actual=app.staticTexts["homeSummaryActual-distance"]
+            let target=app.staticTexts["homeSummaryTarget-distance"]
+            let ringTarget=app.staticTexts["homeRingTarget-distance"]
+            let ringPercent=app.staticTexts["homeRingPercent-distance"]
+            let ringOverage=app.staticTexts["homeRingOverage-distance"]
+            let summary=app.descendants(matching:.any)["homeGoalSummaries"]
+            let edit=app.buttons["homeEditWeeklyGoal"]
+            let scroll=app.scrollViews.firstMatch
+            XCTAssertTrue(scroll.exists,"Home content remains scrollable at Accessibility3")
+            func alignToViewport(_ element:XCUIElement) {
+                for _ in 0..<12 {
+                    let viewport=scroll.frame
+                    let frame=element.frame
+                    let delta:CGFloat
+                    if frame.minY < viewport.minY { delta=240 }
+                    else if frame.maxY > viewport.maxY { delta = -240 }
+                    else { break }
+                    let start=scroll.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+                    start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:0,dy:delta)))
+                }
+            }
+            XCTAssertTrue(ring.exists,app.debugDescription)
+            XCTAssertTrue(actual.exists);XCTAssertTrue(target.exists)
+            XCTAssertEqual(actual.label,"60.00 km")
+            XCTAssertEqual(target.label," / 50 km")
+            XCTAssertEqual(app.staticTexts["homeSummaryActual-time"].label,"11시간")
+            XCTAssertEqual(app.staticTexts["homeSummaryTarget-time"].label," / 10시간")
+            XCTAssertEqual(app.staticTexts["homeSummaryPercent-time"].label,"110%")
+            XCTAssertEqual(app.staticTexts["homeSummaryOverage-distance"].label,"10 km 더 달렸어요")
+            XCTAssertEqual(app.staticTexts["homeSummaryOverage-time"].label,"1시간 더 달렸어요")
+            XCTAssertEqual(ringTarget.label,"목표 50 km")
+            XCTAssertEqual(ringPercent.label,"120%")
+            XCTAssertEqual(ringOverage.label,"10 km 더 달렸어요")
+            XCTAssertGreaterThan(actual.frame.height,30,"Summary values scale with Accessibility3 text")
+            XCTAssertGreaterThan(target.frame.height,20,"Summary targets scale with Accessibility3 text")
+            XCTAssertFalse(actual.frame.intersects(target.frame),"Actual and target values reflow vertically rather than overlap")
+            XCTAssertLessThanOrEqual(actual.frame.maxX,scroll.frame.maxX+1)
+            XCTAssertLessThanOrEqual(target.frame.maxX,scroll.frame.maxX+1)
+            XCTAssertGreaterThan(summary.frame.height,80,"Both summary rows expand to fit large text")
+            if compact {
+                XCTAssertLessThanOrEqual(summary.frame.width,280,"Compact review uses the 320-point viewport with 22-point side gutters")
+                XCTAssertEqual(app.scrollViews.firstMatch.frame.width,320,accuracy:1,"Compact accessibility fixture uses an actual 320pt scroll viewport")
+            }
+            let weeklyRings=app.descendants(matching:.any)["homeWeeklyRings"]
+            for element in [ringTarget,ringPercent,ringOverage] {
+                XCTAssertGreaterThanOrEqual(element.frame.minX,weeklyRings.frame.minX-1)
+                XCTAssertLessThanOrEqual(element.frame.maxX,weeklyRings.frame.maxX+1,"Ring footer text stays inside the weekly goal layout")
+            }
+            func assertFooterScales(target:XCUIElement,percent:XCUIElement,overage:XCUIElement) {
+                XCTAssertGreaterThan(target.frame.height,20,"Ring goal caption scales with Accessibility3 text")
+                XCTAssertGreaterThan(percent.frame.height,20,"Ring percentage scales with Accessibility3 text")
+                XCTAssertFalse(target.frame.intersects(percent.frame),"Ring goal and percentage captions do not overlap")
+                XCTAssertGreaterThan(overage.frame.height,20,"Ring overage caption scales with Accessibility3 text")
+                XCTAssertGreaterThanOrEqual(overage.frame.minY,percent.frame.maxY,"Ring overage stays below the goal and percentage caption")
+                for element in [target,percent,overage] {
+                    XCTAssertGreaterThanOrEqual(element.frame.minX,weeklyRings.frame.minX-1)
+                    XCTAssertLessThanOrEqual(element.frame.maxX,weeklyRings.frame.maxX+1,"Ring footer text stays inside the weekly goal layout")
+                }
+            }
+            assertFooterScales(target:ringTarget,percent:ringPercent,overage:ringOverage)
+            if compact {
+                XCTAssertEqual(scroll.frame.width,320,accuracy:1,"Compact accessibility fixture uses an actual 320pt scroll viewport")
+                for element in [ringTarget,ringPercent,ringOverage] {
+                    XCTAssertGreaterThanOrEqual(element.frame.minX,scroll.frame.minX-1,"Compact ring text stays inside the 320pt viewport")
+                    XCTAssertLessThanOrEqual(element.frame.maxX,scroll.frame.maxX+1,"Compact ring text does not clip at the 320pt viewport edge")
+                }
+            }
+            XCTAssertGreaterThanOrEqual(edit.frame.minY,summary.frame.maxY,"Weekly goal action remains below both summary rows")
+            capture(compact ? "H00-review55-accessibility3-compact-top" : "H00-review55-accessibility3-top")
+            for _ in 0..<12 {
+                let above=ringTarget.frame.minY < scroll.frame.minY
+                let below=ringOverage.frame.maxY > scroll.frame.maxY
+                if above && below { break }
+                if !above && !below { break }
+                let start=scroll.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+                start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:0,dy:below ? -60:60)))
+            }
+            XCTAssertLessThanOrEqual(ringOverage.frame.maxY-ringTarget.frame.minY,scroll.frame.height,"The scaled ring captions can fit inside the compact scroll viewport")
+            for element in [ringTarget,ringPercent,ringOverage] {
+                XCTAssertGreaterThanOrEqual(element.frame.minY,scroll.frame.minY-1,"Ring footer does not clip above the visible scroll viewport")
+                XCTAssertLessThanOrEqual(element.frame.maxY,scroll.frame.maxY+1,"Ring footer does not clip below the visible scroll viewport")
+            }
+            capture(compact ? "H00-review55-accessibility3-compact-footer" : "H00-review55-accessibility3-footer")
+            if compact {
+                XCTAssertEqual(scroll.frame.width,320,accuracy:1)
+            }
+            for _ in 0..<8 where !time.isHittable { scroll.swipeDown() }
+            time.tap()
+            let timeRingTarget=app.staticTexts["homeRingTarget-time"]
+            let timeRingPercent=app.staticTexts["homeRingPercent-time"]
+            let timeRingOverage=app.staticTexts["homeRingOverage-time"]
+            XCTAssertEqual(timeRingTarget.label,"목표 10시간")
+            XCTAssertEqual(timeRingPercent.label,"110%")
+            XCTAssertEqual(timeRingOverage.label,"1시간 더 달렸어요")
+            assertFooterScales(target:timeRingTarget,percent:timeRingPercent,overage:timeRingOverage)
+            capture(compact ? "H00-review55-accessibility3-compact-time-overage" : "H00-review55-accessibility3-time-overage")
+            let distanceSummary=app.descendants(matching:.any)["homeSummary-distance"]
+            let timeSummary=app.descendants(matching:.any)["homeSummary-time"]
+            let homeTab=app.buttons["tab-2"]
+            alignToViewport(summary)
+            capture(compact ? "H00-review55-accessibility3-compact-long-summary" : "H00-review55-accessibility3-long-summary")
+            XCTAssertLessThanOrEqual(summary.frame.height,scroll.frame.height)
+            XCTAssertGreaterThanOrEqual(summary.frame.minY,scroll.frame.minY-1)
+            XCTAssertLessThanOrEqual(summary.frame.maxY,scroll.frame.maxY+1)
+            XCTAssertTrue(actual.isHittable);XCTAssertTrue(target.isHittable)
+            XCTAssertTrue(distanceSummary.isHittable);XCTAssertTrue(timeSummary.isHittable)
+            XCTAssertLessThanOrEqual(actual.frame.maxY,homeTab.frame.minY+1)
+            XCTAssertLessThanOrEqual(target.frame.maxY,homeTab.frame.minY+1)
+            XCTAssertLessThanOrEqual(timeSummary.frame.maxY,homeTab.frame.minY+1)
+            capture(compact ? "H00-review55-accessibility3-compact-summary" : "H00-review55-accessibility3-summary")
+            alignToViewport(edit)
+            XCTAssertTrue(edit.isHittable,"The goal action remains reachable after scrolling the expanded home layout")
+            if compact {
+                alignToViewport(time)
+                time.tap()
+                XCTAssertTrue(time.isSelected)
+                app.buttons["tab-1"].tap()
+                XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:8))
+                app.buttons["tab-2"].tap()
+                XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:8))
+                XCTAssertTrue(time.isSelected,"The chosen time goal remains selected after visiting another tab and returning to H00")
+            }
+            app.terminate()
+        }
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
     func testReview52RunPanelAndRecordListDetailAlignment() {
         app.launchArguments=["-wire-screen","R02","-wire-fixture","-wire-reset","-wire-capture-viewport","-wire-reduced","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-R02"].waitForExistence(timeout:10))

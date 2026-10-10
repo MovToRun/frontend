@@ -18,16 +18,378 @@ enum WReview52StatisticsFormat {
     }
 }
 
+enum WReview54HomeArc {
+    static let viewBoxWidth: CGFloat = 240
+    static let viewBoxHeight: CGFloat = 190
+    static let radius: CGFloat = 107
+    static let strokeWidth: CGFloat = 11
+    static let sweepDegrees: CGFloat = 220
+
+    static func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let scale = rect.width / viewBoxWidth
+        for step in 0...88 {
+            let angle=(160 + sweepDegrees * CGFloat(step) / 88) * .pi / 180
+            let point=CGPoint(x:rect.minX+(120+radius*cos(angle))*scale,
+                              y:rect.minY+(120+radius*sin(angle))*scale)
+            if step==0 { path.move(to:point) } else { path.addLine(to:point) }
+        }
+        return path
+    }
+
+    static func ratio(value: Double, target: Double) -> CGFloat {
+        guard value.isFinite, target.isFinite, target > 0 else { return 0 }
+        return CGFloat(min(1, max(0, value / target)))
+    }
+
+    static func progressRatio(value: Double, target: Double?) -> CGFloat {
+        guard let target else { return 0 }
+        return ratio(value: value, target: target)
+    }
+
+    static func dualRingSize(availableWidth: CGFloat) -> CGFloat {
+        min(173, max(0, (availableWidth - 14) / 2))
+    }
+
+    static func dualRingHeight(size: CGFloat, showsOverage: Bool) -> CGFloat {
+        guard showsOverage else { return 165 }
+        return max(165, size * viewBoxHeight / viewBoxWidth + 8 + 14 + 18)
+    }
+}
+
+private struct WReview54Arc: Shape {
+    func path(in rect: CGRect) -> Path { WReview54HomeArc.path(in: rect) }
+}
+
+private struct WReview54RingVisual: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo:.largeTitle) private var largeValueSize:CGFloat = 48
+    @ScaledMetric(relativeTo:.title3) private var compactValueSize:CGFloat = 27
+    @ScaledMetric(relativeTo:.body) private var largeUnitSize:CGFloat = 16
+    @ScaledMetric(relativeTo:.caption) private var compactUnitSize:CGFloat = 12
+    let value:String
+    let unit:String
+    let progress:CGFloat
+    let size:CGFloat
+    let accessibilityTitle:String
+    let accessibilityValue:String
+    var reduceMotion:Bool = false
+    private var lineWidth:CGFloat { WReview54HomeArc.strokeWidth * size / WReview54HomeArc.viewBoxWidth }
+    @ViewBuilder private var centerMetric:some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing:0) {
+                Text(value)
+                    .font(.system(size:largeValueSize,weight:.semibold))
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.62)
+                    .frame(maxWidth:size*0.9)
+                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
+                if !unit.isEmpty {
+                    Text(unit).font(.system(size:largeUnitSize)).foregroundStyle(W.muted)
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .position(x:size/2,y:size*0.47)
+        } else {
+            HStack(alignment:.firstTextBaseline,spacing:4) {
+                Text(value).font(.system(size:size<200 ? compactValueSize:largeValueSize,weight:.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.72)
+                    .contentTransition(reduceMotion ? .identity:.opacity).animation(reduceMotion ? nil:.easeOut(duration:0.18),value:value)
+                if !unit.isEmpty { Text(unit).font(.system(size:size<200 ? compactUnitSize:largeUnitSize)).foregroundStyle(W.muted) }
+            }.position(x:size/2,y:size/2)
+        }
+    }
+    var body:some View {
+        ZStack {
+            WReview54Arc().stroke(W.soft,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
+            WReview54Arc().trim(from:0,to:progress)
+                .stroke(W.lime,style:StrokeStyle(lineWidth:lineWidth,lineCap:.round))
+                .animation(reduceMotion ? nil:.easeOut(duration:0.32),value:progress)
+            centerMetric
+        }
+        .frame(width:size,height:size*WReview54HomeArc.viewBoxHeight/WReview54HomeArc.viewBoxWidth)
+        .accessibilityElement(children:.ignore)
+        .accessibilityLabel(accessibilityTitle)
+        .accessibilityValue(accessibilityValue)
+    }
+}
+
+private struct WReview54HomeCTAStyle:ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var systemMotion
+    func makeBody(configuration:Configuration)->some View {
+        configuration.label.font(W.font(17,.semibold)).multilineTextAlignment(.center)
+            .frame(maxWidth:.infinity,minHeight:62).padding(.horizontal,12)
+            .foregroundStyle(enabled ? Color(red:32/255,green:41/255,blue:37/255):W.muted)
+            .background(enabled ? W.lime:W.secondary,in:RoundedRectangle(cornerRadius:17))
+            .scaleEffect(configuration.isPressed && !systemMotion ? 0.988:1)
+            .animation(systemMotion ? nil:.easeOut(duration:configuration.isPressed ? 0.09:0.18),value:configuration.isPressed)
+    }
+}
+
+private struct WReview55GoalSelector: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo:.caption) private var summaryTitleSize:CGFloat = 12
+    @ScaledMetric(relativeTo:.body) private var summaryActualSize:CGFloat = 13
+    @ScaledMetric(relativeTo:.caption) private var summaryTargetSize:CGFloat = 11
+    @ScaledMetric(relativeTo:.caption2) private var summaryPercentSize:CGFloat = 11
+    @ScaledMetric(relativeTo:.caption2) private var summaryOverageSize:CGFloat = 10
+    @ScaledMetric(relativeTo:.footnote) private var selectorTitleSize:CGFloat = 13
+    @State private var selected = "distance"
+    let distance: Double
+    let minutes: Double
+    let distanceGoal: Double
+    let timeGoal: Double
+    let reduceMotion: Bool
+    let ring: (Double, String, Double, Int, String) -> AnyView
+
+    private func summary(_ title:String, value:Double, goal:Double, unit:String, id:String)->some View {
+        let reached=value >= goal
+        let percentage=WeeklyGoal.percent(value:value,goal:goal)
+        let actual=unit == "km" ? "\(WReview52StatisticsFormat.kilometers(value)) km" : RunGoal.duration(Int(value))
+        let target=unit == "km" ? "\(MovNumber.display(goal)) km" : RunGoal.duration(Int(goal))
+        let surplus=value > goal ? (unit == "km" ? "\(MovNumber.display(value-goal)) km 더 달렸어요" : "\(RunGoal.duration(Int(value-goal))) 더 달렸어요") : ""
+        let percent=HStack(spacing:4) {
+            if reached { Image(systemName:"checkmark").foregroundStyle(W.lime).accessibilityHidden(true) }
+            Text("\(percentage)%").monospacedDigit()
+        }.font(.system(size:summaryPercentSize)).accessibilityIdentifier("homeSummaryPercent-\(id)")
+        return VStack(alignment:.leading,spacing:0) {
+            if dynamicTypeSize.isAccessibilitySize {
+                HStack(alignment:.firstTextBaseline) {
+                    Text(title).font(.system(size:summaryTitleSize)).foregroundStyle(W.muted)
+                    Spacer(minLength:8)
+                    percent
+                }
+                Text(actual).font(.system(size:summaryActualSize,weight:.medium))
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
+                    .accessibilityIdentifier("homeSummaryActual-\(id)")
+                Text(" / \(target)").font(.system(size:summaryTargetSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
+                    .accessibilityIdentifier("homeSummaryTarget-\(id)")
+            } else {
+                HStack(alignment:.firstTextBaseline,spacing:0) {
+                    Text(title).font(.system(size:summaryTitleSize)).foregroundStyle(W.muted).frame(width:28,alignment:.leading).padding(.trailing,9)
+                    Text(actual).font(.system(size:summaryActualSize,weight:.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityIdentifier("homeSummaryActual-\(id)")
+                    Text(" / \(target)").font(.system(size:summaryTargetSize)).foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
+                        .accessibilityIdentifier("homeSummaryTarget-\(id)")
+                    Spacer(minLength:8)
+                    percent
+                }
+            }
+            if !surplus.isEmpty {
+                Text(surplus).font(.system(size:summaryOverageSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).padding(.leading,dynamicTypeSize.isAccessibilitySize ? 0:37)
+                    .accessibilityIdentifier("homeSummaryOverage-\(id)")
+            }
+        }.padding(.vertical,8)
+            .overlay(alignment:.top) { if id == "time" { W.line.frame(height:1) } }
+            .accessibilityElement(children:.contain).accessibilityIdentifier("homeSummary-\(id)")
+    }
+
+    var body: some View {
+        VStack(spacing:0) {
+            HStack(spacing:4) {
+                selector("distance", title:"거리")
+                selector("time", title:"시간")
+            }
+            .padding(3).background(W.soft,in:RoundedRectangle(cornerRadius:14))
+            .padding(.bottom,9)
+            .accessibilityElement(children:.contain)
+            .accessibilityLabel("크게 볼 주간 목표")
+            .accessibilityIdentifier("homeGoalSelector")
+            Group {
+                if selected == "time" {
+                    ring(minutes,"분",timeGoal,WeeklyGoal.percent(value:minutes,goal:timeGoal),"time")
+                } else {
+                    ring(distance,"km",distanceGoal,WeeklyGoal.percent(value:distance,goal:distanceGoal),"distance")
+                }
+            }
+            .frame(minHeight:190)
+            VStack(spacing:0) {
+                summary("거리",value:distance,goal:distanceGoal,unit:"km",id:"distance")
+                summary("시간",value:minutes,goal:timeGoal,unit:"분",id:"time")
+            }.padding(.top,3).padding(.bottom,3)
+                .accessibilityElement(children:.contain).accessibilityLabel("두 주간 목표 요약").accessibilityIdentifier("homeGoalSummaries")
+        }
+        .frame(maxWidth:.infinity).padding(.top,14)
+    }
+
+    private func selector(_ kind:String,title:String)->some View {
+        Button {
+            selected=kind
+        } label: {
+            Text(title).font(.system(size:selectorTitleSize,weight:.medium)).fixedSize(horizontal:false,vertical:true)
+                .foregroundStyle(selected == kind ? Color(red:32/255,green:41/255,blue:37/255):W.muted)
+                .padding(.horizontal,17).frame(minWidth:76,minHeight:44)
+                .background(selected == kind ? W.lime:Color.clear,in:RoundedRectangle(cornerRadius:11))
+                .contentShape(RoundedRectangle(cornerRadius:11))
+                .animation(reduceMotion ? nil:.easeOut(duration:0.18),value:selected)
+        }.buttonStyle(.plain).accessibilityIdentifier("homeGoalSelector-\(kind)")
+            .accessibilityAddTraits(selected == kind ? .isSelected:[])
+    }
+}
+
+private struct WReview55RingFooter: View {
+    @ScaledMetric(relativeTo:.caption) private var textSize:CGFloat = 12
+    @ScaledMetric(relativeTo:.caption2) private var availabilitySize:CGFloat = 11
+    let targetText:String
+    let percent:Int
+    let identifier:String
+    let overageText:String?
+    let reached:Bool
+    let reservesAvailability:Bool
+
+    init(targetText:String,percent:Int,identifier:String,overageText:String?,reached:Bool,reservesAvailability:Bool,baseSize:CGFloat) {
+        self.targetText=targetText
+        self.percent=percent
+        self.identifier=identifier
+        self.overageText=overageText
+        self.reached=reached
+        self.reservesAvailability=reservesAvailability
+        _textSize=ScaledMetric(wrappedValue:baseSize,relativeTo:.caption)
+    }
+
+    var body:some View {
+        VStack(spacing:0) {
+            HStack(spacing:6) {
+                Text(targetText).accessibilityIdentifier("homeRingTarget-\(identifier)")
+                Text("·").accessibilityHidden(true)
+                Text("\(percent)%").accessibilityIdentifier("homeRingPercent-\(identifier)")
+                if reached { Image(systemName:"checkmark.circle.fill").foregroundStyle(W.lime).accessibilityHidden(true) }
+            }
+            .font(.system(size:textSize)).foregroundStyle(W.muted)
+            .fixedSize(horizontal:false,vertical:true)
+            .padding(.top,8)
+
+            if reservesAvailability {
+                Text(overageText ?? "")
+                    .font(.system(size:textSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true)
+                    .frame(minHeight:18,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(.top,3).accessibilityIdentifier("homeRingOverage-\(identifier)")
+                Text("").font(.system(size:availabilitySize)).frame(height:18,alignment:.leading)
+                    .frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("homeAvailability-\(identifier)")
+            } else if let overageText {
+                Text(overageText).font(.system(size:textSize)).foregroundStyle(W.muted)
+                    .fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(.top,6).accessibilityIdentifier("homeRingOverage-\(identifier)")
+            }
+        }
+        .frame(maxWidth:.infinity)
+    }
+}
+
 extension WireframeRoot {
     var home:some View {
-        VStack(spacing:0){rootHeader("");ScrollView{VStack(alignment:.leading,spacing:14){WText(text:WReviewClock.now.formatted(.dateTime.month().day().weekday(.wide)) + (ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시" : ""),small:true);Text("오늘의 러닝").font(W.font(27,.bold)).padding(.bottom,16)
-            Button{go("H03")}label:{HStack{VStack(alignment:.leading,spacing:9){WText(text:"오늘의 목표",small:true);Text(store.goal.summary).font(W.font(15,.medium))};Spacer();Image(systemName:"arrow.right")}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:14))}.accessibilityIdentifier("editGoal")
-            button("달리러 가기","H01")
-            VStack(alignment:.leading,spacing:16){HStack{Text("이번 주").font(W.font(17,.semibold));Spacer();Button("요약 보기"){go("H07")}.font(W.font(12))};weeklySummary}.padding(.top,28)
-            W.line.frame(height:1).padding(.vertical,14)
-            HStack{Text("최근 기록").font(W.font(17,.semibold));Spacer();Button("전체 보기"){go("L01")}.font(W.font(12))}
-            if let r=store.records.first{recordRow(r,home:true)}else{WText(text:"아직 러닝 기록이 없어요");WText(text:"첫 달리기부터 여기에 모아 볼게요",small:true)}
-        }.padding(24)}}
+        VStack(spacing:0){
+            rootHeader("")
+            ScrollView {
+                VStack(alignment:.leading,spacing:0) {
+                    Text(homeWeekLabel).font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,10)
+                    HStack(alignment:.top,spacing:10) {
+                        Text("이번 주,\n이만큼 달렸어요")
+                            .font(W.font(25,.semibold)).lineSpacing(3).fixedSize(horizontal:false,vertical:true)
+                            .accessibilityIdentifier("homeWeeklyHeading")
+                        Spacer(minLength:4)
+                        Button("요약 보기"){go("H07")}.font(W.font(11)).foregroundStyle(W.muted)
+                            .frame(minHeight:44,alignment:.top).padding(.top,2).accessibilityIdentifier("homeWeeklySummary")
+                    }
+                    homeRings
+                    Button { go("H01") } label: {
+                        HStack(spacing:9) {
+                            AssetIcon(name:"run",size:23)
+                            Text("달리러 가기").font(W.font(17,.semibold))
+                        }
+                    }.buttonStyle(WReview54HomeCTAStyle()).accessibilityIdentifier("homeStartRun")
+                        .padding(.top,0)
+                    W.line.frame(height:1).padding(.top,25).padding(.bottom,16)
+                    HStack { Text("최근 기록").font(W.font(17,.semibold)); Spacer(); Button("전체 보기"){go("L01")}.font(W.font(12)) }
+                    if let r=store.records.first(where:{$0.isValid}) {
+                        homeRecentRecord(r).padding(.top,7)
+                    } else {
+                        VStack(alignment:.leading,spacing:5) {
+                            Text("아직 러닝 기록이 없어요").font(W.font(15,.medium))
+                            WText(text:"첫 달리기를 시작해 보세요",small:true)
+                        }.padding(.vertical,18)
+                    }
+                }.padding(.horizontal,22).padding(.top,8).padding(.bottom,24)
+            }
+        }
+    }
+    var homeWeekLabel:String {
+        let date=WReviewClock.now
+        var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current
+        guard let interval=calendar.dateInterval(of:.weekOfYear,for:date),
+              let last=calendar.date(byAdding:.day,value:6,to:interval.start) else { return "이번 주" }
+        let firstParts=calendar.dateComponents([.month,.day],from:interval.start)
+        let lastParts=calendar.dateComponents([.month,.day],from:last)
+        let example=ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport") ? " · 가상 예시":""
+        return "\(firstParts.month!).\(firstParts.day!) — \(lastParts.month!).\(lastParts.day!)\(example)"
+    }
+    func homeRecentRecord(_ record:RunRecord)->some View {
+        let validSeconds=record.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? record.seconds
+        return Button { ui.openRecord(record) } label: {
+            HStack(spacing:10) {
+                VStack(alignment:.leading,spacing:5) {
+                    Text(record.title).font(W.font(14,.medium)).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("homeRecentTitle")
+                    HStack(alignment:.firstTextBaseline,spacing:4) {
+                        Text(MovNumber.display(record.kilometers)).font(W.font(19,.semibold)).monospacedDigit()
+                        Text("km").font(W.font(13))
+                    }.accessibilityIdentifier("homeRecentDistance")
+                    Text("\(recordWhen(record)) · \(RunRecord.clock(validSeconds)) 유효 러닝\(record.isExample == true ? " · 예시":"")")
+                        .font(W.font(10)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("homeRecentMetadata")
+                }
+                Spacer(minLength:6)
+                Image(systemName:"arrow.right").font(W.font(13)).foregroundStyle(W.muted)
+            }.frame(maxWidth:.infinity,minHeight:70,alignment:.leading).padding(.vertical,7).contentShape(Rectangle())
+        }.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}
+            .accessibilityIdentifier("homeRecentRecord")
+    }
+    var homeRings:some View {
+        let distance=store.weeklyDistance
+        let seconds=store.weeklySeconds
+        let distanceGoal=store.weekly.distanceEnabled ? Double(store.weekly.kilometers):nil
+        let timeGoal=store.weekly.timeEnabled ? Double(store.weekly.minutes):nil
+        return VStack(spacing:0) {
+            if distanceGoal == nil && timeGoal == nil {
+                homeRing(value:distance,unit:"km",target:nil,percent:nil,identifier:"distance")
+                Button("주간 목표 설정 하기"){go("H04")}.font(W.font(13,.medium)).padding(.top,8).frame(minHeight:44)
+                WText(text:"이번 주 달린 거리",small:true).padding(.top,3)
+            } else {
+                if let distanceGoal,let timeGoal {
+                    WReview55GoalSelector(distance:distance,minutes:seconds/60,distanceGoal:distanceGoal,timeGoal:timeGoal,reduceMotion:reduceMotion,ring:{value,unit,target,percent,identifier in
+                        AnyView(homeRing(value:value,unit:unit,target:target,percent:percent,identifier:identifier,reduceMotion:reduceMotion,stableReview55Slots:true))
+                    })
+                } else if let target=distanceGoal {
+                    homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
+                } else if let target=timeGoal {
+                    homeRing(value:seconds/60,unit:"분",target:target,percent:WeeklyGoal.percent(value:seconds/60,goal:target),identifier:"time")
+                }
+                Button("주간 목표 변경"){go("H04")}.font(W.font(13,.medium)).frame(minHeight:44).accessibilityIdentifier("homeEditWeeklyGoal")
+            }
+        }.frame(maxWidth:.infinity).padding(.top,14).accessibilityElement(children:.contain).accessibilityIdentifier("homeWeeklyRings")
+    }
+    func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220,reduceMotion:Bool=false,stableReview55Slots:Bool=false)->some View {
+        let displayed=unit=="km" ? WReview52StatisticsFormat.kilometers(value):RunGoal.duration(Int(value))
+        let targetText=target.map{unit=="km" ? MovNumber.display($0):RunGoal.duration(Int($0))} ?? ""
+        let progressDescription:String
+        if target != nil {
+            if unit=="km" {
+                progressDescription="\(displayed) km / \(targetText) km · \(percent ?? 0)%"
+            } else {
+                progressDescription="\(displayed) / \(targetText) · \(percent ?? 0)%"
+            }
+        } else {
+            progressDescription=unit=="km" ? "\(displayed) km":displayed
+        }
+        return VStack(spacing:0) {
+            WReview54RingVisual(value:displayed,unit:unit=="km" ? "km":"",progress:WReview54HomeArc.progressRatio(value:value,target:target),size:size,accessibilityTitle:target == nil ? "이번 주 달린 거리":"주간 \(unit=="km" ? "거리":"시간") 목표 진행률",accessibilityValue:progressDescription,reduceMotion:reduceMotion)
+            .accessibilityIdentifier("homeRing-\(identifier)")
+            if let target,let percent {
+                let overage=value>target ? (unit=="km" ? "\(MovNumber.display(value-target)) km 더 달렸어요":"\(RunGoal.duration(Int(value-target))) 더 달렸어요"):nil
+                WReview55RingFooter(targetText:unit=="km" ? "목표 \(targetText) km":"목표 \(targetText)",percent:percent,identifier:identifier,overageText:overage,reached:value>=target,reservesAvailability:stableReview55Slots,baseSize:size<200 ? 10:12)
+            }
+        }.frame(maxWidth:.infinity).accessibilityElement(children:.contain).accessibilityIdentifier("homeRingMetric-\(identifier)")
     }
     var weeklySummary:some View {
         VStack(alignment:.leading,spacing:18){
