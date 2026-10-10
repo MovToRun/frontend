@@ -19,7 +19,7 @@
 | 대조 완료 | `H07` | 이번 PR의 390×790 주·월 요약/달력 source/app 비교 및 iPhone 16e·17 Pro Max focused UI 테스트 |
 | 대조 완료 | `H03` | 390×790 원본 화면과 SwiftUI distance/time 캡처 비교. 목표 카드/휠 배치와 행 치수 확인, 휠 테두리·선택 띠·보조 문구 색상 보정 |
 | 대조 완료 | `H08`, `H09` | Review52 ZIP dist 원본을 로컬 WKWebView로 390×790 CSS/2× 렌더하고, PR #14 병합 SHA의 SwiftUI를 새 임시 iPhone 17 Pro Max 한 대에서 순차 캡처. 고정 fixture에서 거리 소수점과 주간 날짜 설명 정합. [원본/앱 캡처와 렌더 설정](REVIEW52_H08_H09_CAPTURE.md) |
-| 남음 | 인증 `E01–E02`, `A02–A23` | `A01` 제외 |
+| 남음 | 인증 `E01–E02`, `A02–A23` | `A01`, `A02`, `A03`, `A04` 로컬 구현 제외; A02/A03 캡처 대조는 남음 |
 | 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H10–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07–H09 제외 |
 | 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
@@ -57,8 +57,8 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `E01` | 네이티브 시작 | `BrandMark` — WireframeCore.swift |
 | [ ] | `E02` | 앱 스플래시 | `WSplash` — WireframeCore.swift |
 | [ ] | `A01` | 로그인 | `authForm` — WireframeAuth.swift |
-| [ ] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift |
-| [ ] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift |
+| [x] | `A02` | 필수 동의 | `consents` — WireframeAuth.swift; 각 내용 확인 후 해당 항목 체크, 일부 동의 차단, 전체 동의 순차 모션/취소 복구 |
+| [x] | `A03` | 첫 프로필 | `weightProfile` — WireframeProfile.swift; 닉네임 필수/길이 검증, 검토모드 전용 fixture 충돌 점검, 선택 체중, 원본 완료 문구 |
 | [x] | `A04` | 로그인 실패 | `loginFailure` — WireframeAuth.swift; 취소·연결 끊김 문구 및 A01 재시도 로컬 흐름 |
 | [ ] | `A06` | 약관·개인정보 검토 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `A07` | 이메일 회원가입 | `authForm` — WireframeAuth.swift |
@@ -242,3 +242,5 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C41` | 인기글 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C42` | 차단한 사용자 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C43` | 내 활동 기록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+
+인증·가입 화면은 서버/API에 연결되어 있지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

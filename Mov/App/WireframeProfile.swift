@@ -61,7 +61,45 @@ extension WireframeRoot {
     }actions:{}}
     func settingsLabel(_ text:String)->some View {Text(text).font(W.font(12,.semibold)).foregroundStyle(W.muted).frame(height:20,alignment:.leading)}
     var theme:some View {WPage(title:"화면 테마",back:back){WText(text:"모브의 화면 테마를 선택해 주세요.");ForEach(["light","dark","system"],id:\.self){choice in Button{appearance=choice}label:{HStack{Text(choice=="light" ? "라이트 모드":choice=="dark" ? "다크 모드":"시스템 설정에 따름").font(W.font(15));Spacer();if choice==appearance{Image(systemName:"checkmark").foregroundStyle(W.lime)}}.frame(minHeight:64).overlay(alignment:.bottom){W.line.frame(height:1)}}.accessibilityIdentifier("theme-"+choice).accessibilityAddTraits(choice==appearance ? .isSelected:[])};WText(text:"시스템 설정에 따르면 기기의 화면 설정이 바뀔 때 모브도 함께 바뀌어요.");WText(text:"이 기기에 저장되며, 다시 열어도 유지돼요.",small:true)}actions:{}}
-    var weightProfile:some View {WPage(title:ui.screen=="A03" ? "프로필":"프로필·체중",back:back){if ui.screen=="A03"{WText(text:"02 / 02",small:true).offset(y:6);WHeading(text:"어떻게 불러드릴까요?");WField(label:"닉네임 (필수)",text:$ui.nickname,limit:20);WText(text:"최대 20자로 입력해 주세요",small:true)};if ui.screen=="A03"{Text("체중은 선택이에요").font(W.font(17,.semibold)).padding(.top,4)}else{WHeading(text:"체중은 선택이에요")};WText(text:"입력하면 달린 거리를 바탕으로\n추정 소모 칼로리를 보여드려요.");HStack(alignment:.bottom,spacing:8){WField(label:"체중",text:$ui.weight,placeholder:"입력하지 않아도 괜찮아요",textSize:ui.screen=="A03" ? 14:16,placeholderColor:ui.screen=="A03" ? Color.wire(0x686868,0xA5A5A5):nil).keyboardType(.decimalPad);Text("kg").font(W.font(14)).frame(height:54)}.padding(.top,ui.screen=="A03" ? 4:0);WText(text:"입력한 체중은 러닝 카드에 표시되지 않아요.",small:true);Group{if ui.screen=="A03"{WAuthNotice(text:"체중이 없으면 칼로리는 —로 표시해요. 기록 당시의 체중으로 계산한 추정값이며 건강 측정값이 아니에요.")}else{WNotice(text:"체중이 없으면 칼로리는 —로 표시해요. 기록 당시의 체중으로 계산한 추정값이며 건강 측정값이 아니에요.")}};if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}actions:{Button(ui.screen=="A03" ? "계속":"변경 저장"){if !ui.weight.isEmpty && !(20...300).contains(Double(ui.weight) ?? 0){ui.error="체중은 20–300 kg 범위로 입력해 주세요.";return};if ui.screen=="A03" && (ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || ui.nickname.count>20){ui.error="닉네임은 1–20자로 입력해 주세요.";return};if ui.screen=="A03" && ["달빛러너","runmate"].contains(ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()){ui.error="이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해 주세요.";return};ui.profile.weight=ui.weight;if ui.screen=="A03"{ui.profile.photo=ui.photo;ui.profile.nickname=ui.nickname;if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)};ui.profile.logged=true;ui.save();go("A15")}else{ui.save();back()}}.buttonStyle(WButtonStyle());if ui.screen != "A03"{Button("체중 정보 제거"){ui.profile.weight="";ui.weight="";ui.save();back()}.buttonStyle(WButtonStyle(kind:1))}}}
+    var weightProfile:some View {
+        let onboarding=ui.screen=="A03"
+        return WPage(title:onboarding ? "프로필":"프로필·체중",back:back){
+            if onboarding {
+                WText(text:"02 / 02",small:true).offset(y:6)
+                WHeading(text:"어떻게 불러드릴까요?")
+                WField(label:"닉네임 (필수)",text:$ui.nickname,placeholder:"예: 아침러너",limit:20,accessibilityID:"signupNicknameInput")
+                Text("최대 20자 · 가상 닉네임으로 진행해 주세요").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading)
+                if !ui.error.isEmpty {Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).accessibilityIdentifier("signupNicknameError")}
+                Text("체중은 선택이에요").font(W.font(17,.semibold)).padding(.top,4)
+            } else {WHeading(text:"체중은 선택이에요")}
+            WText(text:"입력하면 달린 거리를 바탕으로\n추정 소모 칼로리를 보여드려요.")
+            HStack(alignment:.bottom,spacing:8){
+                WField(label:onboarding ? "예시 체중":"체중",text:$ui.weight,placeholder:"입력하지 않아도 괜찮아요",textSize:onboarding ? 14:16,placeholderColor:onboarding ? Color.wire(0x686868,0xA5A5A5):nil,accessibilityID:onboarding ? "signupWeightInput":"profileWeightInput")
+                    .keyboardType(.decimalPad)
+                Text("kg").font(W.font(14)).frame(height:54)
+            }.padding(.top,onboarding ? 4:0)
+            WText(text:onboarding ? "테스트할 예시값만 입력하세요. 실제 체중은 필요 없어요.":"입력한 체중은 러닝 카드에 표시되지 않아요.",small:true)
+            let notice="체중이 없으면 칼로리는 —로 표시해요. 기록 당시의 체중으로 계산한 추정값이며 건강 측정값이 아니에요."
+            if onboarding {WAuthNotice(text:notice)} else {WNotice(text:notice)}
+        } actions: {
+            Button(onboarding ? "계속":"변경 저장") {
+                ui.error=""
+                if onboarding, let error=WSignupNicknameValidation.error(for:ui.nickname){ui.error=error;return}
+                if onboarding, reviewTools, let error=WSignupNicknameValidation.fixtureError(for:ui.nickname){ui.error=error;return}
+                if let error=WSignupWeightValidation.error(for:ui.weight){ui.error=error;return}
+                if onboarding && (!ui.consentTerms || !ui.consentPrivacy){ui.error="필수 항목을 확인해 주세요.";go("A02");return}
+                ui.profile.weight=ui.weight
+                if onboarding {
+                    ui.profile.photo=ui.photo
+                    ui.profile.nickname=WSignupNicknameValidation.normalized(ui.nickname)
+                    if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)}
+                    ui.profile.logged=true
+                    ui.save();go("A15")
+                } else {ui.save();back()}
+            }.buttonStyle(WButtonStyle()).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
+            if !onboarding {Button("체중 정보 제거"){ui.profile.weight="";ui.weight="";ui.save();back()}.buttonStyle(WButtonStyle(kind:1))}
+        }
+    }
 }
 struct WNotificationReadState {
     var expandedID:Int?

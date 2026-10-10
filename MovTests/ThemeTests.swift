@@ -656,6 +656,38 @@ extension ThemeTests {
         XCTAssertEqual(state.path,["A01","A07","A19"])
     }
 
+    func testSignupNicknameAndOptionalWeightPolicies() {
+        XCTAssertNil(WSignupNicknameValidation.error(for:"아침 러너"))
+        XCTAssertNil(WSignupNicknameValidation.error(for:"새벽러너"))
+        XCTAssertEqual(WSignupNicknameValidation.error(for:" \n "),"닉네임을 입력해 주세요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:String(repeating:"가",count:21)),"닉네임은 20자까지 입력할 수 있어요.")
+        XCTAssertNil(WSignupNicknameValidation.error(for:"달빛러너"),"Generic validation does not claim global nickname availability")
+        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"달빛러너"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"runmate"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"  RunMate  "),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertNil(WSignupNicknameValidation.fixtureError(for:"아침러너"))
+        XCTAssertEqual(WSignupNicknameValidation.normalized("  cafe\u{301}  "),"café")
+        XCTAssertNil(WSignupWeightValidation.error(for:""))
+        XCTAssertNil(WSignupWeightValidation.error(for:"20"))
+        XCTAssertNil(WSignupWeightValidation.error(for:"300"))
+        XCTAssertNil(WSignupWeightValidation.error(for:"62.5"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"19.9"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"300.1"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"nan"))
+    }
+
+    @MainActor func testConsentSequenceCancellationRestoresPriorChecksOnReentry() {
+        let state=WireState();state.screen="A02";state.consentSequenceID=UUID();state.consentSequenceOriginalTerms=false;state.consentSequenceOriginalPrivacy=false
+        state.consentTerms=true;state.consentPrivacy=false;state.consentBusy=true
+        state.leaveAuth(for:"A19")
+        XCTAssertNil(state.consentSequenceID)
+        XCTAssertFalse(state.consentBusy)
+        XCTAssertFalse(state.consentTerms)
+        XCTAssertFalse(state.consentPrivacy)
+        state.screen="A19";state.screen="A02"
+        XCTAssertNil(state.consentSequenceID,"A cancelled animation cannot resume when A02 is re-entered")
+    }
+
     func testSourceDistanceFormattingKeepsAtMostTwoDecimalPlaces() {
         XCTAssertEqual(MovNumber.display(3.456),"3.46")
         XCTAssertEqual(MovNumber.display(3.4),"3.4")
