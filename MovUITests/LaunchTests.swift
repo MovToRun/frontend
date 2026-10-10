@@ -534,6 +534,79 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
+    func launchCommunityNotifications(screen:String="C01",scenario:String){
+        app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-notifications-\(UUID().uuidString)","-wire-reset","-appearance","light",scenario]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+    }
+
+    func testCommunityNotificationProfileEntryRoutesAndBackContext(){
+        launchCommunityNotifications(scenario:"-wire-community-notification-samples")
+        XCTAssertTrue(app.buttons["communitySearch"].exists,"C01 keeps its search action")
+        XCTAssertFalse(app.buttons["communityNotificationBell"].exists,"C01 does not gain a notification bell")
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        let bell=app.buttons["communityNotificationBell"]
+        XCTAssertTrue(bell.waitForExistence(timeout:5));XCTAssertEqual(bell.value as? String,"읽지 않음")
+        bell.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityNotification-sample-verification"].exists)
+
+        app.buttons["communityNotification-sample-verification"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        XCTAssertEqual(app.buttons["communityNotification-sample-verification"].value as? String,"읽음")
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+
+        app.buttons["communityNotificationBell"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        app.buttons["communityNotification-sample-application"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+
+        app.buttons["communityNotificationBell"].tap()
+        app.buttons["communityNotification-sample-crew-board"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+
+        app.buttons["communityNotificationBell"].tap()
+        app.buttons["communityNotification-sample-post"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"오늘은 강변을 따라 5 km")
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+
+        app.buttons["communityNotificationBell"].tap()
+        app.buttons["communityNotification-sample-feed"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        app.buttons["communityNotificationBackFromFeed"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].waitForExistence(timeout:5),"Opening the feed from a notification keeps the C24 return context")
+        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+    }
+
+    func testCommunityNotificationEmptyStateAndProfileBadge(){
+        launchCommunityNotifications(scenario:"-wire-empty-community-notifications")
+        app.buttons["communityOpenOwnProfile"].tap()
+        let bell=app.buttons["communityNotificationBell"]
+        XCTAssertTrue(bell.waitForExistence(timeout:5));XCTAssertEqual(bell.value as? String,"읽음")
+        bell.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityNotificationEmptyState"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
+    }
+
+    func testCommunityNotificationDeletedTargetStaysOnListAndMarksRead(){
+        launchCommunityNotifications(screen:"C24",scenario:"-wire-community-notification-missing-target")
+        let row=app.buttons["communityNotification-missing-post"]
+        XCTAssertTrue(row.waitForExistence(timeout:5));XCTAssertEqual(row.value as? String,"읽지 않음")
+        row.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        XCTAssertTrue(app.staticTexts["communityNotificationError"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.buttons["communityNotification-missing-post"].value as? String,"읽음")
+    }
+
     func testCommunityCrewBrowseApplyAndCancelStaysLocal() {
         launchCommunity("C01")
         app.buttons["communityOpenCrews"].tap()

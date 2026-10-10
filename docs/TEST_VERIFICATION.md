@@ -68,6 +68,21 @@ The Settings-button wait failure was transient; it did not remain as a failing t
 - One iPhone 17 Pro simulator: `testCommunityViewCountPolicyUsesMemberPostAndKSTDayAndSkipsAuthor` passed, covering KST midnight rollover, per-member/per-post de-duplication, own-post exclusion, and 60/2,000/300 character limit functions.
 - UI regressions cover feed-photo and blank-card-area detail navigation, detail photo zoom/close, first-vs-repeat detail view increments, empty-action disabled states, 61/2,001/301-character input attempts, and draft preservation after backing out of preview.
 - The view count remains a review-only in-memory provider. The server remains authoritative; list and preview rendering do not record views.
+
+### PR #38 independent verification outcome
+
+- Independently reviewed PR #38 head `be503b0d8170cde6733a782cecc9c8848eff7862` (tree `31ce66f184f14b1ce7886d974c7f3c730613388e`) on the existing iPhone 17 Pro / iOS 26.3.1, using a temporary source copy, unique app/test bundle identifiers and isolated fixture storage.
+- Unit suite: 72/72 passed.
+- Focused authentication UI run: 7/8 passed on the first run. `testPasswordResetCompleteFlowAndPasswordPolicy()` failed at the A13 password guidance copy assertion; that same test passed when rerun alone. The independent report did not record a clean combined rerun, so this remains an initial-run failure followed by an isolated pass.
+- This is separate from the author’s 80/80 report in the PR #38 implementation entry above. The independent run did not merge the PR. Full UI and pixel/motion QA remain open.
+
+## Community notifications (C24)
+
+- Branch: `feature/community-notifications-c24`, based on merged PR #38 main SHA `043cd0498b8783df47bc13dc22f73de15cb7a511`.
+- Final focused run: 75/75 passed (70 `ThemeTests` + 5 focused UI tests, 0 failed, 0 skipped) on the existing iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It used a temporary source copy, unique app/unit/UI bundle identifiers and isolated fixture storage.
+- UI coverage: C08 notification entry/badge, C24 empty and read states, C01 feed, C04 post, C11 verification, C18 application and C19 crew-board destinations, back to C24/C08 context, and deleted-target handling. Existing N01 read/retry and profile regressions also passed.
+- Community notifications are session-local examples. Verification submission, crew application and crew announcement actions append local rows; read state and notifications reset when the process restarts. No push or server notification is sent. C01 keeps its existing search action and has no notification bell.
+- Result bundle: `/tmp/mov-c24-verified-20261010.xcresult`. The original C24 row/title/body spacing was used as the layout reference; full source/app pixel and motion QA remains open.
 - Compact 320 pt dark appearance is exercised by the feed/photo/detail-image UI test. Full pixel/motion QA is not part of this correction.
 
 ### Community nested comment replies
