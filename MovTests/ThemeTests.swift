@@ -639,6 +639,23 @@ extension ThemeTests {
 
 
 extension ThemeTests {
+    @MainActor func testLoginFailureRetryResetsOnlyFailureRoute() {
+        let state=WireState();state.screen="A01"
+        for _ in 0..<3 {
+            state.go("A14");state.go("A04")
+            XCTAssertEqual(state.path,["A01","A14"])
+            state.go("A01")
+            XCTAssertEqual(state.screen,"A01")
+            XCTAssertTrue(state.path.isEmpty,"Retry must not leave A04 or its provider route on the back stack")
+        }
+
+        state.go("A07");state.go("A19");state.go("A02");state.go("A03")
+        XCTAssertEqual(state.path,["A01","A07","A19","A02"],"Resetting A04 must not alter ordinary onboarding history")
+        state.back()
+        XCTAssertEqual(state.screen,"A02")
+        XCTAssertEqual(state.path,["A01","A07","A19"])
+    }
+
     func testSourceDistanceFormattingKeepsAtMostTwoDecimalPlaces() {
         XCTAssertEqual(MovNumber.display(3.456),"3.46")
         XCTAssertEqual(MovNumber.display(3.4),"3.4")

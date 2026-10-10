@@ -276,7 +276,7 @@ enum WRootTab: Int, CaseIterable {
         leaveAuth(for:"T05");forward=false;screen="T05";pending="T05";error=""
     }
     func go(_ next:String){guard next != screen else{return};
-        if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12"].contains(screen)){
+        if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12","A04"].contains(screen)){
             leaveAuth(for:next);path=[];screen=next;forward=true;rootIndex=2;error="";return
         };if next=="T05" && (Self.providerRoutes.contains(screen) || resetBack=="T05"){returnToProviders();return};if ["T17","A18"].contains(next){if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index+1))}else{path=["T01","T05"]};leaveAuth(for:next);forward=true;screen=next;error="";return};if screen=="A18" && next=="A01"{path=[];leaveAuth(for:next);screen=next;error="";return};leaveAuth(for:next);forward=true;let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][next] ?? roots.firstIndex(of:next){forward=index>rootIndex;previousRootIndex=rootIndex;rootIndex=index};path.append(screen);screen=next;error=""}
     func openRecord(_ record:RunRecord){selected=record.id;forward=true;path.append(screen);screen="L04";error=""}

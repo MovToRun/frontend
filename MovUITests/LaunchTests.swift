@@ -649,6 +649,21 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
 
+    func testRepeatedLoginFailureRetryAndBackReturnToLogin() {
+        for _ in 0..<3 {
+            open("A14",reset:false)
+            tap("인증 오류 · 예시")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-A04"].waitForExistence(timeout:5))
+            tap("authFailureRetry")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+
+            open("A14",reset:false)
+            tap("인증 오류 · 예시")
+            tap("뒤로")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+        }
+    }
+
     func testPasswordResetAndEmailMethodManagement() {
         open("A01");tap("비밀번호 찾기");tap("가상 예시값 채우기");tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A11"].waitForExistence(timeout:5))
