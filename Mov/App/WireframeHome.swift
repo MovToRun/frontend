@@ -119,17 +119,17 @@ private struct WReview55GoalSelector: View {
         let surplus=value > goal ? (unit == "km" ? "\(MovNumber.display(value-goal)) km 더 달렸어요" : "\(RunGoal.duration(Int(value-goal))) 더 달렸어요") : ""
         return VStack(alignment:.leading,spacing:0) {
             HStack(alignment:.firstTextBaseline,spacing:0) {
-                Text(title).foregroundStyle(W.muted).frame(width:28,alignment:.leading)
-                Text(actual).fontWeight(.medium).lineLimit(1).minimumScaleFactor(0.8)
+                Text(title).font(.system(size:12)).foregroundStyle(W.muted).frame(width:28,alignment:.leading).padding(.trailing,9)
+                Text(actual).font(.system(size:13,weight:.medium)).lineLimit(1).minimumScaleFactor(0.8)
                     .accessibilityIdentifier("homeSummaryActual-\(id)")
-                Text(" / \(target)").foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
+                Text(" / \(target)").font(.system(size:11)).foregroundStyle(W.muted).lineLimit(1).minimumScaleFactor(0.8)
                     .accessibilityIdentifier("homeSummaryTarget-\(id)")
                 Spacer(minLength:8)
                 HStack(spacing:4) {
                     if reached { Image(systemName:"checkmark").foregroundStyle(W.lime).accessibilityHidden(true) }
                     Text("\(percentage)%").monospacedDigit()
                 }.font(.system(size:11)).accessibilityIdentifier("homeSummaryPercent-\(id)")
-            }.font(.system(size:13))
+            }
             if !surplus.isEmpty { Text(surplus).font(.system(size:10)).foregroundStyle(W.muted).padding(.leading,37).accessibilityIdentifier("homeSummaryOverage-\(id)") }
         }.padding(.vertical,8)
             .overlay(alignment:.top) { if id == "time" { W.line.frame(height:1) } }
@@ -144,6 +144,9 @@ private struct WReview55GoalSelector: View {
             }
             .padding(3).background(W.soft,in:RoundedRectangle(cornerRadius:14))
             .padding(.bottom,9)
+            .accessibilityElement(children:.contain)
+            .accessibilityLabel("크게 볼 주간 목표")
+            .accessibilityIdentifier("homeGoalSelector")
             Group {
                 if selected == "time" {
                     ring(minutes,"분",timeGoal,WeeklyGoal.percent(value:minutes,goal:timeGoal),"time")
@@ -167,7 +170,7 @@ private struct WReview55GoalSelector: View {
         } label: {
             Text(title).font(.system(size:13,weight:.medium))
                 .foregroundStyle(selected == kind ? Color(red:32/255,green:41/255,blue:37/255):W.muted)
-                .frame(minWidth:76,minHeight:44).padding(.horizontal,17)
+                .padding(.horizontal,17).frame(minWidth:76,minHeight:44)
                 .background(selected == kind ? W.lime:Color.clear,in:RoundedRectangle(cornerRadius:11))
                 .contentShape(RoundedRectangle(cornerRadius:11))
                 .animation(reduceMotion ? nil:.easeOut(duration:0.18),value:selected)
