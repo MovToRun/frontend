@@ -18,6 +18,34 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityNotificationCenterTracksReadStateAndEmptyState() {
+        var center=WCommunityNotificationCenter()
+        XCTAssertTrue(center.hasUnread)
+        XCTAssertTrue(center.isUnread("community-welcome"))
+        center.markRead("community-welcome")
+        XCTAssertFalse(center.hasUnread)
+        XCTAssertFalse(center.isUnread("community-welcome"))
+        center.markRead("missing")
+        XCTAssertEqual(center.readIDs,["community-welcome"])
+        XCTAssertTrue(WCommunityNotificationCenter(notifications:[]).notifications.isEmpty)
+    }
+
+    func testCommunityNotificationDestinationsRejectMissingOrInaccessibleTargets() {
+        let crews:Set<String>=["dawn","river"]
+        let members:Set<String>=["dawn"]
+        let applications:Set<String>=["river"]
+        let posts:Set<String>=["p1"]
+        XCTAssertEqual(WCommunityNotificationPolicy.destination(for:.feed,crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts),"C01")
+        XCTAssertEqual(WCommunityNotificationPolicy.destination(for:.verification,crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts),"C11")
+        XCTAssertEqual(WCommunityNotificationPolicy.destination(for:.application(crewID:"river"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts),"C18")
+        XCTAssertNil(WCommunityNotificationPolicy.destination(for:.application(crewID:"deleted"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts))
+        XCTAssertNil(WCommunityNotificationPolicy.destination(for:.application(crewID:"dawn"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts))
+        XCTAssertEqual(WCommunityNotificationPolicy.destination(for:.crewBoard(crewID:"dawn"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts),"C19")
+        XCTAssertNil(WCommunityNotificationPolicy.destination(for:.crewBoard(crewID:"river"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts))
+        XCTAssertEqual(WCommunityNotificationPolicy.destination(for:.post(postID:"p1"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts),"C04")
+        XCTAssertNil(WCommunityNotificationPolicy.destination(for:.post(postID:"blocked-or-deleted"),crewIDs:crews,memberCrewIDs:members,applicationCrewIDs:applications,accessiblePostIDs:posts))
+    }
+
     func testCommunityCourseRequiresValidLocalRecordsAndClampsExamplePlayback() {
         let date=Date()
         let valid=RunRecord(date:date,title:"유효 예시",seconds:600,kilometers:2,isExample:true)

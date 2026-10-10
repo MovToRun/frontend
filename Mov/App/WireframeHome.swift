@@ -447,6 +447,44 @@ struct WCommunityPost:Identifiable {
     var course:WCommunityCourse?=nil
 }
 
+enum WCommunityNotificationTarget:Equatable {
+    case feed
+    case verification
+    case application(crewID:String)
+    case crewBoard(crewID:String)
+    case post(postID:String)
+}
+
+struct WCommunityNotification:Identifiable,Equatable {
+    let id:String
+    let title:String
+    let text:String
+    let target:WCommunityNotificationTarget
+}
+
+struct WCommunityNotificationCenter {
+    static let welcome=WCommunityNotification(id:"community-welcome",title:"커뮤니티 소식",text:"새로운 게시글과 모임 소식을 확인해 보세요.",target:.feed)
+    var notifications:[WCommunityNotification]
+    var readIDs:Set<String>=[]
+    init(notifications:[WCommunityNotification]=[welcome]){self.notifications=notifications}
+    var hasUnread:Bool{notifications.contains{!readIDs.contains($0.id)}}
+    func isUnread(_ id:String)->Bool{notifications.contains(where:{$0.id==id}) && !readIDs.contains(id)}
+    mutating func markRead(_ id:String){if notifications.contains(where:{$0.id==id}){readIDs.insert(id)}}
+    mutating func append(_ notification:WCommunityNotification){notifications.insert(notification,at:0)}
+}
+
+enum WCommunityNotificationPolicy {
+    static func destination(for target:WCommunityNotificationTarget,crewIDs:Set<String>,memberCrewIDs:Set<String>,applicationCrewIDs:Set<String>,accessiblePostIDs:Set<String>)->String? {
+        switch target {
+        case .feed:return "C01"
+        case .verification:return "C11"
+        case .application(let crewID):guard crewIDs.contains(crewID),applicationCrewIDs.contains(crewID) else{return nil};return "C18"
+        case .crewBoard(let crewID):guard crewIDs.contains(crewID),memberCrewIDs.contains(crewID) else{return nil};return "C19"
+        case .post(let postID):guard accessiblePostIDs.contains(postID) else{return nil};return "C04"
+        }
+    }
+}
+
 enum WCommunityCoursePublicationResult {case unauthenticated,ownerChanged,missingRecord,invalidRecord,eligible(RunRecord)}
 
 enum WCommunityCoursePolicy {
@@ -1069,8 +1107,13 @@ extension WireframeRoot {
         let topHotPosts=Array(communityHotVisiblePosts.prefix(3))
         return VStack(spacing:0){
             HStack {
-                Button { go("C02") } label:{Image(systemName:"square.grid.2x2").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
-                    .buttonStyle(.plain).accessibilityLabel("전체 게시판").accessibilityIdentifier("communityAllBoards")
+                if ui.path.last=="C24" {
+                    Button(action:back){Image(systemName:"chevron.left").font(.system(size:17,weight:.medium)).frame(width:44,height:44).contentShape(Rectangle())}
+                        .buttonStyle(.plain).accessibilityLabel("알림으로 돌아가기").accessibilityIdentifier("communityNotificationBackFromFeed")
+                } else {
+                    Button { go("C02") } label:{Image(systemName:"square.grid.2x2").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
+                        .buttonStyle(.plain).accessibilityLabel("전체 게시판").accessibilityIdentifier("communityAllBoards")
+                }
                 Spacer(minLength:0)
                 Button{ui.communityCrewTab="my";go("C15")}label:{Image(systemName:"person.3").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("크루").accessibilityIdentifier("communityOpenCrews")
                 Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
@@ -1188,6 +1231,7 @@ extension WireframeRoot {
             let result=WCommunityCrewPolicy.announcementResult(crew:crew,actorID:ui.communityViewerMemberID,title:title,text:text)
             guard result == .ready else{ui.communityCrewManageError=communityCrewAnnouncementError(result);return}
             var updated=crew;updated.announcements.insert(WCommunityCrewAnnouncement(id:UUID().uuidString,title:title,text:text,senderMemberID:ui.communityViewerMemberID,createdAt:Date()),at:0);ui.communityCrewOverrides[crew.id]=updated
+            ui.communityNotificationCenter.append(WCommunityNotification(id:UUID().uuidString,title:"크루 공지 새 글",text:title,target:.crewBoard(crewID:crew.id)))
             ui.communityCrewManageFeedback="로컬 알림 예시를 멤버 \(crew.memberIDs.count)명에게 기록했어요. 실제 알림은 전송되지 않았어요."
         }
         ui.communityCrewManageDraft=nil;ui.communityCrewManageError="";performBack()
@@ -1325,6 +1369,7 @@ extension WireframeRoot {
         case .invalidMemo:ui.communityCrewJoinError="메모는 300자 안으로 적어 주세요."
         case .ready:
             ui.communityCrewApplications.append(WCommunityCrewApplication(id:UUID().uuidString,crewID:crew.id,applicantMemberID:ui.communityViewerMemberID,memo:ui.communityCrewJoinMemo.trimmingCharacters(in:.whitespacesAndNewlines),status:.pending))
+            ui.communityNotificationCenter.append(WCommunityNotification(id:UUID().uuidString,title:"가입 신청이 접수됐어요",text:"\(crew.name) 가입 신청 상태를 확인해 보세요.",target:.application(crewID:crew.id)))
             ui.communityCrewJoinMemo="";ui.communityCrewJoinError="";go("C18")
         }
     }
@@ -2025,7 +2070,7 @@ extension WireframeRoot {
         ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines);ui.profile.introduction=ui.introduction;ui.profile.region=ui.region;ui.profile.photo=ui.photo;ui.save();ui.communityProfileEditing=false;ui.error=""
     }
     var communityOwnProfile:some View {
-        VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28")
+        VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28",notificationRoute:"C24",notificationIdentifier:"communityNotificationBell")
             if ui.communityProfileEditing {
                 ScrollView{VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22)}
                 HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12)
@@ -2033,6 +2078,57 @@ extension WireframeRoot {
                 ScrollView{VStack(alignment:.leading,spacing:18){communityRunnerCard(communityRunner(ui.communityViewerMemberID),photo:communityRunnerPhoto(ui.communityViewerMemberID),zoomable:false);let posts=communityProfilePosts(for:ui.communityViewerMemberID);communityProfileMetrics(ui.communityViewerMemberID,posts:posts);Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit");Text("작성한 글").font(W.font(17,.semibold));if posts.isEmpty{Text("아직 작성한 글이 없어요").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityProfilePostsEmpty")}else{ForEach(posts){post in communityPostCard(post)}}}.padding(.horizontal,22).padding(.top,16).padding(.bottom,24)}
             }
         }.background(W.paper).accessibilityElement(children:.contain).accessibilityIdentifier("communityOwnProfile")
+    }
+
+    var communityNotifications:some View {
+        WPage(title:"알림",back:back){
+            if !ui.communityNotificationError.isEmpty{WNotice(text:ui.communityNotificationError,danger:true).accessibilityIdentifier("communityNotificationError")}
+            if ui.communityNotificationCenter.notifications.isEmpty {
+                Text("새 알림이 없어요").font(W.font(15,.medium)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:180).accessibilityIdentifier("communityNotificationEmptyState")
+            } else {
+                ForEach(ui.communityNotificationCenter.notifications){notification in
+                    Button{openCommunityNotification(notification)}label:{
+                        HStack(alignment:.top,spacing:12){VStack(alignment:.leading,spacing:7){Text(notification.title).font(W.font(15,.medium)).foregroundStyle(W.ink).frame(maxWidth:.infinity,alignment:.leading);Text(notification.text).font(W.font(12)).foregroundStyle(W.muted).lineSpacing(6).frame(maxWidth:.infinity,alignment:.leading)}
+                            .padding(.vertical,20).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                            if ui.communityNotificationCenter.isUnread(notification.id){Circle().fill(Color.wire(0xFF5A5F,0xFF5A5F)).frame(width:5,height:5).padding(.top,5).accessibilityHidden(true)}else{Color.clear.frame(width:5,height:5).padding(.top,5).accessibilityHidden(true)}
+                    }}.buttonStyle(.plain).accessibilityIdentifier("communityNotification-\(notification.id)").accessibilityLabel("\(notification.title), \(notification.text)").accessibilityValue(ui.communityNotificationCenter.isUnread(notification.id) ? "읽지 않음":"읽음")
+                        .overlay(alignment:.bottom){W.line.frame(height:1)}
+                }
+                WText(text:"커뮤니티 알림은 이 기기의 예시 상태예요. 실제 푸시 알림은 전송되지 않아요.",small:true).padding(.top,8).accessibilityIdentifier("communityNotificationLocalNotice")
+            }
+        }actions:{}
+    }
+
+    func prepareCommunityNotificationSamples(){
+        let sampleApplication=WCommunityCrewApplication(id:"community-notification-application",crewID:"river",applicantMemberID:ui.communityViewerMemberID,memo:"주말에 함께 달리고 싶어요.",status:.pending)
+        if !ui.communityCrewApplications.contains(where:{$0.id==sampleApplication.id}){ui.communityCrewApplications.append(sampleApplication)}
+        ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[
+            WCommunityNotification(id:"sample-feed",title:"커뮤니티 새 소식",text:"새로운 러닝 게시글을 확인해 보세요.",target:.feed),
+            WCommunityNotification(id:"sample-verification",title:"계정 인증 상태",text:"인증 신청 상태를 확인해 보세요.",target:.verification),
+            WCommunityNotification(id:"sample-application",title:"크루 가입 신청 상태",text:"모브 강변 크루 신청을 확인해 보세요.",target:.application(crewID:"river")),
+            WCommunityNotification(id:"sample-crew-board",title:"모브 새벽 크루 소식",text:"크루 게시판에서 새 소식을 확인해 보세요.",target:.crewBoard(crewID:"dawn")),
+            WCommunityNotification(id:"sample-post",title:"게시글에 새 소식",text:"오늘은 강변을 따라 5 km 게시글을 확인해 보세요.",target:.post(postID:"p1"))
+        ])
+    }
+
+    func openCommunityNotification(_ notification:WCommunityNotification){
+        ui.communityNotificationCenter.markRead(notification.id)
+        let crews=communityAllCrews()
+        let crewIDs=Set(crews.map(\.id))
+        let memberCrewIDs=Set(crews.filter(communityCrewIsMember).map(\.id))
+        let applicationCrewIDs=Set(ui.communityCrewApplications.filter{$0.applicantMemberID==ui.communityViewerMemberID}.map(\.crewID))
+        let accessiblePostIDs=Set(ui.communityPosts.filter{!$0.isCrewOnly && communityCanSeeMember($0.authorMemberID)}.map(\.id))
+        guard let route=WCommunityNotificationPolicy.destination(for:notification.target,crewIDs:crewIDs,memberCrewIDs:memberCrewIDs,applicationCrewIDs:applicationCrewIDs,accessiblePostIDs:accessiblePostIDs) else {
+            ui.communityNotificationError="연결된 내용을 찾을 수 없거나 지금은 볼 수 없어요."
+            return
+        }
+        ui.communityNotificationError=""
+        switch notification.target {
+        case .application(let crewID),.crewBoard(let crewID):ui.communitySelectedCrewID=crewID
+        case .post(let postID):ui.communitySelectedPostID=postID;ui.communityCardOriginAnonymous=ui.communityPosts.first(where:{$0.id==postID})?.board=="익명게시판";ui.communityCardOriginScreen="C24"
+        case .feed,.verification:break
+        }
+        go(route)
     }
 
     var communityConnections:some View {

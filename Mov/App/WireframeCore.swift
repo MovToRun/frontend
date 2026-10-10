@@ -285,6 +285,8 @@ struct WCommunityVerificationState:Codable,Equatable {
     var path:[String]=[]
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
+    var communityNotificationCenter=WCommunityNotificationCenter()
+    var communityNotificationError=""
     var communitySelectedPostID="p1"
     var communitySearchQuery=""
     var communitySelectedUserID="fixture-member-ga-on"
@@ -379,7 +381,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
     func submitCommunityVerification()->Bool{
         switch communityVerification.submit(communityVerification.note){
-        case .submitted:communityVerificationError="";saveCommunityVerification();return true
+        case .submitted:communityVerificationError="";saveCommunityVerification();communityNotificationCenter.append(WCommunityNotification(id:UUID().uuidString,title:"인증 신청이 접수됐어요",text:"커뮤니티 계정 인증 상태를 확인해 보세요.",target:.verification));return true
         case .invalidActivity:communityVerificationError="활동 소개를 300자 안으로 입력해 주세요."
         case .alreadyPending:communityVerificationError="인증 신청을 검토하고 있어요."
         case .alreadyApproved:communityVerificationError="계정 인증이 완료됐어요."
@@ -390,6 +392,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     private func saveCommunityVerification(){if let data=try? JSONEncoder().encode(communityVerification){defaults.set(data,forKey:"mov.wireframe.community-verification.v1")}}
     var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
     var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
+    var hasUnreadCommunityNotifications:Bool{communityNotificationCenter.hasUnread}
     func cancelReauthentication(){guard screen=="T15" else{return};settingsGrant=false;let destination=pendingBack;if path.last==destination{path.removeLast()};leaveAuth(for:destination);forward=false;screen=destination;error=""}
     struct Account:Codable {var profile:WLocalProfile;var records:[RunRecord];var goal:RunGoal;var weekly:WeeklyGoal}
     func switchLocalAccount(_ store:RunStore,clearShare:()->Void = {}){
@@ -547,6 +550,9 @@ struct WireframeRoot:View {
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
+                if reviewTools && args.contains("-wire-empty-community-notifications"){ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[])}
+                if reviewTools && args.contains("-wire-community-notification-samples"){prepareCommunityNotificationSamples()}
+                if reviewTools && args.contains("-wire-community-notification-missing-target") {ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[WCommunityNotification(id:"missing-post",title:"게시물 알림 예시",text:"삭제되었거나 접근할 수 없는 게시물입니다.",target:.post(postID:"deleted-post"))])}
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
@@ -703,7 +709,7 @@ struct WireframeRoot:View {
         .allowsHitTesting(tabsEnabled && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil)->some View {let unread = ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil,notificationRoute:String?=nil,notificationIdentifier:String?=nil)->some View {let communityNotifications=notificationRoute != nil;let unread=communityNotifications ? ui.hasUnreadCommunityNotifications:ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";let notificationID=notificationIdentifier ?? (run ? "openRecords":"notificationBell");return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":notificationRoute ?? "N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(communityNotifications ? Color.wire(0xFF5A5F,0xFF5A5F):W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":communityNotifications ? "커뮤니티 알림":"알림").accessibilityIdentifier(notificationID).accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -769,6 +775,7 @@ struct WireframeRoot:View {
         case "C32":communityCrewInformation
         case "C33":communityCrewApplicationList
         case "C23":communityReport
+        case "C24":communityNotifications
         case "C25":communityReportReceipt
         case "C28":communitySettings
         case "C29":communitySearch
