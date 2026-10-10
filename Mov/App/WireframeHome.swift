@@ -62,6 +62,7 @@ struct WLocalCommunityFollowProvider {
         if !viewerFollows.insert(target).inserted{viewerFollows.remove(target)}
         return true
     }
+    mutating func removeFollow(_ target:String){viewerFollows.remove(target)}
     func followingIDs(for user:String,viewer:String)->Set<String> {
         var ids=Set(WCommunityRunnerFixtures.baseFollowing.filter{$0.0==user}.map{$0.1})
         if user==viewer{ids.formUnion(viewerFollows)}
@@ -87,6 +88,53 @@ struct WCommunityProfileDraft:Equatable {
         self.init(nickname:profile.nickname,introduction:profile.introduction,region:profile.region,photo:WProfilePhotoPolicy.sanitizeStored(profile.photo))
     }
     func differs(from profile:WLocalProfile)->Bool {self != WCommunityProfileDraft(profile:profile)}
+}
+
+enum WCommunityReportTarget:Equatable {
+    case member(String)
+    case post(String,String)
+    var memberID:String {switch self{case .member(let id):return id;case .post(_,let memberID):return memberID}}
+    var postID:String? {if case .post(let id,_)=self{return id};return nil}
+}
+
+struct WCommunityReport:Identifiable,Equatable {
+    let id:String
+    let target:WCommunityReportTarget
+    let reason:String
+    let detail:String
+}
+
+enum WCommunityMoreMenu:Equatable {case profile(String),post(String)}
+enum WCommunityModerationDialog:Equatable {case blockProfile(String),blockPost(String,Bool),blockAfterReport(String,Bool)}
+
+struct WLocalCommunityModerationProvider {
+    static let reportReasons=["욕설·괴롭힘","스팸·광고","개인정보 노출","기타"]
+    private(set) var blockedMemberIDs:Set<String>=[]
+    private(set) var anonymousBlockedMemberIDs:Set<String>=[]
+    private(set) var reports:[WCommunityReport]=[]
+
+    mutating func block(_ memberID:String,viewerID:String,anonymous:Bool=false,knownUsers:Set<String>)->Bool {
+        guard memberID != viewerID,knownUsers.contains(memberID) else{return false}
+        guard blockedMemberIDs.insert(memberID).inserted else{return false}
+        if anonymous{anonymousBlockedMemberIDs.insert(memberID)}
+        return true
+    }
+    mutating func unblock(_ memberID:String,viewerID:String)->Bool {
+        guard memberID != viewerID,blockedMemberIDs.remove(memberID) != nil else{return false}
+        anonymousBlockedMemberIDs.remove(memberID)
+        return true
+    }
+    func isBlocked(_ memberID:String)->Bool {blockedMemberIDs.contains(memberID)}
+    func shouldHide(authorID:String,viewerID:String,ownerID:String)->Bool {
+        guard authorID != viewerID else{return false}
+        return (viewerID==ownerID && blockedMemberIDs.contains(authorID)) || (authorID==ownerID && blockedMemberIDs.contains(viewerID))
+    }
+    mutating func submitReport(_ target:WCommunityReportTarget,reason:String,detail:String)->Bool {
+        let value=detail.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard Self.reportReasons.contains(reason),value.count<=300 else{return false}
+        reports.append(WCommunityReport(id:UUID().uuidString,target:target,reason:reason,detail:value))
+        return true
+    }
 }
 
 struct WCommunityPost:Identifiable {
@@ -641,6 +689,7 @@ extension WireframeRoot {
                 Button { go("C02") } label:{Image(systemName:"square.grid.2x2").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
                     .buttonStyle(.plain).accessibilityLabel("전체 게시판").accessibilityIdentifier("communityAllBoards")
                 Spacer(minLength:0)
+                Button{go("C28")}label:{Image(systemName:"gearshape").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 설정").accessibilityIdentifier("communitySettings")
                 Button{openCommunityOwnProfile()}label:{Image(systemName:"person.crop.circle").font(.system(size:20,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("내 프로필").accessibilityIdentifier("communityOpenOwnProfile")
             }
             .overlay { BrandMark(size:26).frame(width:44,height:44).accessibilityIdentifier("communityHeaderMark") }
@@ -649,7 +698,7 @@ extension WireframeRoot {
                 VStack(alignment:.leading,spacing:0){
                     HStack(spacing:9){Text("지금 많이 보는 글").font(W.font(17,.semibold));Text("HOT").font(W.font(10,.bold)).foregroundStyle(Color(red:0.92,green:0.30,blue:0.32));Spacer()}
                         .padding(.top,16).padding(.bottom,8)
-                    ForEach(ui.communityPosts.filter{$0.hot}.prefix(3)){post in
+                    ForEach(communityVisiblePosts.filter{$0.hot}.prefix(3)){post in
                         Button { ui.communitySelectedPostID=post.id;go("C04") } label:{
                             HStack(spacing:12){Text("\(ui.communityPosts.firstIndex(where:{$0.id==post.id}).map{$0+1} ?? 1)").font(W.font(13,.medium)).foregroundStyle(W.muted).frame(width:18);Text(post.title).font(W.font(14,.medium)).lineLimit(1);Spacer(minLength:4);Text("♡ \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").font(W.font(11)).foregroundStyle(W.muted)}
                                 .frame(minHeight:44).contentShape(Rectangle())
@@ -657,7 +706,7 @@ extension WireframeRoot {
                     }
                     W.line.frame(height:1).padding(.top,10)
                     HStack{Text("러너들의 이야기").font(W.font(17,.semibold));Spacer();Text("최신순").font(W.font(11)).foregroundStyle(W.muted)}.padding(.top,22).padding(.bottom,4)
-                    ForEach(ui.communityPosts){post in communityPostCard(post)}
+                    ForEach(communityVisiblePosts){post in communityPostCard(post)}
                 }.padding(.horizontal,22).padding(.bottom,28)
             }.accessibilityIdentifier("communityFeedScroll")
         }
@@ -666,7 +715,8 @@ extension WireframeRoot {
     }
 
     func communityPostCard(_ post:WCommunityPost)->some View {
-        VStack(alignment:.leading,spacing:0){
+        let commentCount=communityVisibleComments(post).count
+        return VStack(alignment:.leading,spacing:0){
             Button { openCommunityCard(for:post.authorMemberID,origin:"C01") } label:{
                 HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:2){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer();Text(post.board).font(W.font(10,.medium)).foregroundStyle(W.muted)}
                     .frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle())
@@ -680,20 +730,33 @@ extension WireframeRoot {
             HStack(spacing:18){
                 Button { toggleCommunityLike(post.id) } label:{Label("\(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(11)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}
                     .accessibilityLabel("좋아요 \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").accessibilityIdentifier("communityLike-\(post.id)")
-                Button { ui.communitySelectedPostID=post.id;go("C04") } label:{Label("\(post.comments.count)",systemImage:"bubble.right").font(W.font(11)).foregroundStyle(W.muted)}
-                    .accessibilityLabel("댓글 \(post.comments.count)").accessibilityIdentifier("communityComments-\(post.id)")
+                Button { openCommunityPost(post) } label:{Label("\(commentCount)",systemImage:"bubble.right").font(W.font(11)).foregroundStyle(W.muted)}
+                    .accessibilityLabel("댓글 \(commentCount)").accessibilityIdentifier("communityComments-\(post.id)")
                 Button{openCommunityPost(post)}label:{Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityViews-\(post.id)")
             }.buttonStyle(.plain).padding(.horizontal,2).padding(.top,12).padding(.bottom,20)
         }.overlay(alignment:.bottom){W.line.frame(height:1)}
     }
 
     func communityAvatar(_ name:String)->some View {Text(String(name.prefix(1))).font(W.font(13,.semibold)).foregroundStyle(W.ink).frame(width:38,height:38).background(W.soft,in:Circle()).accessibilityHidden(true)}
-    func toggleCommunityLike(_ id:String){if ui.communityLikedPosts.contains(id){ui.communityLikedPosts.remove(id)}else{ui.communityLikedPosts.insert(id)}}
+    var communityVisiblePosts:[WCommunityPost]{ui.communityPosts.filter{communityCanSeeMember($0.authorMemberID)}}
+    func communityCanSeeMember(_ memberID:String,viewerID:String?=nil)->Bool {
+        !ui.communityModerationProvider.shouldHide(authorID:memberID,viewerID:viewerID ?? ui.communityViewerMemberID,ownerID:ui.communityViewerMemberID)
+    }
+    func communityVisibleComments(_ post:WCommunityPost)->[WCommunityComment] {
+        var visible=Set<String>(),result:[WCommunityComment]=[]
+        for comment in post.comments {
+            if let author=comment.authorMemberID,ui.communityModerationProvider.shouldHide(authorID:author,viewerID:ui.communityViewerMemberID,ownerID:ui.communityViewerMemberID){continue}
+            if let parent=comment.parentID,!visible.contains(parent){continue}
+            visible.insert(comment.id);result.append(comment)
+        }
+        return result
+    }
+    func toggleCommunityLike(_ id:String){guard let post=ui.communityPosts.first(where:{$0.id==id}),communityCanSeeMember(post.authorMemberID) else{return};if ui.communityLikedPosts.contains(id){ui.communityLikedPosts.remove(id)}else{ui.communityLikedPosts.insert(id)}}
     func beginCommunityCompose(board:String?=nil){ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityDraftBoard=board ?? "러닝 인증";ui.communityError="";go("C05")}
-    func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID}}
-    func openCommunityPost(_ post:WCommunityPost){ui.communitySelectedPostID=post.id;go("C04")}
+    func currentCommunityPost()->WCommunityPost?{ui.communityPosts.first{$0.id==ui.communitySelectedPostID && communityCanSeeMember($0.authorMemberID)}}
+    func openCommunityPost(_ post:WCommunityPost){guard communityCanSeeMember(post.authorMemberID) else{return};ui.communitySelectedPostID=post.id;go("C04")}
     func recordCommunityDetailView(_ post:WCommunityPost){
-        guard let index=ui.communityPosts.firstIndex(where:{$0.id==post.id}) else{return}
+        guard communityCanSeeMember(post.authorMemberID),let index=ui.communityPosts.firstIndex(where:{$0.id==post.id}) else{return}
         if ui.communityViewCountProvider.recordDetailView(viewerMemberID:ui.communityViewerMemberID,postID:post.id,authorMemberID:post.authorMemberID,date:Date()) {ui.communityPosts[index].views+=1}
     }
     func publishCommunityDraft(){
@@ -777,13 +840,46 @@ extension WireframeRoot {
         .accessibilityElement(children:.contain).accessibilityIdentifier("communityRunnerCard")
     }
 
-    func openCommunityCard(for userID:String,origin:String){ui.communitySelectedUserID=userID;ui.communityCardOriginScreen=origin;go("C07")}
+    func openCommunityCard(for userID:String,origin:String){guard communityCanSeeMember(userID) else{return};ui.communitySelectedUserID=userID;ui.communityCardOriginScreen=origin;go("C07")}
     func openCommunityOwnProfile(){ui.communitySelectedUserID=ui.communityViewerMemberID;ui.communityProfileEditing=false;go("C08")}
     func communityKnownUserIDs()->Set<String>{Set(WCommunityRunnerFixtures.values.map(\.id)+[ui.communityViewerMemberID])}
-    func communityFollowingIDs(for userID:String)->[String]{ui.communityFollowProvider.followingIDs(for:userID,viewer:ui.communityViewerMemberID).sorted()}
-    func communityFollowerIDs(for userID:String)->[String]{ui.communityFollowProvider.followerIDs(for:userID,viewer:ui.communityViewerMemberID).sorted()}
-    func communityProfilePosts(for userID:String)->[WCommunityPost]{ui.communityPosts.filter{$0.authorMemberID==userID && $0.board != "익명게시판"}}
-    func toggleCommunityFollow(_ userID:String){_ = ui.communityFollowProvider.toggle(userID,viewer:ui.communityViewerMemberID,knownUsers:communityKnownUserIDs())}
+    func communityFollowingIDs(for userID:String)->[String]{ui.communityFollowProvider.followingIDs(for:userID,viewer:ui.communityViewerMemberID).filter{communityCanSeeMember($0)}.sorted()}
+    func communityFollowerIDs(for userID:String)->[String]{ui.communityFollowProvider.followerIDs(for:userID,viewer:ui.communityViewerMemberID).filter{communityCanSeeMember($0)}.sorted()}
+    func communityProfilePosts(for userID:String)->[WCommunityPost]{ui.communityPosts.filter{$0.authorMemberID==userID && $0.board != "익명게시판" && communityCanSeeMember($0.authorMemberID)}}
+    func toggleCommunityFollow(_ userID:String){guard communityCanSeeMember(userID) else{return};_ = ui.communityFollowProvider.toggle(userID,viewer:ui.communityViewerMemberID,knownUsers:communityKnownUserIDs())}
+
+    func beginCommunityReport(_ target:WCommunityReportTarget){
+        guard communityReportTargetIsAvailable(target) else{return}
+        ui.communityMoreMenu=nil;ui.communityReportTarget=target;ui.communityReportReason=WLocalCommunityModerationProvider.reportReasons[0];ui.communityReportDetail="";ui.communityReportError="";go("C23")
+    }
+    func communityReportTargetIsAvailable(_ target:WCommunityReportTarget)->Bool {
+        let id=target.memberID
+        guard id != ui.communityViewerMemberID,communityKnownUserIDs().contains(id),communityCanSeeMember(id) else{return false}
+        if case .post(let postID,_)=target{return ui.communityPosts.contains(where:{$0.id==postID && $0.authorMemberID==id && communityCanSeeMember($0.authorMemberID)})}
+        return true
+    }
+    func submitCommunityReport(){
+        guard let target=ui.communityReportTarget,communityReportTargetIsAvailable(target) else{ui.communityReportError="신고할 대상을 확인할 수 없어요.";return}
+        guard ui.communityReportDetail.count<=300 else{ui.communityReportError="상세 사유는 300자 이내로 입력해 주세요.";return}
+        guard ui.communityModerationProvider.submitReport(target,reason:ui.communityReportReason,detail:ui.communityReportDetail) else{ui.communityReportError="신고 사유를 선택해 주세요.";return}
+        let post=target.postID.flatMap{id in ui.communityPosts.first{$0.id==id}}
+        ui.communityReportTarget=nil;ui.communityReportError="";go("C25")
+        ui.communityModerationDialog = .blockAfterReport(target.memberID,post?.board=="익명게시판")
+    }
+    func confirmCommunityModerationAction(){
+        guard let dialog=ui.communityModerationDialog else{return}
+        ui.communityModerationDialog=nil
+        switch dialog {
+        case .blockProfile(let id):applyCommunityBlock(id,anonymous:false)
+        case .blockPost(let id,let anonymous),.blockAfterReport(let id,let anonymous):applyCommunityBlock(id,anonymous:anonymous)
+        }
+    }
+    func applyCommunityBlock(_ memberID:String,anonymous:Bool){
+        guard ui.communityModerationProvider.block(memberID,viewerID:ui.communityViewerMemberID,anonymous:anonymous,knownUsers:communityKnownUserIDs()) else{return}
+        ui.communityFollowProvider.removeFollow(memberID);ui.communityMoreMenu=nil;ui.communityReportTarget=nil;ui.communityReplyToID=nil;ui.communityComment="";ui.path=[]
+        ui.screen="C01";ui.rootIndex=3;ui.previousRootIndex=3;ui.forward=false
+    }
+    func unblockCommunityMember(_ memberID:String){_ = ui.communityModerationProvider.unblock(memberID,viewerID:ui.communityViewerMemberID)}
 
     func communityProfileMetrics(_ userID:String,posts:[WCommunityPost])->some View {
         let followers=communityFollowerIDs(for:userID),following=communityFollowingIDs(for:userID)
@@ -818,7 +914,7 @@ extension WireframeRoot {
         let runner=communityRunner(ui.communitySelectedUserID),posts=communityProfilePosts(for:ui.communitySelectedUserID)
         let own=runner.id==ui.communityViewerMemberID
         return VStack(spacing:0){
-            WHeader(title:runner.name,back:back)
+            WHeader(title:runner.name,back:back,trailing:own ? AnyView(EmptyView()):AnyView(Button{ui.communityMoreMenu = .profile(runner.id)}label:{Image(systemName:"ellipsis").font(.system(size:19,weight:.medium)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("프로필 더보기").accessibilityIdentifier("communityProfileMore")))
             ScrollView{VStack(alignment:.leading,spacing:18){
                 communityRunnerCard(runner,photo:communityRunnerPhoto(runner.id),zoomable:false)
                 communityProfileMetrics(runner.id,posts:posts)
@@ -843,7 +939,7 @@ extension WireframeRoot {
         ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines);ui.profile.introduction=ui.introduction;ui.profile.region=ui.region;ui.profile.photo=ui.photo;ui.save();ui.communityProfileEditing=false;ui.error=""
     }
     var communityOwnProfile:some View {
-        VStack(spacing:0){rootHeader("내 정보")
+        VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28")
             if ui.communityProfileEditing {
                 ScrollView{VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22)}
                 HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12)
@@ -869,32 +965,86 @@ extension WireframeRoot {
         }.padding(12).background(W.paper,in:RoundedRectangle(cornerRadius:18)).padding(18)}.accessibilityElement(children:.contain).accessibilityIdentifier("communityPhotoViewer")
     }
 
+    var communityReport:some View {
+        WPage(title:"신고",back:back){
+            Text("어떤 문제가 있나요?").font(W.font(20,.semibold)).accessibilityIdentifier("communityReportHeading")
+            Picker("신고 사유",selection:$ui.communityReportReason){ForEach(WLocalCommunityModerationProvider.reportReasons,id:\.self){Text($0).tag($0)}}.pickerStyle(.inline).labelsHidden().accessibilityIdentifier("communityReportReason")
+            VStack(alignment:.leading,spacing:8){Text("상세 사유 (선택)").font(W.font(14,.medium));TextEditor(text:$ui.communityReportDetail).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:120).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityReportDetail");Text("\(ui.communityReportDetail.count)/300").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
+            if !ui.communityReportError.isEmpty{WNotice(text:ui.communityReportError,danger:true)}
+        }actions:{
+            Button("신고 접수"){submitCommunityReport()}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityReportSubmit")
+            Button("취소"){ui.communityReportTarget=nil;back()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityReportCancel")
+        }.onChange(of:ui.communityReportDetail){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityReportDetail=limited}}
+    }
+
+    var communityReportReceipt:some View {
+        WPage(title:"신고",back:back){VStack(alignment:.leading,spacing:12){Text("신고가 접수됐어요").font(W.font(21,.semibold));Text("보내주신 내용을 확인할게요.").font(W.font(14)).foregroundStyle(W.muted)}.accessibilityIdentifier("communityReportReceipt")}
+        actions:{Button("커뮤니티로 돌아가기"){ui.communityModerationDialog=nil;go("C01");ui.path=[]}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityReportDone")}
+    }
+
+    var communitySettings:some View {
+        WPage(title:"커뮤니티 설정",back:back){
+            WRow(title:"차단한 사용자",action:{go("C42")},height:58,arrow:true).accessibilityIdentifier("communityBlockedUsersRow")
+        }actions:{}
+    }
+
+    var communityBlockedUsers:some View {
+        let ids=ui.communityModerationProvider.blockedMemberIDs.sorted()
+        return WPage(title:"차단한 사용자",back:back){
+            if ids.isEmpty {Text("차단한 사용자가 없어요").font(W.font(15,.medium)).foregroundStyle(W.muted).frame(maxWidth:.infinity).padding(.vertical,36).accessibilityIdentifier("communityBlockedUsersEmpty")}
+            else {ForEach(ids,id:\.self){id in
+                let anonymous=ui.communityModerationProvider.anonymousBlockedMemberIDs.contains(id),runner=communityRunner(id)
+                HStack(spacing:12){if anonymous{communityAvatar("차단한 사용자")}else{communityAvatar(runner.name)};VStack(alignment:.leading,spacing:4){Text(anonymous ? "차단한 사용자":"\(runner.name)").font(W.font(14,.medium));if anonymous{Text("익명으로 차단한 사용자예요").font(W.font(11)).foregroundStyle(W.muted)}};Spacer();Button("차단 해제"){unblockCommunityMember(id)}.font(W.font(12,.medium)).accessibilityIdentifier("communityUnblock-\(id)")}.frame(minHeight:64).overlay(alignment:.bottom){W.line.frame(height:1)}
+            }}
+        }actions:{}
+    }
+
+    func communityModerationMenu(_ menu:WCommunityMoreMenu)->some View {
+        ZStack(alignment:.topTrailing){Color.black.opacity(0.18).ignoresSafeArea().onTapGesture{ui.communityMoreMenu=nil}
+            VStack(spacing:0){
+                let isPost:Bool={if case .post=menu{return true};return false}()
+                Button{ui.communityMoreMenu=nil;beginCommunityReport(isPost ? .post(menuID(menu),communityPostAuthorID(menuID(menu))):.member(menuID(menu)))}label:{Label("신고",systemImage:"exclamationmark.bubble").font(W.font(14,.medium)).frame(maxWidth:.infinity,minHeight:48,alignment:.leading).padding(.horizontal,14)}.buttonStyle(.plain).accessibilityIdentifier(isPost ? "communityMenuReportPost":"communityMenuReportProfile")
+                Button{ui.communityMoreMenu=nil;ui.communityModerationDialog=isPost ? .blockPost(communityPostAuthorID(menuID(menu)),ui.communityPosts.first(where:{$0.id==menuID(menu)})?.board=="익명게시판"):.blockProfile(menuID(menu))}label:{Label("차단",systemImage:"hand.raised").font(W.font(14,.medium)).foregroundStyle(Color.wire(0xC83E49,0xFF8C95)).frame(maxWidth:.infinity,minHeight:48,alignment:.leading).padding(.horizontal,14)}.buttonStyle(.plain).accessibilityIdentifier(isPost ? "communityMenuBlockPost":"communityMenuBlockProfile")
+                Button{ui.communityMoreMenu=nil}label:{Text("닫기").font(W.font(13)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:42)}.buttonStyle(.plain).accessibilityIdentifier("communityMenuClose")
+            }.frame(width:210).background(W.paper,in:RoundedRectangle(cornerRadius:16)).overlay(RoundedRectangle(cornerRadius:16).stroke(W.line,lineWidth:1)).shadow(color:.black.opacity(0.15),radius:18,y:6).padding(.top,56).padding(.trailing,12)
+        }
+    }
+    func menuID(_ menu:WCommunityMoreMenu)->String{switch menu{case .profile(let id):id;case .post(let id):id}}
+    func communityPostAuthorID(_ postID:String)->String{ui.communityPosts.first(where:{$0.id==postID})?.authorMemberID ?? ""}
+
+    func communityModerationDialogView(_ dialog:WCommunityModerationDialog)->some View {
+        let title:String,body:String,skip:String
+        switch dialog{case .blockProfile:title="이 러너를 차단할까요?";body="이 러너의 글과 댓글을 더 이상 표시하지 않아요.";skip="취소";case .blockPost:title="작성자를 차단할까요?";body="이 작성자의 글과 댓글을 더 이상 표시하지 않아요.";skip="취소";case .blockAfterReport:title="작성자도 차단할까요?";body="차단하면 이 작성자의 글과 댓글을 더 이상 표시하지 않아요.";skip="건너뛰기"}
+        return ZStack{Color.black.opacity(0.48).ignoresSafeArea();VStack(alignment:.leading,spacing:12){Text(title).font(W.font(19,.semibold));Text(body).font(W.font(14)).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true);HStack(spacing:10){Button(skip){ui.communityModerationDialog=nil}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityModerationCancel");Button("차단"){confirmCommunityModerationAction()}.buttonStyle(WButtonStyle(kind:2)).accessibilityIdentifier("communityModerationConfirm")}}.padding(20).frame(maxWidth:360).background(W.paper,in:RoundedRectangle(cornerRadius:22)).padding(24)}
+    }
+
     var communityBoards:some View {
         WPage(title:"게시판",back:back){
             Text("게시판 바로가기").font(W.font(15,.semibold))
             LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){ForEach(["러닝 질문","러닝 인증","대회 정보·후기","크루 모집"],id:\.self){board in Button{ui.communityBoard=board;go("C03")}label:{VStack(alignment:.leading,spacing:8){Image(systemName:board=="러닝 질문" ? "bubble.left.and.bubble.right":"figure.run").font(.system(size:20));Text(board).font(W.font(12,.medium))}.frame(maxWidth:.infinity,minHeight:78,alignment:.leading).padding(.horizontal,14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityBoardShortcut-\(board)")}}
             HStack{Text("새로 올라온 이야기").font(W.font(15,.semibold));Spacer();Button("전체 게시판 보기"){go("C27")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityBrowseAllBoards")}.padding(.top,14)
-            ForEach(ui.communityPosts){post in communityPostCard(post)}
+            ForEach(communityVisiblePosts){post in communityPostCard(post)}
         }actions:{}
     }
     var communityAllBoards:some View {WPage(title:"전체 게시판",back:back){ForEach(WCommunityFixtures.boards,id:\.self){board in WRow(title:board,action:{ui.communityBoard=board;go("C03")},height:58,arrow:true).accessibilityIdentifier("communityBoard-\(board)")}}actions:{}}
-    var communityBoardPosts:some View {WPage(title:ui.communityBoard,back:back){Text("\(ui.communityPosts.filter{$0.board==ui.communityBoard}.count)개 이야기").font(W.font(12)).foregroundStyle(W.muted);ForEach(ui.communityPosts.filter{$0.board==ui.communityBoard}){post in communityPostCard(post)}}actions:{Button("글쓰기"){beginCommunityCompose(board:ui.communityBoard)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityBoardCompose")}}
+    var communityBoardPosts:some View {let posts=communityVisiblePosts.filter{$0.board==ui.communityBoard};return WPage(title:ui.communityBoard,back:back){Text("\(posts.count)개 이야기").font(W.font(12)).foregroundStyle(W.muted);ForEach(posts){post in communityPostCard(post)}}actions:{Button("글쓰기"){beginCommunityCompose(board:ui.communityBoard)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityBoardCompose")}}
 
     @ViewBuilder var communityPostDetail:some View {
         if let post=currentCommunityPost(){
-            WPage(title:post.board,back:back){
+            let comments=communityVisibleComments(post)
+            WPage(title:post.board,back:back,trailing:post.authorMemberID==ui.communityViewerMemberID ? AnyView(EmptyView()):AnyView(Button{ui.communityMoreMenu = .post(post.id)}label:{Image(systemName:"ellipsis").font(.system(size:19,weight:.medium)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("게시물 더보기").accessibilityIdentifier("communityPostMore"))){
                 Button{openCommunityCard(for:post.authorMemberID,origin:"C04")}label:{HStack(spacing:10){communityAvatar(post.author);VStack(alignment:.leading,spacing:3){Text(post.author).font(W.font(13,.semibold));Text("\(post.rank) · \(post.date)").font(W.font(10)).foregroundStyle(W.muted)};Spacer()}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityDetailAuthorCard")
                 Text(post.title).font(W.font(23,.semibold)).lineSpacing(5).padding(.top,5).accessibilityIdentifier("communityDetailTitle")
                 Text(post.text).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityDetailBody")
                 if let imageName=post.imageName{Button{go("C04-IMAGE")}label:{Image(imageName).resizable().scaledToFill().frame(maxWidth:.infinity).frame(height:210).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityLabel("게시글 사진 확대").accessibilityIdentifier("communityDetailImageOpen")}
                 HStack(spacing:18){
                     Button{toggleCommunityLike(post.id)}label:{Label("\(post.likes+(ui.communityLikedPosts.contains(post.id) ? 1:0))",systemImage:ui.communityLikedPosts.contains(post.id) ? "heart.fill":"heart").font(W.font(12)).foregroundStyle(ui.communityLikedPosts.contains(post.id) ? Color.wire(0xE85D68,0xFF9CA3):W.muted)}.accessibilityIdentifier("communityDetailLike")
-                    Label("\(post.comments.count)",systemImage:"bubble.right").font(W.font(12)).foregroundStyle(W.muted)
+                    Label("\(comments.count)",systemImage:"bubble.right").font(W.font(12)).foregroundStyle(W.muted)
                     Spacer();Label("\(post.views)",systemImage:"eye").font(W.font(11)).foregroundStyle(W.muted).accessibilityIdentifier("communityDetailViews")
                 }.buttonStyle(.plain).padding(.vertical,12).overlay(alignment:.bottom){W.line.frame(height:1)}
                 VStack(alignment:.leading,spacing:0){
-                    Text("댓글 \(post.comments.count)").font(W.font(16,.semibold)).padding(.top,8).padding(.bottom,4)
-                    ForEach(post.comments.filter{$0.parentID==nil}){comment in communityCommentRow(comment,all:post.comments,depth:0)}
+                    Text("댓글 \(comments.count)").font(W.font(16,.semibold)).padding(.top,8).padding(.bottom,4)
+                    ForEach(comments.filter{$0.parentID==nil}){comment in communityCommentRow(comment,all:comments,depth:0)}
                 }
             }actions:{
                 if let parent=post.comments.first(where:{$0.id==ui.communityReplyToID}) {

@@ -616,6 +616,47 @@ import UIKit
         XCTAssertTrue(app.staticTexts["댓글 2"].exists)
     }
 
+    func testCommunityPostBlockHidesContentAndSettingsCanUnblock() {
+        launchCommunity("C01")
+        let post=app.buttons["communityHot-p1"]
+        XCTAssertTrue(post.waitForExistence(timeout:5));post.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuBlockPost"].tap()
+        XCTAssertTrue(app.staticTexts["작성자를 차단할까요?"].waitForExistence(timeout:3))
+        app.buttons["communityModerationConfirm"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Blocking a post author hides that author's post in the feed")
+        app.buttons["communitySettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        app.buttons["communityBlockedUsersRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C42"].waitForExistence(timeout:5))
+        let unblock=app.buttons["communityUnblock-fixture-member-ga-on"]
+        XCTAssertTrue(unblock.waitForExistence(timeout:5));unblock.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["communityBlockedUsersEmpty"].waitForExistence(timeout:3))
+        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityHot-p1"].waitForExistence(timeout:5),"Unblocking restores the author's content")
+    }
+
+    func testCommunityReportAllReasonsAndPostReportBlockPrompt() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityPostMore"].tap()
+        app.buttons["communityMenuReportPost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C23"].waitForExistence(timeout:5))
+        let detail=app.textViews["communityReportDetail"]
+        XCTAssertTrue(detail.waitForExistence(timeout:5));detail.tap();detail.typeText("개인 정보가 포함되어 있어요")
+        app.buttons["communityReportSubmit"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C25"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["신고가 접수됐어요"].exists)
+        XCTAssertTrue(app.buttons["communityModerationConfirm"].waitForExistence(timeout:3))
+        app.buttons["communityModerationCancel"].tap()
+        XCTAssertFalse(app.staticTexts["작성자도 차단할까요?"].exists)
+        XCTAssertTrue(app.buttons["communityReportDone"].exists)
+    }
+
     func testCommunityNestedRepliesQuoteParentsAndKeepChildrenWhenDeleted() {
         launchCommunity("C01")
         app.buttons["communityHot-p1"].tap()

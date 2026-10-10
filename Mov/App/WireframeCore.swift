@@ -54,11 +54,12 @@ struct WButtonStyle:ButtonStyle {
 struct WPage<Content:View,Actions:View>:View {
     var title:String
     var back:(()->Void)?
+    var trailing:AnyView=AnyView(EmptyView())
     @ViewBuilder var content:Content
     @ViewBuilder var actions:Actions
     var body:some View {
         VStack(spacing:0){
-            WHeader(title:title,back:back,mark:title=="시뮬레이션 완료")
+            WHeader(title:title,back:back,mark:title=="시뮬레이션 완료",trailing:trailing)
             ScrollView { VStack(alignment:.leading,spacing:18){content}.frame(maxWidth:.infinity,alignment:.leading).padding(24) }.scrollDismissesKeyboard(.interactively).modifier(WAuthBodyMotion())
             if Actions.self != EmptyView.self { VStack(spacing:10){actions}.padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)} }
         }.background(W.paper)
@@ -265,6 +266,13 @@ enum WRootTab: Int, CaseIterable {
     var communityProfileEditing=false
     var communityConnectionsKind="followers"
     var communityFollowProvider=WLocalCommunityFollowProvider()
+    var communityModerationProvider=WLocalCommunityModerationProvider()
+    var communityReportTarget:WCommunityReportTarget?
+    var communityReportReason="욕설·괴롭힘"
+    var communityReportDetail=""
+    var communityReportError=""
+    var communityMoreMenu:WCommunityMoreMenu?
+    var communityModerationDialog:WCommunityModerationDialog?
     let communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
@@ -430,6 +438,8 @@ struct WireframeRoot:View {
             }
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}
             if splash {WSplash().frame(maxWidth:.infinity,maxHeight:.infinity).background(W.paper)}
+            if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
+            if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
             .task{
                 let args=ProcessInfo.processInfo.arguments
@@ -530,7 +540,7 @@ struct WireframeRoot:View {
         .allowsHitTesting(isRoot && !splash)
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true)->some View {let unread = ui.hasUnreadNotifications;return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보"{Button{go("T01")}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier("communityOwnProfileSettings")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil)->some View {let unread = ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":"N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":"알림").accessibilityIdentifier(run ? "openRecords":"notificationBell").accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
@@ -572,6 +582,10 @@ struct WireframeRoot:View {
         case "C08":communityRunnerProfile
         case "C30":communityConnections
         case "C31":communityPhotoViewer
+        case "C23":communityReport
+        case "C25":communityReportReceipt
+        case "C28":communitySettings
+        case "C42":communityBlockedUsers
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards
