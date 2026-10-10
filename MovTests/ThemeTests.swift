@@ -18,6 +18,22 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityViewCountPolicyUsesMemberPostAndKSTDayAndSkipsAuthor() {
+        var provider=WLocalCommunityViewCountProvider()
+        let viewer="member-viewer",post="post-1",author="member-author"
+        let beforeKSTMidnight=ISO8601DateFormatter().date(from:"2026-10-10T14:59:59Z")!
+        let afterKSTMidnight=ISO8601DateFormatter().date(from:"2026-10-10T15:00:00Z")!
+        XCTAssertTrue(provider.recordDetailView(viewerMemberID:viewer,postID:post,authorMemberID:author,date:beforeKSTMidnight))
+        XCTAssertFalse(provider.recordDetailView(viewerMemberID:viewer,postID:post,authorMemberID:author,date:beforeKSTMidnight.addingTimeInterval(0.5)))
+        XCTAssertTrue(provider.recordDetailView(viewerMemberID:"another-member",postID:post,authorMemberID:author,date:beforeKSTMidnight))
+        XCTAssertTrue(provider.recordDetailView(viewerMemberID:viewer,postID:"post-2",authorMemberID:author,date:beforeKSTMidnight))
+        XCTAssertTrue(provider.recordDetailView(viewerMemberID:viewer,postID:post,authorMemberID:author,date:afterKSTMidnight))
+        XCTAssertFalse(provider.recordDetailView(viewerMemberID:viewer,postID:"own-post",authorMemberID:viewer,date:beforeKSTMidnight))
+        XCTAssertEqual(WCommunityTextLimit.apply(String(repeating:"가",count:61),limit:WCommunityTextLimit.title).count,60)
+        XCTAssertEqual(WCommunityTextLimit.apply(String(repeating:"나",count:2001),limit:WCommunityTextLimit.body).count,2000)
+        XCTAssertEqual(WCommunityTextLimit.apply(String(repeating:"다",count:301),limit:WCommunityTextLimit.comment).count,300)
+    }
+
     func testReview54HomeArcUsesSourceSweepAndClampsProgress() {
         XCTAssertEqual(WReview54HomeArc.viewBoxWidth,240)
         XCTAssertEqual(WReview54HomeArc.viewBoxHeight,190)

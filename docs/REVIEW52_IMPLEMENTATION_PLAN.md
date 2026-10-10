@@ -25,17 +25,17 @@
 | 남음 | 기록·공유 `L02–L03`, `L06–L07`, `Q01–Q03` | L05는 정적 source/app 대조 완료. 다른 상태의 원본/SwiftUI 정밀 픽셀·모션 대조는 미완료 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
-| 남음 | 커뮤니티 `C01–C43` | 현재 placeholder/기본 정보 화면; 전체 프론트 계획에 포함되며 이번 기록 묶음 PR 범위에서만 제외 |
+| 남음 | 커뮤니티 `C01–C43` | `C01–C05`, `C09`, `C27`은 로컬 피드→게시판→게시물/작성 흐름 구현; 나머지 화면과 전체 source/app 픽셀·모션 대조는 남음 |
 
 전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. PR20에서 A02/A03/A15의 내용·구조 대조는 완료했지만, 이들을 포함한 종합 픽셀·모션 QA는 남아 있습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C01–C43`입니다. 특히 커뮤니티는 5탭 진입, 피드/FAB, 게시글·댓글, 검색, 크루 흐름과 화면 전이가 후속 `feature/community-crew` 구현 범위입니다. 이는 전체 프론트 목표에서 제외되지 않았으며, 백엔드 연결 없이 로컬 fixture로 구현합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C06–C08`, `C10–C26`, `C28–C43`입니다. 커뮤니티 `C01–C05`, `C09`, `C27`은 피드→게시판→게시물/댓글→글쓰기/미리보기의 로컬 흐름을 구현했으며, 5탭 진입과 나머지 검색·프로필·크루 흐름은 후속 `feature/community-crew` 구현 범위로 남습니다. 커뮤니티는 전체 프론트 목표에서 제외되지 않았으며, 백엔드 연결 없이 로컬 fixture로 구현합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`은 현재 placeholder/기본 정보 화면이며 전체 프론트 계획의 미완료 범위입니다. 이번 기록 묶음 PR에서만 제외하고, 커뮤니티 탭·피드·게시글·댓글·검색·크루와 화면 이동은 후속 `feature/community-crew` 단계에 남깁니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 첫 수직 흐름 `C01–C05`, `C09`, `C27`은 `WireframeHome.swift`에서 세션 메모리 fixture로 동작합니다. `C06–C08`, `C10–C26`, `C28–C43`은 전체 프론트 계획의 미완료 범위이며, 검색·프로필·크루와 나머지 화면 이동은 후속 `feature/community-crew` 단계에 남깁니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -211,15 +211,15 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
-| [ ] | `C01` | 커뮤니티 피드 | `community` — WireframeCore.swift (현재 안내/placeholder) |
-| [ ] | `C02` | 게시판 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C03` | 게시판 글 목록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C04` | 게시물 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C05` | 글쓰기 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C01` | 커뮤니티 피드 | `community` — 예시 피드/HOT/좋아요, 서버 미연동 |
+| [x] | `C02` | 게시판 | `communityBoards` — 원본 바로가기와 최신 글 |
+| [x] | `C03` | 게시판 글 목록 | `communityBoardPosts` — 로컬 카테고리 목록 |
+| [x] | `C04` | 게시물 | `communityPostDetail` — 예시 사진·좋아요·댓글 로컬 추가 |
+| [x] | `C05` | 글쓰기 | `communityCompose` — 로컬 초안과 제목/본문 한도 |
 | [ ] | `C06` | 좋아요한 글 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C07` | 러닝 카드 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C08` | 러너 프로필 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C09` | 게시 미리보기 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C09` | 게시 미리보기 | `communityPreview` — 세션 안 로컬 게시 예시 |
 | [ ] | `C10` | 계정 인증 신청 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C11` | 인증 신청 상태 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C12` | 공유 코스 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -237,7 +237,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C24` | 커뮤니티 알림 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C25` | 신고 접수 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C26` | 작성 확인 참고 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
-| [ ] | `C27` | 전체 게시판 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `C27` | 전체 게시판 | `communityAllBoards` — 분류 선택 후 해당 목록으로 이동 |
 | [ ] | `C28` | 커뮤니티 설정 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C29` | 커뮤니티 검색 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C30` | 팔로워·팔로잉 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
@@ -254,5 +254,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [ ] | `C41` | 인기글 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C42` | 차단한 사용자 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
 | [ ] | `C43` | 내 활동 기록 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+
+이번 `feature/community-feed-posts` 묶음은 제공된 ZIP의 `COMMUNITY-REVIEW.md`, `community-ui.js`, `community.css`, `community-model.js`에 맞춘 첫 여정만 다룹니다. `riverside-morning.webp` 원본 예시 이미지를 앱 asset catalog용 JPEG로 변환해 사용합니다. 새 글/댓글/좋아요는 현재 실행 중인 메모리에서만 유지하며 계정·기록 설정을 수정하지 않습니다. 게시물 첨부 업로드, 실제 게시·검색 서버, 사용자 신고/차단 및 크루 기능은 구현하지 않았습니다.
 
 인증·가입·비밀번호 재설정 화면은 서버/API나 실제 이메일 발송에 연결되어 있지 않습니다. 재설정 A24–A28은 가입 A19–A23의 검수 규칙과 UI 구조를 재사용하지만 별도 세션·발급기·증명 ID를 사용하며, 가입 상태를 읽거나 변경하지 않습니다. 각 로컬 challenge 안에서 OTP 발급기는 이전에 발행한 여섯 자리 값을 재사용하지 않습니다. 실제 발급·비밀번호 변경 권위는 서버에 두어야 하며, 5분 만료·60초 재요청·5회 잠금은 로컬 검토 흐름으로 보안 인증 구현이 아닙니다. 비밀번호 재설정 완료 화면은 실제 비밀번호나 로그인 상태를 바꾸지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.
