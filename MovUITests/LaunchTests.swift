@@ -529,6 +529,74 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
+    func testCommunityCrewBrowseApplyAndCancelStaysLocal() {
+        launchCommunity("C01")
+        app.buttons["communityOpenCrews"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewTab-my"].exists)
+        XCTAssertTrue(app.staticTexts["크루와 신청 상태는 화면 확인용 로컬 예시예요. 실제 가입 신청은 전송되지 않아요."].exists)
+        app.buttons["communityCrewTab-find"].tap()
+        app.buttons["communityCrewFilter-모두"].tap()
+        app.buttons["communityCrewOpen-river"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"모브시 강변 · 멤버 2/20명")
+        app.buttons["communityCrewJoin"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        let memo=app.textViews["communityCrewJoinMemo"]
+        XCTAssertTrue(memo.waitForExistence(timeout:5),app.debugDescription)
+        memo.tap();memo.typeText("주말 아침에 천천히 함께 달리고 싶어요.")
+        app.buttons["communityCrewSubmitApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationHeading"].label.contains("가입 승인을 기다리고 있어요"))
+        XCTAssertTrue(app.otherElements["communityCrewLocalNotice"].exists || app.descendants(matching:.any)["communityCrewLocalNotice"].exists)
+        app.buttons["communityCrewCancelPending"].tap()
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationHeading"].label.contains("가입 신청을 취소했어요"))
+        app.buttons["communityCrewReturnToDetail"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewJoin"].exists,"Cancelled local requests can be started again")
+        app.buttons["communityCrewJoin"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5),"Back preserves navigation and does not submit a request")
+    }
+
+    func testCommunityCrewMemberBoardShowsOnlyLocalExamplePosts() {
+        launchCommunity("C01")
+        app.buttons["communityOpenCrews"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        app.buttons["communityCrewOpen-dawn"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCrewBoardLocalNotice"].exists || app.descendants(matching:.any)["communityCrewBoardLocalNotice"].exists)
+        XCTAssertTrue(app.staticTexts["이번 주 러닝 안내"].exists)
+        app.buttons["communityCrewBoardTab-dawn-board-1"].tap()
+        XCTAssertTrue(app.staticTexts["다음 모임은 천천히 한 바퀴"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["이번 주 러닝 안내"].exists,"Changing board tabs filters the local example posts")
+        app.buttons["communityCrewComposePost"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityComposeCrewBoard"].label.contains("러닝 일정"))
+        let title=app.textFields["communityComposeTitle"]
+        title.tap();title.typeText("이번 주 일정 예시")
+        let body=app.textViews["communityComposeBody"]
+        body.tap();body.typeText("토요일 아침에 천천히 한 바퀴 달려요.")
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"이번 주 일정 예시")
+        app.buttons["communityPublishButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["이번 주 일정 예시"].exists,"Publishing adds a local example to the selected crew board")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+    }
+
+    func testCommunityCrewBoardHidesPostsFromNonMembers() {
+        launchCommunity("C19")
+        XCTAssertTrue(app.staticTexts["크루 회원에게만 공개돼요"].exists)
+        XCTAssertTrue(app.buttons["communityCrewBoardDetail"].exists)
+        XCTAssertFalse(app.staticTexts["오늘도 함께 완료"].exists,"A non-member never sees a crew's private posts")
+    }
+
     func testCommunityCourseWritingAndFollowPreviewStayLocal() {
         launchCommunity("C01",verificationStatus:"approved",twoCourseRecords:true)
         app.buttons["communityStartCourseShare"].tap()

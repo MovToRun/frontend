@@ -60,6 +60,27 @@ final class ThemeTests:XCTestCase {
     private func isMissingRecord(_ result:WCommunityCoursePublicationResult)->Bool{if case .missingRecord=result{return true};return false}
     private func isInvalidRecord(_ result:WCommunityCoursePublicationResult)->Bool{if case .invalidRecord=result{return true};return false}
 
+    func testCommunityCrewApplicationChecksMembershipCapacityRankAndMemo() {
+        let viewer="fixture-member-current",river=WCommunityCrewFixtures.values.first{$0.id=="river"}!,dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,full=WCommunityCrewFixtures.values.first{$0.id=="full"}!
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"토요일에 함께 달리고 싶어요.",current:nil),.ready)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:nil,viewerID:viewer,rank:1,memo:"",current:nil),.missingCrew)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:dawn,viewerID:viewer,rank:1,memo:"",current:nil),.alreadyMember)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:"",current:WCommunityCrewApplication(id:"pending",crewID:river.id,applicantMemberID:viewer,memo:"",status:.pending)),.alreadyPending)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:full,viewerID:viewer,rank:4,memo:"",current:nil),.full)
+        let rankLimited=WCommunityCrew(id:"rank",name:"등급 예시",introduction:"",region:"",guidance:"",ownerMemberID:"owner",memberIDs:["owner"],minimumRank:3,tags:[],boards:[],posts:[])
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:rankLimited,viewerID:viewer,rank:1,memo:"",current:nil),.rankRequired)
+        XCTAssertEqual(WCommunityCrewPolicy.applicationResult(crew:river,viewerID:viewer,rank:1,memo:String(repeating:"가",count:301),current:nil),.invalidMemo)
+    }
+
+    func testCommunityCrewBoardsRequireMembershipAndKeepSamplePostsScoped() {
+        let river=WCommunityCrewFixtures.values.first{$0.id=="river"}!,dawn=WCommunityCrewFixtures.values.first{$0.id=="dawn"}!,viewer="fixture-member-current"
+        XCTAssertTrue(WCommunityCrewPolicy.canReadBoard(crew:dawn,memberIDs:[],viewerID:viewer))
+        XCTAssertFalse(WCommunityCrewPolicy.canReadBoard(crew:river,memberIDs:[],viewerID:viewer))
+        XCTAssertTrue(WCommunityCrewPolicy.canReadBoard(crew:river,memberIDs:[river.id],viewerID:viewer))
+        XCTAssertTrue(dawn.posts.contains{$0.boardID==dawn.boards[0].id && $0.title=="이번 주 러닝 안내"})
+        XCTAssertFalse(river.posts.contains{$0.boardID==dawn.boards[0].id},"Crew board content stays scoped to its own crew")
+    }
+
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
         var state=WCommunityVerificationState()
         XCTAssertEqual(state.submit(" \n "),.invalidActivity)
