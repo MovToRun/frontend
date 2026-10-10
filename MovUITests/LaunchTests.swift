@@ -648,6 +648,58 @@ import UIKit
         XCTAssertEqual(quote.label,"삭제된 댓글입니다","A quote to a deleted parent must not expose its author")
     }
 
+    func testCommunityProfilePreviewVisitPhotoFollowAndProfileContent() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.buttons["communityDetailAuthorCard"].waitForExistence(timeout:5))
+        app.buttons["communityDetailAuthorCard"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C07"].waitForExistence(timeout:5))
+        let visit=app.buttons["communityCardVisit"],close=app.buttons["communityCardClose"]
+        XCTAssertTrue(visit.exists);XCTAssertTrue(close.exists)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format:"identifier == %@ OR identifier == %@","communityCardVisit","communityCardClose")).count,2)
+        app.buttons["communityCardPhotoOpen"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C31"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityPhotoEmpty"].waitForExistence(timeout:3))
+        app.buttons["communityPhotoClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C07"].waitForExistence(timeout:5))
+        app.buttons["communityCardClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityDetailAuthorCard"].tap()
+        app.buttons["communityCardVisit"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfilePostCount"].label,"2")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowerCount"].label,"2")
+        let follow=app.buttons["communityProfileFollow"]
+        XCTAssertEqual(follow.label,"팔로우")
+        follow.tap()
+        XCTAssertEqual(follow.label,"팔로우 취소")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowerCount"].label,"3")
+        follow.tap()
+        XCTAssertEqual(follow.label,"팔로우")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowerCount"].label,"2")
+        XCTAssertTrue(app.buttons["communityPostOpen-p1"].exists)
+        app.buttons["communityProfileFollowers"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C30"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityConnection-fixture-member-no-eul"].exists)
+    }
+
+    func testCommunityOwnProfileEditsLocallyAndRendersRunningCard() {
+        launchCommunity("C01")
+        app.buttons["communityOpenOwnProfile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityProfilePostsEmpty"].exists)
+        app.buttons["communityProfileEdit"].tap()
+        let nickname=app.textFields["communityEditNickname"]
+        XCTAssertTrue(nickname.waitForExistence(timeout:5))
+        nickname.tap()
+        for _ in 0..<5 { nickname.typeText(XCUIKeyboardKey.delete.rawValue) }
+        nickname.typeText("저녁러너")
+        app.buttons["communityProfileSave"].tap()
+        let savedName=app.descendants(matching:.any)["communityCardName"]
+        XCTAssertTrue(savedName.waitForExistence(timeout:5))
+        XCTAssertEqual(savedName.label,"저녁러너")
+    }
+
     func testCommunityBoardRouteAndLocalPostPreviewPublish() {
         app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
         app.launch()

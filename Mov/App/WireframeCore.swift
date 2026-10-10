@@ -260,6 +260,11 @@ enum WRootTab: Int, CaseIterable {
     var selected:UUID?
     var communityPosts=WCommunityFixtures.posts
     var communitySelectedPostID="p1"
+    var communitySelectedUserID="fixture-member-ga-on"
+    var communityCardOriginScreen="C01"
+    var communityProfileEditing=false
+    var communityConnectionsKind="followers"
+    var communityFollowProvider=WLocalCommunityFollowProvider()
     let communityViewerMemberID="fixture-member-current"
     var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
     var communityBoard="러닝 인증"
@@ -397,7 +402,7 @@ struct WireframeRoot:View {
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
-    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen)}
+    var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var body:some View {
         ZStack {
             VStack(spacing:0){
@@ -538,6 +543,10 @@ struct WireframeRoot:View {
         case "A19","A20","A21","A22","A23":verification
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
+        case "C07":communityCardPreview
+        case "C08":communityRunnerProfile
+        case "C30":communityConnections
+        case "C31":communityPhotoViewer
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards

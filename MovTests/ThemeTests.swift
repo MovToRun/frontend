@@ -18,6 +18,22 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityFollowProviderUpdatesFollowerAndFollowingCounts() {
+        var follows=WLocalCommunityFollowProvider()
+        let me="fixture-member-current",gaon="fixture-member-ga-on",noeul="fixture-member-no-eul",early="fixture-member-early"
+        let known=Set([me,gaon,noeul,early])
+        XCTAssertEqual(follows.followerIDs(for:gaon,viewer:me),Set([noeul,early]))
+        XCTAssertEqual(follows.followingIDs(for:gaon,viewer:me),Set([noeul,me]))
+        XCTAssertTrue(follows.toggle(gaon,viewer:me,knownUsers:known))
+        XCTAssertTrue(follows.viewerFollows.contains(gaon))
+        XCTAssertEqual(follows.followerIDs(for:gaon,viewer:me),Set([noeul,early,me]))
+        XCTAssertEqual(follows.followingIDs(for:me,viewer:me),Set([gaon]))
+        XCTAssertTrue(follows.toggle(gaon,viewer:me,knownUsers:known))
+        XCTAssertFalse(follows.viewerFollows.contains(gaon))
+        XCTAssertFalse(follows.toggle(me,viewer:me,knownUsers:known),"A viewer cannot follow themself")
+        XCTAssertFalse(follows.toggle("unknown",viewer:me,knownUsers:known))
+    }
+
     func testCommunityRepliesAreUnlimitedAndDeletionKeepsDescendants() {
         var comments=[WCommunityComment(id:"root",author:"러너",authorMemberID:"member-root",text:"root text",date:"now")]
         XCTAssertTrue(WCommunityCommentActions.add(" first ",author:"나",authorMemberID:"member-me",date:"now",parentID:"root",to:&comments))
