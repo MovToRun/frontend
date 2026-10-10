@@ -519,12 +519,48 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,verificationStatus:String?=nil) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
+        if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
+    }
+
+    func testCommunityCourseWritingAndFollowPreviewStayLocal() {
+        launchCommunity("C13",verificationStatus:"approved")
+        XCTAssertTrue(app.buttons["communityCoursePreview"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCoursePreview"].isEnabled,"The reset fixture contains one valid local record")
+        app.buttons["communityCoursePreview"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"강변 아침 코스")
+        XCTAssertTrue(app.otherElements["communityPreviewCourseMap"].exists || app.descendants(matching:.any)["communityPreviewCourseMap"].exists)
+        app.buttons["communityCoursePublish"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        app.buttons["communityPostOpen-local"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        app.buttons["communityOpenAttachedCourse"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C12"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCourseTitle"].label,"강변 아침 코스")
+        XCTAssertTrue(app.otherElements["communityCourseMap"].exists || app.descendants(matching:.any)["communityCourseMap"].exists)
+        app.buttons["communityCourseFollowRun"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C14"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 30:08")
+        app.buttons["communityGhostPlayPause"].tap()
+        XCTAssertTrue(waitForLayout({self.app.staticTexts["communityGhostClock"].label != "00:00 / 30:08"},timeout:4),"Example playback advances on the local timeline")
+        app.buttons["communityGhostPlayPause"].tap()
+        app.buttons["communityGhostReset"].tap()
+        XCTAssertEqual(app.staticTexts["communityGhostClock"].label,"00:00 / 30:08")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C12"].exists,"Back returns to the course detail")
+    }
+
+    func testCommunityCourseWritingRequiresApprovedLocalAccount() {
+        launchCommunity("C13")
+        XCTAssertTrue(app.staticTexts["communityCourseNeedsVerification"].exists)
+        app.buttons["communityCourseVerify"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:5))
     }
 
     func testCommunityFeedCardImageAndBlankAreaOpenDetailOnCompactDark() {

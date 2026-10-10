@@ -18,6 +18,19 @@ private struct V1PointsFixture: Codable {
 }
 
 final class ThemeTests:XCTestCase {
+    func testCommunityCourseRequiresValidLocalRecordsAndClampsExamplePlayback() {
+        let date=Date()
+        let valid=RunRecord(date:date,title:"유효 예시",seconds:600,kilometers:2,isExample:true)
+        let zeroDistance=RunRecord(date:date,title:"거리 없음",seconds:600,kilometers:0,isExample:true)
+        let zeroTime=RunRecord(date:date,title:"시간 없음",seconds:0,kilometers:2,isExample:true)
+        XCTAssertEqual(WCommunityCoursePolicy.eligibleRecords([valid,zeroDistance,zeroTime]).map(\.id),[valid.id])
+        XCTAssertEqual(WCommunityCoursePolicy.pace(distance:2,seconds:600),"05:00 /km")
+        XCTAssertEqual(WCommunityCoursePolicy.pace(distance:0,seconds:600),"0:00 /km")
+        XCTAssertEqual(WCommunityCoursePolicy.playbackStep(0,duration:180).time,60)
+        let end=WCommunityCoursePolicy.playbackStep(150,duration:180)
+        XCTAssertEqual(end.time,180);XCTAssertTrue(end.finished)
+    }
+
     func testCommunityVerificationRequiresApplicationAndOperatorDecision() {
         var state=WCommunityVerificationState()
         XCTAssertEqual(state.submit(" \n "),.invalidActivity)

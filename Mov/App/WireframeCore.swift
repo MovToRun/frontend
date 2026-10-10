@@ -311,6 +311,17 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityVerification=WCommunityVerificationState()
     var communityVerificationError=""
     var communityAccountVerified:Bool{communityVerification.isVerified}
+    var communityCourseTitle="강변 아침 코스"
+    var communityCourseIntroduction="강변을 따라 편하게 달리는 예시 코스예요."
+    var communityCourseDistance=4.82
+    var communityCourseSeconds=1808.0
+    var communityCourseHideEnds=true
+    var communityCourseRecordID=""
+    var communityCourseID="route1"
+    var communityCourseDraft=false
+    var communityCoursePlayback=0.0
+    var communityCoursePlaying=false
+    var communityCourseError=""
     var selectedPointProductID="line"
     var provider="Google"
     var pending="T05"
@@ -622,6 +633,9 @@ struct WireframeRoot:View {
         case "C06":communityLikedPosts
         case "C10":communityVerificationForm
         case "C11":communityVerificationStatus
+        case "C12":communityCourseDetail
+        case "C13":communityCourseCompose
+        case "C14":communityGhostRun
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
