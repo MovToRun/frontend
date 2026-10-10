@@ -20,17 +20,22 @@
 | 대조 완료 | `H03` | 390×790 원본 화면과 SwiftUI distance/time 캡처 비교. 목표 카드/휠 배치와 행 치수 확인, 휠 테두리·선택 띠·보조 문구 색상 보정 |
 | 대조 완료 | `H08`, `H09` | Review52 ZIP dist 원본을 로컬 WKWebView로 390×790 CSS/2× 렌더하고, PR #14 병합 SHA의 SwiftUI를 새 임시 iPhone 17 Pro Max 한 대에서 순차 캡처. 고정 fixture에서 거리 소수점과 주간 날짜 설명 정합. [원본/앱 캡처와 렌더 설정](REVIEW52_H08_H09_CAPTURE.md) |
 | 일부 대조 완료 | 인증 `E01–E02`, `A02–A23` | E01/E02는 이번 PR에서 구현 및 focused 검증; PR20에서 A02/A03/A15 내용·구조 대조 완료. 이 세 화면의 종합 픽셀/모션 QA 및 나머지 상태는 남음 |
+| 일부 대조 완료 | 기록 구간 `L05` | 제공된 CSS/JS 원본의 390×790 render와 동일 viewport SwiftUI XCTest capture를 대조; 정적 배치·copy 확인. 유효 평균 없음 표시는 사용자 확정 규칙에 따라 `0:00 /km`로 원본의 대시 표시를 덮어씀. 모션 및 통합 픽셀 QA는 미완료 |
 | 남음 | 홈·목표·러닝 `H02`, `H05–H06`, `H10–H11`, `P01–P05`, `R01`, `R03–R12`, `S01–S05` | H03·H07–H09 제외 |
-| 남음 | 기록·공유 `L02–L03`, `L05–L07`, `Q01–Q03` | PR #11에서 확인한 L01/L04 제외 |
+| 남음 | 기록·공유 `L02–L03`, `L06–L07`, `Q01–Q03` | L05는 정적 source/app 대조 완료. 다른 상태의 원본/SwiftUI 정밀 픽셀·모션 대조는 미완료 |
 | 남음 | 프로필·설정·알림 `M01–M02`, `N01`, `T01–T18` | 후속 묶음 |
 | 남음 | 포인트·상점 `B01–B04`, `B07–B10` | PR #11에서 확인한 B05/B06 제외 |
-| 제외 | 커뮤니티 `C01–C43` | 사용자가 이번 작업에서 신규 커뮤니티 기능을 제외함 |
+| 남음 | 커뮤니티 `C01–C43` | 현재 placeholder/기본 정보 화면; 전체 프론트 계획에 포함되며 이번 기록 묶음 PR 범위에서만 제외 |
 
 전체 140개 상태의 통합 시각 QA는 아직 수행하지 않았습니다. PR20에서 A02/A03/A15의 내용·구조 대조는 완료했지만, 이들을 포함한 종합 픽셀·모션 QA는 남아 있습니다. 작은 기능 묶음별 대조를 이어가며 이 coverage 표를 갱신합니다.
 
+### 남은 로컬 UI 구현 backlog
+
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`, 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`, 커뮤니티 `C01–C43`입니다. 특히 커뮤니티는 5탭 진입, 피드/FAB, 게시글·댓글, 검색, 크루 흐름과 화면 전이가 후속 `feature/community-crew` 구현 범위입니다. 이는 전체 프론트 목표에서 제외되지 않았으며, 백엔드 연결 없이 로컬 fixture로 구현합니다. 위 시각 coverage 표에 남은 다른 화면들은 이미 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`의 신규 구현은 현재 범위에서 제외합니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 `C01–C43`은 현재 placeholder/기본 정보 화면이며 전체 프론트 계획의 미완료 범위입니다. 이번 기록 묶음 PR에서만 제외하고, 커뮤니티 탭·피드·게시글·댓글·검색·크루와 화면 이동은 후속 `feature/community-crew` 단계에 남깁니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 ## 기능 브랜치 순서와 완료 기준
 
@@ -68,7 +73,7 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `A11` | 재설정 요청 확인 예시 | 메일 발송/계정 존재를 가장하지 않고 재설정 코드 검수로 이동 — WireframeInfo.swift |
 | [x] | `A12` | 새 비밀번호 예시 | A24 코드 증명 필수, 공통 영문·숫자 정책과 확인값 일치, 실제 비밀번호 미변경 — WireframeAuth.swift |
 | [x] | `A13` | 재설정 완료 화면 | 로컬 완료 안내, 계정 로그인 상태/비밀번호 변경 없음 — WireframeInfo.swift |
-| [ ] | `A14` | 소셜 인증 결과 예시 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `A14` | 소셜 인증 결과 예시 | `informationPage` — 성공·오류·취소 결과를 로컬 표시; 전용 `screenView` case는 없음 |
 | [x] | `A15` | 회원가입 완료 예시 | `informationPage` — PR20 내용·구조 비교 완료, 종합 픽셀/모션 QA 남음 |
 | [ ] | `A16` | 이메일 로그인 연결 | `authForm` — WireframeAuth.swift |
 | [ ] | `A17` | 이메일 비밀번호 관리 | `authForm` — WireframeAuth.swift |
@@ -128,12 +133,12 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | 완료 | 상태 | 화면명 | 현재 SwiftUI 경로(기준점) |
 |---|---|---|---|
 | [x] | `L01` | 기록 목록 | `records` — WireframeRun.swift; PR #11 Review52 source 대조 |
-| [ ] | `L02` | 기록 없음 | `records` — WireframeRun.swift |
-| [ ] | `L03` | 기록 조회 실패 | `records` — WireframeRun.swift |
+| [x] | `L02` | 기록 없음 | `records` — WireframeRun.swift; 빈 목록 전이 focused UI 테스트 |
+| [x] | `L03` | 기록 조회 실패 | `records` — WireframeRun.swift; 조회 실패/빈 목록 구분 focused UI 테스트 |
 | [x] | `L04` | 기록 상세 | `recordDetail` — WireframeRun.swift; PR #11 Review52 source 대조 |
-| [ ] | `L05` | 구간 기록 · 페이스 | `splits` — WireframeRun.swift |
-| [ ] | `L06` | 기록 편집 · 개발 참고 | `recordEdit` — WireframeRun.swift |
-| [ ] | `L07` | 러닝 기록 삭제 | `informationPage` 기본 분기 — 전용 `screenView` case 없음 |
+| [x] | `L05` | 구간 기록 · 페이스 | `splits` — WireframeRun.swift; 그래프 구간 선택, 무효 평균의 `0:00 /km` 기본값, 제외 사유 copy 및 compact dark layout focused UI 테스트; 종합 픽셀/모션 대조는 남음 |
+| [x] | `L06` | 기록 편집 · 개발 참고 | `recordEdit` — WireframeRun.swift; 독립 인라인 편집 focused UI 테스트 |
+| [x] | `L07` | 러닝 기록 삭제 | `informationPage` — 로컬 확인/취소/삭제 전이 및 회귀 UI 테스트; 전용 `screenView` case는 없음 |
 | [x] | `Q01` | 러닝 공유 만들기 | `ShareImageEditor` — `WireframeShare.swift`; 로컬 PNG 작성, 피드·스토리 캔버스와 기록 오버레이 편집. 선택 미디어 입력 검증. 무음 MP4/WebM 출력은 미구현 |
 | [x] | `Q02` | 러닝 공유 저장 | `ShareOutputView` — `WireframeShare.swift`; PNG 크기 확인 및 파일 앱 저장 경로 선택. 실패 시 임시 갤러리에 보존·재시도 안내. Photos 직접 저장 및 동영상 출력은 미구현 |
 | [x] | `Q03` | 이 기록의 공유 콘텐츠 | `ShareGallery`/`ShareWorkspace` — `WireframeShare.swift`; 세션 메모리 갤러리·삭제, 기록당 64MB 임시 저장 한도, 로그아웃·계정 전환 시 비움 |
