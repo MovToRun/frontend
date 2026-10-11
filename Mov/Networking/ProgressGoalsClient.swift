@@ -663,6 +663,14 @@ enum WeeklyGoalWriteState: Equatable, Sendable {
     case failed(ProgressGoalsFailure)
 }
 
+enum WeeklyGoalConflictRefreshState: Equatable, Sendable {
+    case idle
+    case required
+    case refreshing
+    case failed(ProgressGoalsFailure)
+    case refreshed
+}
+
 enum DailyProgressReadState: Equatable, Sendable {
     case idle
     case loading(BackendDailyProgressRange)

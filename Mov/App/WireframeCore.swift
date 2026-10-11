@@ -331,6 +331,7 @@ struct WireframeRemoteReadDependencies {
         case runDetailRetry
         case progressRetry
         case weeklyGoalRetry
+        case weeklyGoalConflictRefresh
         case progressDailyRetry
     }
 
@@ -350,6 +351,7 @@ struct WireframeRemoteReadDependencies {
     @ObservationIgnored private var weeklyGoalWriteOperationID: UUID?
     @ObservationIgnored private var weeklyGoalWriteTask: Task<Void, Never>?
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
+    @ObservationIgnored private var manualWeeklyGoalPreviousState: WeeklyGoalReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
     private(set) var activeScreen: String?
@@ -361,6 +363,7 @@ struct WireframeRemoteReadDependencies {
     private(set) var progressState: ProgressReadState = .idle
     private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
     private(set) var weeklyGoalWriteState: WeeklyGoalWriteState = .idle
+    private(set) var weeklyGoalConflictRefreshState: WeeklyGoalConflictRefreshState = .idle
     private(set) var dailyProgressState: DailyProgressReadState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
@@ -377,6 +380,7 @@ struct WireframeRemoteReadDependencies {
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
     var canWriteWeeklyGoal: Bool { runningProgressLoader != nil && weeklyGoalWriter != nil }
     var isSavingWeeklyGoal: Bool { weeklyGoalWriteState == .saving }
+    var needsWeeklyGoalConflictRefresh: Bool { weeklyGoalNeedsRefresh }
     var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency }
 
     private func invalidateDailyProgressRead() {
@@ -403,12 +407,17 @@ struct WireframeRemoteReadDependencies {
         weeklyGoalState = .idle
         weeklyGoalWriteState = .idle
         weeklyGoalNeedsRefresh = false
+        weeklyGoalConflictRefreshState = .idle
+        manualWeeklyGoalPreviousState = nil
         dailyProgressState = .idle
     }
 
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let nextScreen = screen ?? feature?.rawValue
+        if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
+            weeklyGoalConflictRefreshState = .idle
+        }
         if weeklyGoalWriteOperationID != nil, nextScreen != activeScreen {
             cancelWeeklyGoalMutation()
         }
@@ -533,7 +542,7 @@ struct WireframeRemoteReadDependencies {
             if shouldLoadProgress { progressState = .loading }
             if shouldLoadWeeklyGoal {
                 weeklyGoalState = .loading
-                weeklyGoalNeedsRefresh = false
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .refreshing }
             }
             if shouldLoadProgress && shouldLoadWeeklyGoal {
                 async let progressRead: Void = completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
@@ -567,6 +576,24 @@ struct WireframeRemoteReadDependencies {
             activeFeature = nil
         } else {
             weeklyGoalState = result
+            finishWeeklyGoalRead(result)
+        }
+    }
+
+    private func finishWeeklyGoalRead(_ result: WeeklyGoalReadState) {
+        guard weeklyGoalNeedsRefresh else { return }
+        switch result {
+        case .loaded:
+            weeklyGoalNeedsRefresh = false
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .refreshed
+            }
+        case .failed(let failure):
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .failed(failure)
+            }
+        case .idle, .loading:
+            break
         }
     }
 
@@ -777,6 +804,10 @@ struct WireframeRemoteReadDependencies {
     }
 
     func retryWeeklyGoal() {
+        if weeklyGoalNeedsRefresh {
+            refreshWeeklyGoalAfterConflict()
+            return
+        }
         guard activeFeature == .progressGoals, manualOperationTask == nil,
               case .failed(let failure) = weeklyGoalState,
               failure.canManuallyRetry, let runningProgressLoader else { return }
@@ -797,6 +828,47 @@ struct WireframeRemoteReadDependencies {
         }
     }
 
+    func refreshWeeklyGoalAfterConflict() {
+        guard activeFeature == .progressGoals,
+              weeklyGoalNeedsRefresh,
+              manualOperationTask == nil,
+              let runningProgressLoader,
+              weeklyGoalConflictRefreshState == .required || isWeeklyGoalConflictRefreshFailed else { return }
+        let requestGeneration = generation
+        let requestScopeID = accountScopeID
+        let requestScreen = activeScreen
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalConflictRefresh
+        manualWeeklyGoalPreviousState = weeklyGoalState
+        weeklyGoalConflictRefreshState = .refreshing
+        let previousState = weeklyGoalState
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.loadWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == requestScopeID,
+                  self.activeScreen == requestScreen,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualWeeklyGoalPreviousState = nil
+            if Task.isCancelled {
+                self.weeklyGoalState = previousState
+                self.weeklyGoalConflictRefreshState = .required
+            } else {
+                self.weeklyGoalState = result
+                self.finishWeeklyGoalRead(result)
+            }
+        }
+    }
+
+    private var isWeeklyGoalConflictRefreshFailed: Bool {
+        if case .failed = weeklyGoalConflictRefreshState { return true }
+        return false
+    }
+
     func saveWeeklyGoal(
         version: Int64,
         distanceGoalMeters: Int64?,
@@ -806,6 +878,7 @@ struct WireframeRemoteReadDependencies {
     ) {
         guard weeklyGoalWriteOperationID == nil else { return }
         guard accountScopeID == self.accountScopeID, screen == activeScreen else { return }
+        guard !weeklyGoalNeedsRefresh else { return }
         guard let weeklyGoalWriter, let runningProgressLoader else {
             weeklyGoalWriteState = .failed(.weeklyGoalWriteUnavailable)
             return
@@ -818,6 +891,7 @@ struct WireframeRemoteReadDependencies {
         let requestGeneration = generation
         let operationID = UUID()
         weeklyGoalWriteOperationID = operationID
+        weeklyGoalConflictRefreshState = .idle
         weeklyGoalWriteState = .saving
         weeklyGoalWriteTask = Task { @MainActor [weak self, weeklyGoalWriter, runningProgressLoader] in
             do {
@@ -850,6 +924,7 @@ struct WireframeRemoteReadDependencies {
                     self.weeklyGoalState = .loaded(saved)
                     self.weeklyGoalNeedsRefresh = true
                 }
+                self.weeklyGoalConflictRefreshState = .idle
                 self.weeklyGoalWriteTask = nil
                 self.weeklyGoalWriteOperationID = nil
                 self.weeklyGoalWriteState = .saved
@@ -865,6 +940,10 @@ struct WireframeRemoteReadDependencies {
                 self.weeklyGoalWriteTask = nil
                 self.weeklyGoalWriteOperationID = nil
                 self.weeklyGoalWriteState = .failed(failure)
+                if case .weeklyGoalVersionConflict = failure {
+                    self.weeklyGoalNeedsRefresh = true
+                    self.weeklyGoalConflictRefreshState = .required
+                }
             } catch is CancellationError {
                 guard let self else { return }
                 guard self.weeklyGoalWriteOperationID == operationID,
@@ -973,6 +1052,9 @@ struct WireframeRemoteReadDependencies {
                 progressState = .idle
             case .weeklyGoalRetry:
                 weeklyGoalState = .idle
+            case .weeklyGoalConflictRefresh:
+                if let previous = manualWeeklyGoalPreviousState { weeklyGoalState = previous }
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .required }
             case .progressDailyRetry:
                 dailyProgressState = .idle
             case nil:
@@ -982,6 +1064,7 @@ struct WireframeRemoteReadDependencies {
         manualOperationKind = nil
         manualPointsPreviousState = nil
         manualRunsPreviousState = nil
+        manualWeeklyGoalPreviousState = nil
         task?.cancel()
     }
 }
@@ -1213,7 +1296,9 @@ struct RootView:View {
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
             failsOverview:args.contains("-wire-progress-goals-fail"),
             failsDaily:args.contains("-wire-progress-daily-fail"),
-            failsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-fail")
+            failsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-fail"),
+            conflictsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-conflict"),
+            failsConflictRefreshOnce:args.contains("-wire-weekly-goal-conflict-refresh-fail-once")
         ):nil
         let progressLoader = progressClient.map { RunningProgressLoader(client:$0) }
         return WireframeRemoteReadDependencies(
@@ -1243,16 +1328,28 @@ private actor WireframeProgressGoalsFixture: RunningProgressReading, RunningWeek
     private let failsOverview: Bool
     private let failsDaily: Bool
     private let failsWeeklyGoalWrite: Bool
+    private let conflictsWeeklyGoalWrite: Bool
+    private var failsConflictRefreshOnce: Bool
+    private var weeklyGoalReadCalls=0
+    private var didConflictWeeklyGoalWrite=false
     private var weeklyGoal = BackendWeeklyGoalStatus(
         weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
         distance:.init(goal:20_000,done:12_400,remaining:7_600,achieved:false),
         time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
     )
 
-    init(failsOverview: Bool, failsDaily: Bool, failsWeeklyGoalWrite: Bool = false) {
+    init(
+        failsOverview: Bool,
+        failsDaily: Bool,
+        failsWeeklyGoalWrite: Bool = false,
+        conflictsWeeklyGoalWrite: Bool = false,
+        failsConflictRefreshOnce: Bool = false
+    ) {
         self.failsOverview=failsOverview
         self.failsDaily=failsDaily
         self.failsWeeklyGoalWrite=failsWeeklyGoalWrite
+        self.conflictsWeeklyGoalWrite=conflictsWeeklyGoalWrite
+        self.failsConflictRefreshOnce=failsConflictRefreshOnce
     }
 
     func fetchProgress() async throws -> BackendProgressSummary {
@@ -1266,12 +1363,26 @@ private actor WireframeProgressGoalsFixture: RunningProgressReading, RunningWeek
     }
 
     func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyGoalReadCalls+=1
+        if weeklyGoalReadCalls>1 && failsConflictRefreshOnce {
+            failsConflictRefreshOnce=false
+            throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-conflict-refresh")
+        }
         if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal") }
         return weeklyGoal
     }
 
     func saveWeeklyGoal(version: Int64, distanceGoalMeters: Int64?, timeGoalSeconds: Int64?) async throws -> BackendWeeklyGoalStatus {
         if failsWeeklyGoalWrite { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-write") }
+        if conflictsWeeklyGoalWrite && !didConflictWeeklyGoalWrite {
+            didConflictWeeklyGoalWrite=true
+            weeklyGoal=BackendWeeklyGoalStatus(
+                weekStartDate:weeklyGoal.weekStartDate,weekEndDate:weeklyGoal.weekEndDate,version:weeklyGoal.version+1,
+                distance:.init(goal:40_000,done:weeklyGoal.distance.done,remaining:27_600,achieved:false),
+                time:.init(goal:12_000,done:weeklyGoal.time.done,remaining:8_100,achieved:false)
+            )
+            throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict")
+        }
         guard version == weeklyGoal.version else { throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict") }
         guard Self.isValidGoal(distanceGoalMeters, step:1_000, maximum:500_000),
               Self.isValidGoal(timeGoalSeconds, step:600, maximum:360_000) else {
@@ -1454,6 +1565,7 @@ struct WireframeRoot:View {
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in handleRemoteAccountScopeChange(scopeID)}
             .onChange(of:remoteReads.weeklyGoalState){_,state in handleRemoteWeeklyGoalStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalWriteState){_,state in handleRemoteWeeklyGoalWriteStateChange(state)}
+            .onChange(of:remoteReads.weeklyGoalConflictRefreshState){_,state in handleRemoteWeeklyGoalConflictRefreshStateChange(state)}
     }
     var rootTaskViews:some View {
         rootStyledLayers
@@ -1575,13 +1687,25 @@ struct WireframeRoot:View {
     func handleRemoteWeeklyGoalWriteStateChange(_ state:WeeklyGoalWriteState){
         switch state {
         case .failed(let failure):
-            if ["H04","H10"].contains(ui.screen){ui.error=failure.weeklyGoalWriteMessage}
+            if ["H04","H10"].contains(ui.screen){
+                ui.error=failure.weeklyGoalWriteMessage
+                if case .weeklyGoalVersionConflict = failure { weeklyGoalDraftDirty=true }
+            }
         case .saved:
             let destination=ui.screen
             ui.error=""
             remoteReads.consumeWeeklyGoalWriteResult()
             if destination=="H10"{go("H00")}else if destination=="H04"{back()}
         case .idle,.saving:
+            break
+        }
+    }
+    func handleRemoteWeeklyGoalConflictRefreshStateChange(_ state:WeeklyGoalConflictRefreshState){
+        guard ["H04","H10"].contains(ui.screen) else{return}
+        switch state {
+        case .failed,.refreshed:
+            ui.error=""
+        case .idle,.required,.refreshing:
             break
         }
     }

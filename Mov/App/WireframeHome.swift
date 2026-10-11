@@ -1183,6 +1183,7 @@ extension WireframeRoot {
                 default:HStack(spacing:8){ProgressView();WText(text:"주간 목표를 불러오는 중이에요",small:true)}.frame(maxWidth:.infinity,minHeight:44,alignment:.leading)
                 }
             }
+            weeklyGoalConflictRecovery
             VStack(spacing:14){weeklyEditor(time:false);weeklyEditor(time:true)}.padding(.top,16);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
             WText(text:"월요일부터 일요일까지 유효 러닝만 합산해요.\n일시정지와 제외 구간은 더하지 않아요.\n이번 러닝 1회의 목표와는 별도로 관리해요.",small:true).padding(.top,8)
             Button("주간 목표 삭제"){go("H10")}.font(W.font(13)).frame(minHeight:44)
@@ -1196,7 +1197,39 @@ extension WireframeRoot {
                 guard (!ui.weekly.distanceEnabled || (1...500).contains(ui.weekly.kilometers)), (!ui.weekly.timeEnabled || ((10...6000).contains(ui.weekly.minutes) && ui.weekly.minutes % 10 == 0)) else {ui.error="거리 1–500 km, 시간 10분 단위·최대 100시간으로 입력해 주세요.";return}
                 store.weekly=ui.weekly;store.persist();back()
             }
-        }.buttonStyle(WButtonStyle()).disabled(remoteReads.isSavingWeeklyGoal || (remoteReads.hasRunningProgressDependency && (!remoteReads.canWriteWeeklyGoal || weeklyGoalDraftVersion == nil || weeklyGoalDraftScopeID != ui.remoteAccountScopeID))).accessibilityIdentifier("saveWeeklyGoal")}
+        }.buttonStyle(WButtonStyle()).disabled(remoteReads.isSavingWeeklyGoal || (remoteReads.hasRunningProgressDependency && (!remoteReads.canWriteWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh || weeklyGoalDraftVersion == nil || weeklyGoalDraftScopeID != ui.remoteAccountScopeID))).accessibilityIdentifier("saveWeeklyGoal")}
+    }
+    @ViewBuilder var weeklyGoalConflictRecovery:some View {
+        switch remoteReads.weeklyGoalConflictRefreshState {
+        case .idle:
+            EmptyView()
+        case .required:
+            Button("최신 목표 불러오기") { ui.error="";remoteReads.refreshWeeklyGoalAfterConflict() }
+                .font(W.font(13,.medium)).frame(maxWidth:.infinity,minHeight:44)
+                .accessibilityIdentifier("refreshWeeklyGoalAfterConflict")
+        case .refreshing:
+            HStack(spacing:8){ProgressView();WText(text:"최신 목표를 불러오는 중이에요",small:true)}
+                .frame(maxWidth:.infinity,minHeight:44,alignment:.leading)
+                .accessibilityIdentifier("refreshingWeeklyGoalConflict")
+        case .failed(let failure):
+            VStack(alignment:.leading,spacing:8){
+                WNotice(text:failure.userMessage,danger:true)
+                Button("다시 불러오기") { ui.error="";remoteReads.refreshWeeklyGoalAfterConflict() }
+                    .font(W.font(13,.medium)).frame(minHeight:44)
+                    .accessibilityIdentifier("retryWeeklyGoalConflictRefresh")
+            }
+        case .refreshed:
+            VStack(alignment:.leading,spacing:6){
+                WNotice(text:"최신 목표를 불러왔어요. 입력한 목표는 유지했어요. 확인한 뒤 저장해 주세요.",danger:false)
+                    .accessibilityIdentifier("weeklyGoalConflictRefreshedNotice")
+                if case .loaded(let latest)=remoteReads.weeklyGoalState {
+                    let distance=latest.distance.goal.map{"\($0/1_000) km"} ?? "없음"
+                    let time=latest.time.goal.map{RunGoal.duration(Int($0/60))} ?? "없음"
+                    WText(text:"현재 저장된 목표: 거리 \(distance) · 시간 \(time)",small:true)
+                        .accessibilityIdentifier("weeklyGoalConflictLatestStatus")
+                }
+            }
+        }
     }
     func weeklyGoalMutationPayload()->(Int64?,Int64?)? {
         guard !weeklyTimeDraftInvalid || !ui.weekly.timeEnabled else{return nil}
