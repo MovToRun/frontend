@@ -46,7 +46,7 @@ private actor SequencedMemberProfileFetcher: MemberProfileFetching {
     func requestCount() -> Int { requests }
 }
 
-private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     private enum Outcome: Sendable {
         case response(Int, Data, [String: String])
         case failure(URLError.Code)
@@ -131,6 +131,27 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.timeoutInterval, 4)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+    }
+
+    func testBuildsSeparatelyEncodedQueryItemsUnderConfiguredBasePath() throws {
+        let request = try makeClient().makeRequest(
+            path: "points/me/entries",
+            queryItems: [URLQueryItem(name: "cursor", value: "Ab_c-123"), URLQueryItem(name: "size", value: "20")]
+        )
+        let components = try XCTUnwrap(URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+
+        XCTAssertEqual(components.path, "/api/v1/points/me/entries")
+        XCTAssertEqual(components.queryItems, [URLQueryItem(name: "cursor", value: "Ab_c-123"), URLQueryItem(name: "size", value: "20")])
+    }
+
+    func testRejectsInvalidQueryItemNamesAndControlCharacters() throws {
+        let client = try makeClient()
+        XCTAssertThrowsError(try client.makeRequest(path: "points/me/entries", queryItems: [URLQueryItem(name: "cursor&size", value: "20")])) {
+            XCTAssertEqual($0 as? APIClientError, .invalidQuery)
+        }
+        XCTAssertThrowsError(try client.makeRequest(path: "points/me/entries", queryItems: [URLQueryItem(name: "cursor", value: "bad\nvalue")])) {
+            XCTAssertEqual($0 as? APIClientError, .invalidQuery)
+        }
     }
 
     func testDefaultSessionUsesConfiguredTimeouts() throws {
