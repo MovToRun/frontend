@@ -33,7 +33,18 @@ extension WireframeRoot {
         case "L07":var page=reviewInfo;page.notice="삭제한 기록은 복구할 수 없어요. 이 기기의 합계와 통계에서도 제외돼요.";return page
         case "T06":var page=reviewInfo;page.text="현재 계정에 로그인 수단을 추가해요.";page.notice="현재 계정의 러닝 기록은 유지돼요.";page.buttons=[("연결하기","link",0),("취소","T05",1)];return page
         case "T07":return .init(title:"로그인 안내",heading:"카카오로\n계속할까요?",text:"현재 기기의 프로필로 돌아가요.",buttons:[("카카오로 계속","local-login",0),("다른 방법으로 로그인","A01",1)])
-        case "T10":var page=reviewInfo;page.notice="이 기기에 저장한 기록은 유지돼요.";return page
+        case "T10":
+            var page=reviewInfo
+            page.notice=remoteReads.hasSessionLogoutDependency
+                ? "이 기기의 기록은 유지돼요. 로그아웃이 완료되면 로그인 화면으로 이동해요."
+                : "이 기기에 저장한 기록은 유지돼요."
+            if remoteReads.hasSessionLogoutDependency {
+                var buttons=page.buttons
+                if case .failed = remoteReads.sessionLogoutState { buttons[0] = ("다시 시도","logout",0) }
+                else if remoteReads.isLoggingOut { buttons[0] = ("로그아웃 중…","logout",0) }
+                page.buttons=buttons
+            }
+            return page
         case "T12":return .init(title:"탈퇴 완료",heading:"프로필을 초기화했어요",text:"로그인 화면에서 다시 시작할 수 있어요.",buttons:[("로그인으로","A01",0)])
         case "T13":var page=reviewInfo;page.notice="이 기기에 저장된 모든 러닝 기록을 삭제해요. 프로필과 로그인 수단은 유지돼요. 삭제한 기록은 복구할 수 없어요.";page.buttons=[("기기 기록 삭제","clear-device",2),("기록 유지","T04",1)];return page
         case "T15":return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 계속해 주세요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 계속","reauth",0),("취소","cancel-reauth",1)])
@@ -69,7 +80,13 @@ extension WireframeRoot {
         case "T07":return .init(title:"로그인 안내",heading:"카카오로 로그인한\n기록이 있어요.",text:"카카오로 로그인할까요?",notice:"확인된 가상 계정으로 이동해요. 지금 계정의 기록과 로그인 수단은 그대로 보관해요.",buttons:[("카카오로 로그인","switch-local-account",0),("다른 방법으로 로그인","A01",1)])
         case "T08":return .init(title:"연결 해제",heading:ui.provider+" 연결을\n해제할까요?",text:"남은 로그인 수단으로\n이 계정에 들어올 수 있어요.",notice:"러닝 기록과 회원 계정은 삭제하지 않아요.",buttons:[("연결 해제","unlink",2),("연결 유지","T05",1)])
         case "T09":return .init(title:"로그인 수단 보호",heading:"마지막 로그인 수단은\n해제할 수 없어요",text:"다시 로그인할 수 있도록\n다른 수단을 먼저 연결해 주세요.",buttons:[("다른 수단 연결하기","T05",0)])
-        case "T10":return .init(title:"로그아웃",heading:"로그아웃할까요?",text:"이 기기의 기록은 삭제하지 않아요. 같은 계정으로 다시 로그인하면 확인할 수 있어요.",notice:"데모 로그인 상태만 바뀌어요. 실제 제공자 로그아웃은 하지 않아요.",buttons:[("로그아웃","logout",0),("계속 사용하기","T01",1)])
+        case "T10":
+            let remote=remoteReads.hasSessionLogoutDependency
+            let primaryTitle: String = {
+                if case .failed = remoteReads.sessionLogoutState { return "다시 시도" }
+                return remoteReads.isLoggingOut ? "로그아웃 중…":"로그아웃"
+            }()
+            return .init(title:"로그아웃",heading:"로그아웃할까요?",text:"이 기기의 기록은 삭제하지 않아요. 같은 계정으로 다시 로그인하면 확인할 수 있어요.",notice:remote ? "확인 응답을 받은 뒤 로그인 화면으로 이동해요.":"데모 로그인 상태만 바뀌어요. 실제 제공자 로그아웃은 하지 않아요.",buttons:[(primaryTitle,"logout",0),("계속 사용하기","T01",1)])
         case "T12":return .init(title:"시뮬레이션 완료",heading:"삭제 완료 화면이에요",text:"실제 계정은 바뀌지 않았어요.\n현재 브라우저의 예시 상태만\n처음으로 돌렸어요.",buttons:[("로그인 화면 보기","A01",0),("홈 검토로 돌아가기","H00",1)])
         case "T13":return .init(title:"기기 기록 삭제",heading:"이 기기의 기록만\n지울까요?",text:"현재 계정의 이 기기 러닝 기록과 임시 데이터를 삭제하는 흐름이에요.",notice:"회원 계정과 로그인 수단은 유지해요. 실제 동작은 브라우저의 데모 기록에만 적용돼요.",buttons:[("기기 데모 기록 삭제","clear-device",2),("기록 유지","T04",1)])
         case "T14":return .init(title:"진행 중 러닝",heading:"먼저 러닝을\n마쳐 주세요",text:"진행 중이거나 저장하지 않은 기록이 있어요. 저장 또는 삭제 후 계정을 변경할 수 있어요.",buttons:[("러닝으로 돌아가기","R04",0),("설정으로 돌아가기","T01",1)])
@@ -86,11 +103,12 @@ extension WireframeRoot {
         if ui.screen=="P04"{VStack(spacing:0){ForEach(["1. 기기 설정에서 이 앱 열기","2. 위치 접근 허용","3. 정확한 위치 켜기"],id:\.self){WRow(title:$0)}}}
         if ui.screen=="T03"{VStack(spacing:0){WRow(title:"거리",value:"km");WRow(title:"페이스",value:"분/km");WRow(title:"추정 칼로리",value:"kcal");WRow(title:"체중",value:"kg")}}
         if !data.notice.isEmpty{if ui.screen=="L07"{WRecordDeletionParagraph(text:data.notice).offset(y:-3).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4)}else if ui.screen.hasPrefix("A") || ["T06","T07","T08","T10","T13","T15","T16","T17"].contains(ui.screen){WAuthNotice(text:data.notice,danger:ui.screen=="T13",sourceWrapping:["A04","T10","T17"].contains(ui.screen))}else{WNotice(text:data.notice,danger:["P05","R11","T13"].contains(ui.screen))}}
+        if ui.screen=="T10",case .failed(let failure)=remoteReads.sessionLogoutState{WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("authLogoutFailure")}
         if ui.screen=="H10",!ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
         if ui.screen=="H10"{weeklyGoalConflictRecovery}
         if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
-    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
+    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
@@ -110,7 +128,14 @@ extension WireframeRoot {
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
     case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
     case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();shareWorkspace.clear();go("L02")
-    case "logout":guard store.session==nil else{go("T14");return};ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
+    case "logout":
+        guard store.session==nil else{go("T14");return}
+        if remoteReads.hasSessionLogoutDependency {
+            guard ui.screen=="T10" else{return}
+            remoteReads.requestSessionLogout(accountScopeID:ui.remoteAccountScopeID,screen:"T10")
+            return
+        }
+        ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
     case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.setLoggedIn(true);ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
     case "link":guard ui.screen=="T06",ui.settingsGrant else{return};if !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider);ui.save()};go("T17")
     case "unlink":guard ui.screen=="T08" else{return};guard ui.profile.providers.count>1 else{go("T09");return};ui.profile.providers.removeAll{$0==ui.provider};ui.save();go("T05")

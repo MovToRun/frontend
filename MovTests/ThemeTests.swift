@@ -19,6 +19,53 @@ private struct V1PointsFixture: Codable {
     var owned: Set<String>
 }
 
+private actor PendingSessionLogoutBridgeFake: SessionLogoutRequesting {
+    private var continuations: [CheckedContinuation<Void, Error>?] = []
+    private var requests = 0
+
+    func logout() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            requests += 1
+            continuations.append(continuation)
+        }
+    }
+
+    func waitForCalls(_ count: Int) async {
+        for _ in 0..<200 {
+            if requests >= count { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    func callCount() -> Int { requests }
+
+    func complete(_ index: Int, with result: Result<Void, SessionLogoutFailure>) {
+        guard continuations.indices.contains(index), let continuation = continuations[index] else { return }
+        continuations[index] = nil
+        continuation.resume(with: result.mapError { $0 })
+    }
+}
+
+private actor AccountScopedMemberProfileBridgeFake: MemberProfileFetching {
+    private var requests = 0
+
+    func fetchProfile() async throws -> MemberProfile {
+        requests += 1
+        if requests == 1 {
+            await Task.detached { try? await Task.sleep(for: .milliseconds(200)) }.value
+            return MemberProfile(nickname: "OldAccount")
+        }
+        return MemberProfile(nickname: "NewAccount")
+    }
+
+    func waitForCalls(_ count: Int) async {
+        for _ in 0..<200 {
+            if requests >= count { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
 private actor MemberProfileBridgeFake: MemberProfileFetching, MemberProfileUpdating {
     private var profile:MemberProfile
     private var writeFailure:MemberProfileFailure?
@@ -3016,5 +3063,133 @@ extension ThemeTests {
         XCTAssertEqual(cancelledPageCalls,1,"Changing screens must cancel the page request")
         let pointBalanceCalls=await pageMock.observedBalanceCallCount()
         XCTAssertEqual(pointBalanceCalls,1,"Moving between points screens must not refetch the balance")
+    }
+}
+
+extension ThemeTests {
+    @MainActor func testAuthLogoutBridgeDeduplicatesRetriesAndAcceptsOnlyConfirmedSuccess() async {
+        let requester = PendingSessionLogoutBridgeFake()
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(sessionLogoutRequester: requester))
+        await bridge.activate(feature: nil, accountScopeID: "account-a", screen: "T10")
+
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(1)
+        let firstCallCount = await requester.callCount()
+        XCTAssertEqual(firstCallCount, 1, "Duplicate taps share the active logout request")
+        XCTAssertEqual(bridge.sessionLogoutState, .loggingOut)
+
+        await requester.complete(0, with: .failure(.serviceUnavailable(requestID: "r-503")))
+        for _ in 0..<200 {
+            if case .failed = bridge.sessionLogoutState { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .failed(.serviceUnavailable(requestID: "r-503")))
+
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(2)
+        let retryCallCount = await requester.callCount()
+        XCTAssertEqual(retryCallCount, 2, "Retry is allowed after a failure, but duplicate retry taps are still deduplicated")
+        XCTAssertEqual(bridge.sessionLogoutState, .loggingOut)
+
+        await requester.complete(1, with: .success(()))
+        for _ in 0..<200 {
+            if bridge.sessionLogoutState == .loggedOut { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .loggedOut)
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        try? await Task.sleep(for: .milliseconds(20))
+        let finalCallCount = await requester.callCount()
+        XCTAssertEqual(finalCallCount, 2, "A confirmed logout cannot be submitted a second time")
+    }
+
+    @MainActor func testAuthLogoutBridgeIgnoresLateResultsAfterAccountOrScreenChange() async {
+        let requester = PendingSessionLogoutBridgeFake()
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(sessionLogoutRequester: requester))
+        await bridge.activate(feature: nil, accountScopeID: "account-a", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(1)
+
+        await bridge.activate(feature: nil, accountScopeID: "account-b", screen: "T10")
+        XCTAssertEqual(bridge.accountScopeID, "account-b")
+        XCTAssertEqual(bridge.sessionLogoutState, .idle, "Account changes cancel the previous account's pending logout state")
+        bridge.requestSessionLogout(accountScopeID: "account-b", screen: "T10")
+        await requester.waitForCalls(2)
+
+        await requester.complete(0, with: .success(()))
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(bridge.sessionLogoutState, .loggingOut, "A late result from account A cannot finish account B's request")
+
+        await bridge.activate(feature: nil, accountScopeID: "account-b", screen: "A01")
+        XCTAssertEqual(bridge.sessionLogoutState, .idle, "Leaving T10 cancels the visible logout state")
+        await requester.complete(1, with: .success(()))
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(bridge.sessionLogoutState, .idle, "A late response cannot log out after the screen changes")
+
+        await bridge.activate(feature: nil, accountScopeID: "account-b", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-b", screen: "T10")
+        await requester.waitForCalls(3)
+        await requester.complete(2, with: .success(()))
+        for _ in 0..<200 {
+            if bridge.sessionLogoutState == .loggedOut { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .loggedOut, "The newly active account can complete its own request")
+    }
+
+    @MainActor func testAuthLogout500AndLostResponseStayRetryableUntil401() async {
+        let requester = PendingSessionLogoutBridgeFake()
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(sessionLogoutRequester: requester))
+        await bridge.activate(feature: nil, accountScopeID: "account-a", screen: "T10")
+
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(1)
+        await requester.complete(0, with: .failure(.serverFailure(statusCode: 500, requestID: "r-500")))
+        for _ in 0..<200 {
+            if case .failed = bridge.sessionLogoutState { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .failed(.serverFailure(statusCode: 500, requestID: "r-500")))
+
+        // A sent request whose response is lost is still ambiguous; the user must retry explicitly.
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(2)
+        await requester.complete(1, with: .failure(.transport(.timedOut)))
+        for _ in 0..<200 {
+            if case .failed = bridge.sessionLogoutState { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .failed(.transport(.timedOut)))
+
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(3)
+        await requester.complete(2, with: .failure(.unauthenticated))
+        for _ in 0..<200 {
+            if bridge.sessionLogoutState == .loggedOut { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(bridge.sessionLogoutState, .loggedOut, "A manual retry that confirms the session is already invalid completes local logout")
+        let finalCallCount = await requester.callCount()
+        XCTAssertEqual(finalCallCount, 3, "No request is retried automatically")
+    }
+
+    @MainActor func testAccountScopeChangeClearsReadStateAndIgnoresLateProfileResult() async {
+        let fetcher = AccountScopedMemberProfileBridgeFake()
+        let loader = MemberProfileLoader(fetcher: fetcher)
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(memberProfileLoader: loader))
+
+        let oldAccountRequest = Task { await bridge.activate(feature: .profile, accountScopeID: "account-a", screen: "M01") }
+        await fetcher.waitForCalls(1)
+        XCTAssertEqual(bridge.memberProfileState, .loading)
+
+        bridge.accountDidChange(to: "account-b")
+        XCTAssertEqual(bridge.memberProfileState, .idle, "The previous account's profile snapshot is cleared")
+        await bridge.activate(feature: .profile, accountScopeID: "account-b", screen: "M01")
+        XCTAssertEqual(bridge.memberProfileState, .loaded(MemberProfile(nickname: "NewAccount")))
+
+        await oldAccountRequest.value
+        XCTAssertEqual(bridge.memberProfileState, .loaded(MemberProfile(nickname: "NewAccount")), "A late profile response cannot restore data from account A")
     }
 }

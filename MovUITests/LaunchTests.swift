@@ -2124,6 +2124,76 @@ import UIKit
     }
 }
 
+extension LaunchTests {
+    func testAuthLogoutFailureCanRetryAndSuccessfulLogoutSurvivesRelaunch() {
+        let suite = "mov.wireframe.test.auth-logout-success.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        app.launchArguments = ["-wire-screen", "T10", "-wire-fixture", "-wire-test-store-suite", suite,
+            "-wire-reset", "-wire-auth-logout-fixture", "-wire-auth-logout-fail-once", "-wire-auth-logout-delay", "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T10"].waitForExistence(timeout: 15))
+        let logout = app.buttons["authLogoutConfirm"]
+        XCTAssertTrue(logout.waitForExistence(timeout: 5))
+        tap("authLogoutConfirm")
+        XCTAssertFalse(logout.isEnabled, "The confirm button is disabled while the request is pending")
+        XCTAssertTrue(app.staticTexts["authLogoutFailure"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T10"].exists, "A 503 keeps the current session on T10")
+
+        tap("authLogoutConfirm")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-A01"].waitForExistence(timeout: 12), app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = ["-wire-fixture", "-wire-test-store-suite", suite, "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-A01"].waitForExistence(timeout: 15), "The saved logged-out state routes to A01 after relaunch")
+    }
+
+    func testAuthLogoutLateSuccessAfterLeavingConfirmationKeepsAccountLoggedIn() {
+        let suite = "mov.wireframe.test.auth-logout-late.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        app.launchArguments = ["-wire-screen", "T10", "-wire-fixture", "-wire-test-store-suite", suite,
+            "-wire-reset", "-wire-auth-logout-fixture", "-wire-auth-logout-delay", "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T10"].waitForExistence(timeout: 15))
+        tap("authLogoutConfirm")
+        XCTAssertFalse(app.buttons["authLogoutConfirm"].isEnabled)
+        tap("계속 사용하기")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T01"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["authLogoutConfirm"].exists)
+
+        let lateResponseWindow = expectation(description: "Delayed fixture responds after screen navigation")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) { lateResponseWindow.fulfill() }
+        wait(for: [lateResponseWindow], timeout: 7)
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T01"].exists, "The late response cannot navigate away from T01")
+
+        app.terminate()
+        app.launchArguments = ["-wire-fixture", "-wire-test-store-suite", suite, "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-H00"].waitForExistence(timeout: 15), "Leaving T10 before the response preserves the signed-in state on relaunch")
+    }
+
+    func testAuthLogoutResponseLostNeedsExplicitRetryAnd401SurvivesRelaunch() {
+        let suite = "mov.wireframe.test.auth-logout-response-lost.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        app.launchArguments = ["-wire-screen", "T10", "-wire-fixture", "-wire-test-store-suite", suite,
+            "-wire-reset", "-wire-auth-logout-fixture", "-wire-auth-logout-response-lost-then-401", "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T10"].waitForExistence(timeout: 15))
+
+        tap("authLogoutConfirm")
+        XCTAssertTrue(app.staticTexts["authLogoutFailure"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T10"].exists, "A lost response keeps the UI on T10 until an explicit retry")
+
+        tap("authLogoutConfirm")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-A01"].waitForExistence(timeout: 12), app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = ["-wire-fixture", "-wire-test-store-suite", suite, "-appearance", "light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-A01"].waitForExistence(timeout: 15), "The 401 retry persists the logged-out state after relaunch")
+    }
+}
+
 @MainActor final class PasswordResetUITests:XCTestCase {
     private var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
