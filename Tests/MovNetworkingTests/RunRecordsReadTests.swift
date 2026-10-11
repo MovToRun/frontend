@@ -2,10 +2,43 @@ import Foundation
 import XCTest
 @testable import MovNetworking
 
+private actor RunRecordsRecordingTransport: APIResponseSending {
+    struct Request: Sendable {
+        let path: String
+        let method: String
+        let body: Data?
+        let headers: [String: String]
+        let queryItems: [URLQueryItem]
+    }
+
+    private var responses: [APIClientResponse]
+    private var requests: [Request] = []
+
+    init(responses: [APIClientResponse]) { self.responses = responses }
+
+    func sendResponse(
+        path: String,
+        method: String,
+        body: Data?,
+        headers: [String: String],
+        queryItems: [URLQueryItem]
+    ) async throws -> APIClientResponse {
+        requests.append(Request(path: path, method: method, body: body, headers: headers, queryItems: queryItems))
+        guard !responses.isEmpty else { throw APIClientError.unexpectedResponse }
+        return responses.removeFirst()
+    }
+
+    func recordedRequests() -> [Request] { requests }
+}
+
 final class RunRecordsReadTests: XCTestCase {
     private let clientRunID = "0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11"
 
-    private func makeClient(_ token: String? = "run-test-token", attempts: Int = 1) throws -> RunRecordsClient {
+    private func makeClient(
+        _ token: String? = "run-test-token",
+        attempts: Int = 1,
+        transport: (any APIResponseSending)? = nil
+    ) throws -> RunRecordsClient {
         let configuration = try APIClientConfiguration(
             environment: .development,
             baseURLString: "https://api-dev.example.invalid/api/v1/",
@@ -14,15 +47,24 @@ final class RunRecordsReadTests: XCTestCase {
         )
         let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.protocolClasses = [MockURLProtocol.self]
+        let apiClient: any APIResponseSending = transport ?? APIClient(
+            configuration: configuration,
+            session: URLSession(configuration: sessionConfiguration)
+        )
         return RunRecordsClient(
-            apiClient: APIClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration)),
+            apiClient: apiClient,
             tokenProvider: RunTokenProvider(value: token),
             retryPolicy: RunRecordsRetryPolicy(maximumAttempts: attempts, delayNanoseconds: 0)
         )
     }
 
-    private func summary(id: String = "104", pointReward: String = #"{"status":"SETTLED","pointsAwarded":0}"#) -> String {
-        #"{"id":"\#(id)","clientRunId":"\#(clientRunID)","version":3,"startedAt":"2026-10-05T23:50:00+09:00","endedAt":"2026-10-06T00:30:00+09:00","runDate":"2026-10-05","elapsedSeconds":2400,"movingSeconds":2280,"distanceMeters":6400,"verdict":"VALID","verdictReason":null,"validDistanceMeters":6100,"validSeconds":2150,"paceSecondsPerKm":352,"title":"밤 러닝","memo":null,"pointReward":\#(pointReward),"createdAt":"2026-10-06T00:31:02+09:00","updatedAt":"2026-10-06T00:31:02+09:00"}"#
+    private func summary(
+        id: String = "104",
+        version: Int64 = 3,
+        pointReward: String = #"{"status":"SETTLED","pointsAwarded":0}"#,
+        titleJSON: String = #""밤 러닝""#
+    ) -> String {
+        #"{"id":"\#(id)","clientRunId":"\#(clientRunID)","version":\#(version),"startedAt":"2026-10-05T23:50:00+09:00","endedAt":"2026-10-06T00:30:00+09:00","runDate":"2026-10-05","elapsedSeconds":2400,"movingSeconds":2280,"distanceMeters":6400,"verdict":"VALID","verdictReason":null,"validDistanceMeters":6100,"validSeconds":2150,"paceSecondsPerKm":352,"title":\#(titleJSON),"memo":null,"pointReward":\#(pointReward),"createdAt":"2026-10-06T00:31:02+09:00","updatedAt":"2026-10-06T00:31:02+09:00"}"#
     }
 
     func testListUsesItemsWrapperAndPreservesOpaqueCursorAndKSTValues() async throws {
@@ -68,6 +110,14 @@ final class RunRecordsReadTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "GET")
     }
 
+    func testDetailAcceptsServerClearedNullableTitle() async throws {
+        let fields=String(summary(titleJSON:"null").dropFirst().dropLast())
+        let body=#"{\#(fields),"points":[],"pauses":[],"judgement":null}"#
+        MockURLProtocol.respond(statusCode:200,data:Data(body.utf8))
+        let detail=try await makeClient().fetchRun(id:"104")
+        XCTAssertNil(detail.summary.title)
+    }
+
     func testRejectsInvalidCursorPageSizeRunIDAndRewardWithoutSendingRequests() async throws {
         MockURLProtocol.reset()
         let client = try makeClient()
@@ -91,6 +141,119 @@ final class RunRecordsReadTests: XCTestCase {
             XCTFail("Expected missing token failure")
         } catch {
             XCTAssertEqual(error as? RunRecordsFailure, .accessTokenUnavailable)
+        }
+    }
+
+    func testTitleAndMemoPatchUseOnlyTheSelectedFieldAndDecodeClearedTitle() async throws {
+        let transport = RunRecordsRecordingTransport(responses:[APIClientResponse(
+            statusCode: 200, data: Data(summary(version: 4, titleJSON: "null").utf8), requestID: nil
+        )])
+        let updated = try await makeClient(transport:transport).updateRun(
+            id: "104", version: 3, patch: BackendRunEditPatch(title: "")
+        )
+        XCTAssertNil(updated.title)
+        XCTAssertEqual(updated.version, 4)
+
+        let requests=await transport.recordedRequests()
+        let request=try XCTUnwrap(requests.last)
+        XCTAssertEqual(request.path,"runs/104")
+        XCTAssertEqual(request.method,"PATCH")
+        XCTAssertEqual(request.headers["Authorization"],"Bearer run-test-token")
+        XCTAssertEqual(request.headers["Accept"],"application/json")
+        XCTAssertEqual(request.headers["Cache-Control"],"no-store")
+        XCTAssertEqual(request.headers["Content-Type"],"application/json")
+        let requestBody = try XCTUnwrap(request.body)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: requestBody) as? [String: Any])
+        XCTAssertEqual(object["version"] as? Int, 3)
+        XCTAssertEqual(object["title"] as? String, "")
+        XCTAssertNil(object["memo"], "An omitted field must remain omitted so the server preserves it.")
+    }
+
+    func testMemoPatchCanClearWithoutSendingTitle() async throws {
+        let transport=RunRecordsRecordingTransport(responses:[APIClientResponse(statusCode:200,data:Data(summary(version:4).utf8),requestID:nil)])
+        _ = try await makeClient(transport:transport).updateRun(id: "104", version: 3, patch: BackendRunEditPatch(memo: ""))
+        let requests=await transport.recordedRequests()
+        let request=try XCTUnwrap(requests.last)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.body)) as? [String: Any])
+        XCTAssertEqual(object["memo"] as? String, "")
+        XCTAssertNil(object["title"])
+    }
+
+    func testPatchPreservesWhitespaceAndUnicodeWithoutNormalization() async throws {
+        let rawTitle="  e\u{301}  "
+        let encodedTitle=String(decoding:try JSONEncoder().encode(rawTitle),as:UTF8.self)
+        let transport=RunRecordsRecordingTransport(responses:[APIClientResponse(
+            statusCode:200,data:Data(summary(version:4,titleJSON:encodedTitle).utf8),requestID:nil
+        )])
+        let updated=try await makeClient(transport:transport).updateRun(
+            id:"104",version:3,patch:BackendRunEditPatch(title:rawTitle)
+        )
+        XCTAssertEqual(updated.title,rawTitle)
+        let requests=await transport.recordedRequests()
+        let request=try XCTUnwrap(requests.last)
+        let object=try XCTUnwrap(JSONSerialization.jsonObject(with:try XCTUnwrap(request.body)) as? [String:Any])
+        XCTAssertEqual(object["title"] as? String,rawTitle)
+    }
+
+    func testPatchUsesJavaUTF16LengthLimitsAndNeverAutomaticallyRetries() async throws {
+        MockURLProtocol.reset()
+        let client = try makeClient(attempts: 2)
+        do {
+            _ = try await client.updateRun(id: "104", version: 3, patch: BackendRunEditPatch(title: String(repeating: "😀", count: 21)))
+            XCTFail("21 supplementary characters exceed Java String.length() limit of 40 UTF-16 units")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .invalidEdit)
+        }
+        do {
+            _ = try await client.updateRun(id: "104", version: 3, patch: BackendRunEditPatch(memo: String(repeating: "😀", count: 151)))
+            XCTFail("151 supplementary characters exceed Java String.length() limit of 300 UTF-16 units")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .invalidEdit)
+        }
+        XCTAssertTrue(MockURLProtocol.requests.isEmpty)
+
+        let memoRaw=String(repeating:"😀",count:150)
+        let transport=RunRecordsRecordingTransport(responses:[
+            APIClientResponse(statusCode:200,data:Data(summary(version:4).utf8),requestID:nil),
+            APIClientResponse(statusCode:200,data:Data(summary(version:5).utf8),requestID:nil)
+        ])
+        let injectableClient=try makeClient(attempts:2,transport:transport)
+        _=try await injectableClient.updateRun(id:"104",version:3,patch:BackendRunEditPatch(title:String(repeating:"😀",count:20)))
+        _=try await injectableClient.updateRun(id:"104",version:4,patch:BackendRunEditPatch(memo:memoRaw))
+        let captured=await transport.recordedRequests()
+        let titleBody=try XCTUnwrap(captured.first?.body)
+        let titlePayload=try XCTUnwrap(JSONSerialization.jsonObject(with:titleBody) as? [String:Any])
+        let acceptedRequest=try XCTUnwrap(captured.last)
+        let acceptedBody=try XCTUnwrap(JSONSerialization.jsonObject(with:try XCTUnwrap(acceptedRequest.body)) as? [String:Any])
+        XCTAssertEqual((titlePayload["title"] as? String)?.utf16.count,40,"The client follows Java String.length(), not Swift grapheme count")
+        XCTAssertEqual((acceptedBody["memo"] as? String)?.utf16.count,300,"Memo uses its backend Java String.length() limit")
+
+        MockURLProtocol.respond(statusCode: 503, data: Data(#"{"code":"INTERNAL_ERROR"}"#.utf8))
+        do {
+            _ = try await client.updateRun(id: "104", version: 3, patch: BackendRunEditPatch(memo: "draft"))
+            XCTFail("Expected server failure")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .serverFailure(statusCode: 503, requestID: nil))
+        }
+        XCTAssertEqual(MockURLProtocol.requests.count, 1, "PATCH must not be retried automatically because a lost response may follow a committed version increment.")
+    }
+
+    func testPatchMapsVersionConflictAndDeletedOrForeignRecordToFailures() async throws {
+        MockURLProtocol.respond(statusCode: 409, data: Data(#"{"code":"VERSION_CONFLICT","requestId":"req-conflict"}"#.utf8))
+        do {
+            _ = try await makeClient(attempts: 2).updateRun(id: "104", version: 2, patch: BackendRunEditPatch(title: "draft"))
+            XCTFail("Expected version conflict")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .versionConflict)
+        }
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+
+        MockURLProtocol.respond(statusCode: 404, data: Data(#"{"code":"NOT_FOUND"}"#.utf8))
+        do {
+            _ = try await makeClient().updateRun(id: "104", version: 3, patch: BackendRunEditPatch(title: "draft"))
+            XCTFail("Expected missing or inaccessible record")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .recordNotFound)
         }
     }
 

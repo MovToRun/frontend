@@ -487,6 +487,51 @@ import UIKit
         app.terminate()
     }
 
+    func testInjectedRunRecordEditKeepsInlineFlowAndReappliesDraftAfterConflict() {
+        let suite="run-edit-fixture-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-fixture","-wire-run-records-edit-fixture","-wire-run-records-write-conflict","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        let row=app.buttons["remoteRun-fixture-run-104"]
+        XCTAssertTrue(row.waitForExistence(timeout:8),app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8),app.debugDescription)
+
+        tap("editTitle")
+        let title=app.textFields["inlineTitleInput"]
+        replaceInput(title,"초안 제목")
+        tap("finishTitle")
+        XCTAssertTrue(app.descendants(matching:.any)["inlineTitleSaveFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(title.value as? String,"초안 제목","A version conflict keeps the inline draft in place")
+        tap("finishTitle")
+        XCTAssertEqual(app.staticTexts["recordTitle"].label,"초안 제목")
+        XCTAssertTrue(app.staticTexts["원본 거리"].exists,"Editing a title leaves the measured run fields visible")
+
+        app.swipeUp()
+        tap("editMemo")
+        let memo=app.descendants(matching:.any)["inlineMemoInput"].firstMatch
+        replaceInput(memo,"새 메모")
+        tap("finishMemo")
+        XCTAssertEqual(app.staticTexts["recordMemo"].label,"새 메모")
+        app.terminate()
+    }
+
+    func testInjectedRunRecordEditFailurePreservesDraft() {
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite","run-edit-failure-\(UUID().uuidString)","-wire-reset","-wire-run-records-fixture","-wire-run-records-edit-fixture","-wire-run-records-write-fail","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        app.buttons["remoteRun-fixture-run-104"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8),app.debugDescription)
+        tap("editTitle")
+        let title=app.textFields["inlineTitleInput"]
+        replaceInput(title,"실패 뒤에도 남을 초안")
+        tap("finishTitle")
+        XCTAssertTrue(app.descendants(matching:.any)["inlineTitleSaveFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(title.value as? String,"실패 뒤에도 남을 초안")
+        XCTAssertTrue(app.buttons["finishTitle"].isEnabled,"The user can correct or retry without retyping the draft")
+        app.terminate()
+    }
+
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]

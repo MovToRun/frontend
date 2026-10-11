@@ -27,7 +27,7 @@ struct BackendRunSummary: Equatable, Sendable, Identifiable {
     let validDistanceMeters: Int64?
     let validSeconds: Int64?
     let paceSecondsPerKm: Int64?
-    let title: String
+    let title: String?
     let memo: String?
     let createdAt: Date
     let updatedAt: Date
@@ -89,6 +89,9 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
     case accessTokenUnavailable
     case unauthenticated
     case recordNotFound
+    case versionConflict
+    case versionConflictRefreshFailed
+    case invalidEdit
     case invalidPageSize
     case invalidResponse
     case paginationLoop
@@ -102,6 +105,12 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
             return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
         case .recordNotFound:
             return "이 러닝 기록을 찾을 수 없어요. 목록을 새로고침해 주세요."
+        case .versionConflict:
+            return "다른 곳에서 기록이 변경됐어요. 초안은 유지했어요. 완료를 다시 누르면 최신 기록에 적용해요."
+        case .versionConflictRefreshFailed:
+            return "다른 곳에서 기록이 변경됐어요. 초안은 유지했어요. 최신 기록을 확인하지 못했어요. 잠시 후 다시 완료해 주세요."
+        case .invalidEdit:
+            return "제목은 40자, 메모는 300자 이내로 입력해 주세요."
         case .invalidPageSize, .invalidResponse, .paginationLoop:
             return "러닝 기록을 불러오지 못했어요. 다시 시도해 주세요."
         case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
@@ -119,8 +128,27 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
         switch self {
         case .invalidResponse, .paginationLoop, .serverFailure, .transport:
             true
-        case .accessTokenUnavailable, .unauthenticated, .recordNotFound, .invalidPageSize, .cancelled:
+        case .accessTokenUnavailable, .unauthenticated, .recordNotFound, .versionConflict, .versionConflictRefreshFailed, .invalidEdit, .invalidPageSize, .cancelled:
             false
+        }
+    }
+
+    var editMessage: String {
+        switch self {
+        case .accessTokenUnavailable, .unauthenticated:
+            return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
+        case .recordNotFound:
+            return "이 러닝 기록을 찾을 수 없어요. 목록을 새로고침해 주세요."
+        case .versionConflict, .versionConflictRefreshFailed, .invalidEdit:
+            return userMessage
+        case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
+            return "저장하지 못했어요. 잠시 후 다시 완료해 주세요."
+        case .transport:
+            return "네트워크 연결을 확인한 뒤 다시 완료해 주세요."
+        case .cancelled:
+            return "요청이 취소됐어요."
+        case .invalidPageSize, .invalidResponse, .paginationLoop, .serverFailure:
+            return "저장 결과를 확인하지 못했어요. 다시 시도해 주세요."
         }
     }
 }
@@ -140,17 +168,51 @@ protocol RunRecordsReading: Sendable {
     func fetchRun(id: String) async throws -> BackendRunDetail
 }
 
-final class RunRecordsClient: RunRecordsReading, Sendable {
+enum BackendRunEditField: Equatable, Sendable {
+    case title
+    case memo
+}
+
+struct BackendRunEditPatch: Equatable, Sendable {
+    /// `nil` omits the field; an empty string explicitly clears it.
+    let title: String?
+    /// `nil` omits the field; an empty string explicitly clears it.
+    let memo: String?
+
+    init(title: String? = nil, memo: String? = nil) {
+        self.title = title
+        self.memo = memo
+    }
+
+    var field: BackendRunEditField? {
+        if title != nil, memo == nil { return .title }
+        if memo != nil, title == nil { return .memo }
+        return nil
+    }
+
+    func value(for field: BackendRunEditField) -> String? {
+        switch field {
+        case .title: title
+        case .memo: memo
+        }
+    }
+}
+
+protocol RunRecordsUpdating: Sendable {
+    func updateRun(id: String, version: Int64, patch: BackendRunEditPatch) async throws -> BackendRunSummary
+}
+
+final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
     static let defaultPageSize = 20
     static let maximumPageSize = 50
 
-    private let apiClient: APIClient
+    private let apiClient: any APIResponseSending
     private let tokenProvider: any AccessTokenProviding
     private let retryPolicy: RunRecordsRetryPolicy
     private let sleep: @Sendable (UInt64) async throws -> Void
 
     init(
-        apiClient: APIClient,
+        apiClient: any APIResponseSending,
         tokenProvider: any AccessTokenProviding,
         retryPolicy: RunRecordsRetryPolicy = RunRecordsRetryPolicy(),
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
@@ -194,7 +256,43 @@ final class RunRecordsClient: RunRecordsReading, Sendable {
         }
     }
 
-    private func sendAuthorized(path: String, queryItems: [URLQueryItem] = []) async throws -> APIClientResponse {
+    func updateRun(id: String, version: Int64, patch: BackendRunEditPatch) async throws -> BackendRunSummary {
+        guard Self.isSafeRunID(id), version >= 0, patch.field != nil,
+              patch.title.map({ $0.utf16.count <= 40 }) ?? true,
+              patch.memo.map({ $0.utf16.count <= 300 }) ?? true else {
+            throw RunRecordsFailure.invalidEdit
+        }
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(RunUpdateRequest(version: version, title: patch.title, memo: patch.memo))
+        } catch {
+            throw RunRecordsFailure.invalidResponse
+        }
+
+        let response = try await sendAuthorized(
+            path: "runs/\(id)", method: "PATCH", body: body, contentType: "application/json", retriesEnabled: false
+        )
+        do {
+            let summary = try JSONDecoder().decode(RunSummaryResponse.self, from: response.data).value()
+            guard summary.id == id, version < Int64.max, summary.version == version + 1 else {
+                throw RunRecordsFailure.invalidResponse
+            }
+            return summary
+        } catch let failure as RunRecordsFailure {
+            throw failure
+        } catch {
+            throw RunRecordsFailure.invalidResponse
+        }
+    }
+
+    private func sendAuthorized(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil,
+        contentType: String? = nil,
+        queryItems: [URLQueryItem] = [],
+        retriesEnabled: Bool = true
+    ) async throws -> APIClientResponse {
         let token: String
         do {
             guard let value = try await tokenProvider.accessToken(),
@@ -211,18 +309,19 @@ final class RunRecordsClient: RunRecordsReading, Sendable {
             throw RunRecordsFailure.accessTokenUnavailable
         }
 
-        let headers = [
+        var headers = [
             "Authorization": "Bearer \(token)",
             "Accept": "application/json",
             "Cache-Control": "no-store"
         ]
+        if let contentType { headers["Content-Type"] = contentType }
 
         for attempt in 1...retryPolicy.maximumAttempts {
             do {
-                let response = try await apiClient.sendResponse(path: path, headers: headers, queryItems: queryItems)
+                let response = try await apiClient.sendResponse(path: path, method: method, body: body, headers: headers, queryItems: queryItems)
                 guard (200..<300).contains(response.statusCode) else {
-                    let failure = mapFailure(response, isDetail: path != "runs")
-                    if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                    let failure = mapFailure(response, isDetail: path != "runs", isEdit: method == "PATCH")
+                    if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                         try await waitBeforeRetry()
                         continue
                     }
@@ -230,14 +329,14 @@ final class RunRecordsClient: RunRecordsReading, Sendable {
                 }
                 return response
             } catch let failure as RunRecordsFailure {
-                if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                     try await waitBeforeRetry()
                     continue
                 }
                 throw failure
             } catch let error as APIClientError {
                 let failure = mapFailure(error)
-                if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                     try await waitBeforeRetry()
                     continue
                 }
@@ -256,7 +355,7 @@ final class RunRecordsClient: RunRecordsReading, Sendable {
         catch { throw RunRecordsFailure.cancelled }
     }
 
-    private func mapFailure(_ response: APIClientResponse, isDetail: Bool) -> RunRecordsFailure {
+    private func mapFailure(_ response: APIClientResponse, isDetail: Bool, isEdit: Bool = false) -> RunRecordsFailure {
         let problem = try? JSONDecoder().decode(RunProblemResponse.self, from: response.data)
         let requestID = problem?.requestId ?? response.requestID
         switch response.statusCode {
@@ -264,6 +363,10 @@ final class RunRecordsClient: RunRecordsReading, Sendable {
             return .unauthenticated
         case 404 where isDetail:
             return .recordNotFound
+        case 409 where isEdit && problem?.code == "VERSION_CONFLICT":
+            return .versionConflict
+        case 400 where isEdit:
+            return .invalidEdit
         default:
             return .serverFailure(statusCode: response.statusCode, requestID: requestID)
         }
@@ -301,7 +404,14 @@ private struct RunListResponse: Decodable {
 }
 
 private struct RunProblemResponse: Decodable {
+    let code: String?
     let requestId: String?
+}
+
+private struct RunUpdateRequest: Encodable {
+    let version: Int64
+    let title: String?
+    let memo: String?
 }
 
 private struct RunSummaryResponse: Decodable {
@@ -319,7 +429,7 @@ private struct RunSummaryResponse: Decodable {
     let validDistanceMeters: Int64?
     let validSeconds: Int64?
     let paceSecondsPerKm: Int64?
-    let title: String
+    let title: String?
     let memo: String?
     let createdAt: String
     let updatedAt: String
@@ -334,7 +444,7 @@ private struct RunSummaryResponse: Decodable {
     init(
         id: String, clientRunId: UUID, version: Int64, startedAt: String, endedAt: String?, runDate: String,
         elapsedSeconds: Int64, movingSeconds: Int64, distanceMeters: Int64, verdict: String, verdictReason: String?,
-        validDistanceMeters: Int64?, validSeconds: Int64?, paceSecondsPerKm: Int64?, title: String, memo: String?,
+        validDistanceMeters: Int64?, validSeconds: Int64?, paceSecondsPerKm: Int64?, title: String?, memo: String?,
         createdAt: String, updatedAt: String, pointReward: PointRewardResponse?
     ) {
         self.id = id; self.clientRunId = clientRunId; self.version = version; self.startedAt = startedAt; self.endedAt = endedAt
@@ -360,7 +470,7 @@ private struct RunSummaryResponse: Decodable {
         validDistanceMeters = try decodeRequiredNullable(Int64.self, from: container, forKey: .validDistanceMeters)
         validSeconds = try decodeRequiredNullable(Int64.self, from: container, forKey: .validSeconds)
         paceSecondsPerKm = try decodeRequiredNullable(Int64.self, from: container, forKey: .paceSecondsPerKm)
-        title = try container.decode(String.self, forKey: .title)
+        title = try decodeRequiredNullable(String.self, from: container, forKey: .title)
         memo = try decodeRequiredNullable(String.self, from: container, forKey: .memo)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
@@ -453,7 +563,7 @@ private struct RunDetailResponse: Decodable {
     let validDistanceMeters: Int64?
     let validSeconds: Int64?
     let paceSecondsPerKm: Int64?
-    let title: String
+    let title: String?
     let memo: String?
     let createdAt: String
     let updatedAt: String
@@ -484,7 +594,7 @@ private struct RunDetailResponse: Decodable {
         validDistanceMeters = try decodeRequiredNullable(Int64.self, from: container, forKey: .validDistanceMeters)
         validSeconds = try decodeRequiredNullable(Int64.self, from: container, forKey: .validSeconds)
         paceSecondsPerKm = try decodeRequiredNullable(Int64.self, from: container, forKey: .paceSecondsPerKm)
-        title = try container.decode(String.self, forKey: .title)
+        title = try decodeRequiredNullable(String.self, from: container, forKey: .title)
         memo = try decodeRequiredNullable(String.self, from: container, forKey: .memo)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
@@ -725,11 +835,34 @@ actor RunRecordsLoader {
         await loadDetail(runID: runID)
     }
 
+    func applyUpdatedSummary(_ summary: BackendRunSummary) {
+        switch state {
+        case .loaded(let snapshot): state = .loaded(snapshot.replacing(summary))
+        case .loadingMore(let snapshot): state = .loadingMore(snapshot.replacing(summary))
+        case .failedLoadingMore(let snapshot, let failure): state = .failedLoadingMore(snapshot.replacing(summary), failure)
+        case .idle, .loading, .failed: break
+        }
+        if case .loaded(let detail) = detailState, detail.summary.id == summary.id {
+            detailState = .loaded(BackendRunDetail(
+                summary: summary, points: detail.points, pauses: detail.pauses, judgement: detail.judgement
+            ))
+        }
+    }
+
     func cancelAll() {
         listGeneration &+= 1
         detailGeneration &+= 1
         state = .idle
         detailState = .idle
         consumedCursors.removeAll()
+    }
+}
+
+private extension BackendRunSnapshot {
+    func replacing(_ summary: BackendRunSummary) -> BackendRunSnapshot {
+        BackendRunSnapshot(
+            items: items.map { $0.id == summary.id ? summary : $0 },
+            nextCursor: nextCursor
+        )
     }
 }
