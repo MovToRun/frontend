@@ -38,6 +38,8 @@
 
 `WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 C01 feed, C04 post, C06 liked posts, C10–C23 인증·공유 코스·크루 생성·관리·심사 흐름, C26 C05/C13 작성 초안 이탈 확인, C28 settings, C32–C40 크루 정보·신청·멤버·가입 안내·게시판·알림 관리, C42 blocked list, C43 activity history와 PR28 moderation flows는 `WireframeHome.swift` 및 `WireframeCore.swift`의 로컬 fixture/state로 동작합니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
+러닝 `pointReward` 모델은 확정 backend DTO의 null·PENDING·SETTLED(0 포함)·UNAVAILABLE 상태를 준비하고, 완료·기록 목록·상세에 기존 포인트 표시 체계를 재사용합니다. 로컬 예시 기록은 유지하며 API 요청이나 실제 서버 연결은 추가하지 않았습니다. [DTO 매핑과 검증 범위](RUN_POINT_REWARD_FRONTEND_CONTRACT.md)를 참고하세요. 이 화면 묶음도 전체 source 대비 픽셀·모션 QA는 남아 있습니다.
+
 ## 기능 브랜치 순서와 완료 기준
 
 | 순서 | 브랜치 | 상태 묶음 | 완료 기준 |

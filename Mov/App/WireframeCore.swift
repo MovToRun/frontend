@@ -873,6 +873,17 @@ struct WireframeRoot:View {
 
                     }
                     if ui.screen=="S05"{var record=current;record.kilometers=0;record.seconds=312;record.segments=[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")];store.records=[record];ui.selected=record.id}
+                    if WReviewMode.tools,let i=args.firstIndex(of:"-wire-run-point-reward"),args.indices.contains(i+1),let index=store.records.indices.first {
+                        let reward:RunPointReward?
+                        switch args[i+1] {
+                        case "pending": reward=try? RunPointReward(status:.pending,pointsAwarded:nil)
+                        case "settled-zero": reward=try? RunPointReward(status:.settled,pointsAwarded:0)
+                        case "settled-positive": reward=try? RunPointReward(status:.settled,pointsAwarded:15)
+                        case "unavailable": reward=try? RunPointReward(status:.unavailable,pointsAwarded:nil)
+                        default: reward=nil
+                        }
+                        if let reward {store.records[index].pointReward=reward;store.persist()}
+                    }
                 }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in remoteReads.accountDidChange(to:scopeID)}

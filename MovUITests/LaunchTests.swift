@@ -349,6 +349,50 @@ import UIKit
         XCTAssertTrue(app.buttons["tab-1"].isSelected,"Back from detail returns to the records root")
     }
 
+    func testRunPointRewardContractAcrossCompletionListAndDetail() {
+        let scenarios:[(String?,String)] = [
+            ("pending","러닝 포인트 적립 확인 중"),
+            ("settled-zero","러닝 포인트 0 포인트 적립"),
+            ("settled-positive","러닝 포인트 15 포인트 적립"),
+            ("unavailable","러닝 포인트 적립 상태 확인 불가"),
+            (nil,"")
+        ]
+        for (scenario,label) in scenarios {
+            let suite="run-point-reward-\(UUID().uuidString)"
+            app.launchArguments=["-wire-screen","S01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]
+            if let scenario {app.launchArguments += ["-wire-run-point-reward",scenario]}
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-S01"].waitForExistence(timeout:10),app.debugDescription)
+            let completionValue=app.descendants(matching:.any)["runPointReward-completionValue"]
+            if label.isEmpty {
+                XCTAssertFalse(completionValue.exists,"A missing pointReward does not invent a server state")
+            } else {
+                XCTAssertTrue(completionValue.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(completionValue.label,label)
+            }
+
+            tap("기록 보기")
+            XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5),app.debugDescription)
+            let detailValue=app.descendants(matching:.any)["runPointReward-detailValue"]
+            if label.isEmpty {XCTAssertFalse(detailValue.exists)} else {XCTAssertTrue(detailValue.waitForExistence(timeout:5));XCTAssertEqual(detailValue.label,label)}
+
+            app.terminate()
+            app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]
+            if let scenario {app.launchArguments += ["-wire-run-point-reward",scenario]}
+            app.launch()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:5),app.debugDescription)
+            let listValue=app.descendants(matching:.any)["runPointReward-list"]
+            if label.isEmpty {
+                XCTAssertFalse(listValue.exists,"Local example runs remain unchanged and have no backend reward object")
+                XCTAssertTrue(app.descendants(matching:.any)["recordPointExample"].exists,"The existing review-only sample marker remains intact")
+            } else {
+                XCTAssertTrue(listValue.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertEqual(listValue.label,label)
+            }
+            app.terminate()
+        }
+    }
+
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]

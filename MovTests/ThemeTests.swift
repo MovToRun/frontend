@@ -732,8 +732,46 @@ final class ThemeTests:XCTestCase {
         let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1}"#.utf8)
         let decoded = try JSONDecoder().decode(RunRecord.self, from: legacy)
         XCTAssertNil(decoded.isExample, "Records saved before the Review52 fixture marker decode without migration")
+        XCTAssertNil(decoded.pointReward, "Old local runs have no server point reward")
         let fixture = RunRecord(date: WReviewClock.referenceDate, title: "fixture", seconds: 1, kilometers: 1, isExample: true)
         XCTAssertTrue(fixture.isExample == true)
+    }
+
+    func testRunPointRewardMatchesBackendDTOAndPreservesSettledZero() throws {
+        let fixtures:[(String,RunPointRewardStatus,Int?)] = [
+            (#"{"status":"PENDING","pointsAwarded":null}"#,.pending,nil),
+            (#"{"status":"SETTLED","pointsAwarded":0}"#,.settled,0),
+            (#"{"status":"SETTLED","pointsAwarded":15}"#,.settled,15),
+            (#"{"status":"UNAVAILABLE","pointsAwarded":null}"#,.unavailable,nil)
+        ]
+        for (json,status,points) in fixtures {
+            let reward=try JSONDecoder().decode(RunPointReward.self,from:Data(json.utf8))
+            XCTAssertEqual(reward.status,status)
+            XCTAssertEqual(reward.pointsAwarded,points)
+            let roundTrip=try JSONDecoder().decode(RunPointReward.self,from:JSONEncoder().encode(reward))
+            XCTAssertEqual(roundTrip,reward)
+        }
+        let absentRequest=try JSONDecoder().decode(RunRecord.self,from:Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1,"pointReward":null}"#.utf8))
+        XCTAssertNil(absentRequest.pointReward,"A null pointReward means no request exists")
+    }
+
+    func testRunPointRewardRejectsMalformedStatusAmountPairs() throws {
+        let invalid=[
+            #"{"status":"PENDING","pointsAwarded":1}"#,
+            #"{"status":"SETTLED","pointsAwarded":null}"#,
+            #"{"status":"SETTLED","pointsAwarded":-1}"#,
+            #"{"status":"UNAVAILABLE","pointsAwarded":0}"#,
+            #"{"status":"UNKNOWN","pointsAwarded":null}"#,
+            #"{"status":"PENDING"}"#
+        ]
+        for json in invalid {
+            XCTAssertThrowsError(try JSONDecoder().decode(RunPointReward.self,from:Data(json.utf8)),json)
+        }
+        let settledZero=try RunPointReward(status:.settled,pointsAwarded:0)
+        XCTAssertEqual(settledZero.accessibilityLabel,"러닝 포인트 0 포인트 적립")
+        XCTAssertEqual(settledZero.compactText,"0","A settled zero is a real amount and must not be treated as missing")
+        XCTAssertEqual(try? RunPointReward(status:.pending,pointsAwarded:nil).accessibilityLabel,"러닝 포인트 적립 확인 중")
+        XCTAssertEqual(try? RunPointReward(status:.unavailable,pointsAwarded:nil).accessibilityLabel,"러닝 포인트 적립 상태 확인 불가")
     }
 
     func testReview52ShopArtworkMatchesSourceCardGeometry() {
@@ -1084,12 +1122,14 @@ final class ThemeTests:XCTestCase {
         let record=store.finish(save:true,at:start.addingTimeInterval(740))!
         XCTAssertEqual(record.seconds,360)
         XCTAssertEqual(record.kilometers,0,"Unconnected GPS must never fabricate distance")
+        XCTAssertNil(record.pointReward,"Local demo saves do not invent a server reward request")
         let countAfterSave=store.records.count
         XCTAssertNil(store.finish(save:true,at:start.addingTimeInterval(741)))
         XCTAssertEqual(store.records.count,countAfterSave,"Repeated save must not duplicate a record")
         let reloaded=RunStore(defaults:defaults)
         XCTAssertNil(reloaded.session)
         XCTAssertEqual(reloaded.records.first?.id,record.id)
+        XCTAssertNil(reloaded.records.first?.pointReward)
         reloaded.delete(record.id)
         XCTAssertFalse(RunStore(defaults:defaults).records.contains{$0.id==record.id})
     }
