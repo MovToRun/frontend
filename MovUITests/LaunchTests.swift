@@ -5,11 +5,75 @@ import UIKit
     override func setUp(){continueAfterFailure=false}
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    func openMemberProfileFixture(_ extraArguments:[String]=[]){
+        app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.member-profile.\(UUID().uuidString)","-wire-reset","-wire-member-profile-fixture","-appearance","light"]+extraArguments
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:15))
+        XCTAssertTrue(app.staticTexts["remoteProfileNickname"].waitForExistence(timeout:8),app.debugDescription)
+    }
     func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
-    private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{app.scrollViews.firstMatch.swipeUp()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
+    private func scrollCurrentScreen(){
+        let visible=app.scrollViews.allElementsBoundByIndex.first{$0.isHittable && $0.frame.minX>=0}
+        visible?.swipeUp()
+    }
+    private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{scrollCurrentScreen()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
+    func testMemberProfileEditSavesPartialFieldsAndShowsServerValues(){
+        openMemberProfileFixture()
+        XCTAssertEqual(app.staticTexts["remoteProfileNickname"].label,"RunMate")
+        tap("카드 편집")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:6))
+        replace("RunnerNew",into:app.textFields["memberProfileEditNickname"])
+        tap("memberProfileEditSave")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.staticTexts["remoteProfileNickname"].label,"RunnerNew")
+        XCTAssertTrue(app.staticTexts["아침마다 달려요"].exists,"An omitted introduction remains on the server")
+        XCTAssertTrue(app.staticTexts["모브시 북부권"].exists,"An omitted region remains on the server")
+        XCTAssertFalse(app.staticTexts["63.12"].exists,"Private weight is not displayed on the profile card")
+        app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.member-profile.read-failure.\(UUID().uuidString)","-wire-reset","-wire-member-profile-fixture","-wire-member-profile-read-fail-once","-appearance","light"]
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:15))
+        XCTAssertTrue(app.staticTexts["remoteProfileReadFailure"].waitForExistence(timeout:8))
+        XCTAssertTrue(app.staticTexts["새벽러너"].exists,"A failed read does not replace the existing local card")
+        tap("remoteProfileRetry")
+        XCTAssertTrue(app.staticTexts["remoteProfileNickname"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.staticTexts["remoteProfileNickname"].label,"RunMate")
+    }
+    func testMemberProfileNicknameConflictKeepsDraftAndDoesNotChangeExistingValue(){
+        openMemberProfileFixture(["-wire-member-profile-nickname-conflict"])
+        tap("카드 편집")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:6))
+        let nickname=app.textFields["memberProfileEditNickname"]
+        replace("TakenName",into:nickname)
+        tap("memberProfileEditSave")
+        XCTAssertTrue(app.staticTexts["memberProfileEditFailure"].waitForExistence(timeout:6))
+        XCTAssertEqual(nickname.value as? String,"TakenName")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].exists)
+        tap("memberProfileEditCancel")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:6))
+        XCTAssertEqual(app.staticTexts["remoteProfileNickname"].label,"RunMate")
+    }
+    func testMemberProfileWeightShowsServerTruncationAndRejectsOutOfRangeInput(){
+        openMemberProfileFixture()
+        if !app.buttons["memberProfileWeightRow"].isHittable{scrollCurrentScreen()}
+        tap("memberProfileWeightRow")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T02"].waitForExistence(timeout:6))
+        let weight=app.textFields["profileWeightInput"]
+        XCTAssertTrue(weight.waitForExistence(timeout:5))
+        replace("63.129",into:weight)
+        tap("saveWeightProfile")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:8))
+        tap("memberProfileWeightRow")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T02"].waitForExistence(timeout:6))
+        XCTAssertEqual(app.textFields["profileWeightInput"].value as? String,"63.12")
+        replace("300.001",into:app.textFields["profileWeightInput"])
+        tap("saveWeightProfile")
+        XCTAssertTrue(app.staticTexts["memberProfileWeightFailure"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.textFields["profileWeightInput"].value as? String,"300.001","Invalid source input must remain visible and must not be truncated")
+    }
     func containsBrandGreen(in image:UIImage, rect:CGRect)->Bool {
         guard let source=image.cgImage else{return false}
         let scale=image.scale

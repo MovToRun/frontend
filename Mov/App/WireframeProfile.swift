@@ -3,12 +3,108 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ImageIO
 extension WireframeRoot {
+    func beginMemberProfileDraft(_ profile:MemberProfile,for screen:String){
+        memberProfileDraftBaseline=profile
+        memberProfileDraftScopeID=ui.remoteAccountScopeID
+        ui.error=""
+        if screen=="M02" {
+            ui.nickname=profile.nickname
+            ui.introduction=profile.introduction ?? ""
+            ui.region=profile.region ?? "선택 안 함"
+            ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)
+        } else if screen=="T02" {
+            ui.weight=WMemberProfileValidation.weightText(profile.weightKg)
+            ui.profile.weight=ui.weight
+        }
+    }
+
+    func applyMemberProfilePublicFields(_ profile:MemberProfile){
+        ui.profile.nickname=profile.nickname
+        ui.profile.introduction=profile.introduction ?? ""
+        ui.profile.region=profile.region ?? "선택 안 함"
+    }
+
+    func restoreMemberProfileDraft(){
+        let baseline=memberProfileDraftScopeID==ui.remoteAccountScopeID ? memberProfileDraftBaseline:nil
+        if ui.screen=="M02" {
+            if let baseline {
+                ui.nickname=baseline.nickname
+                ui.introduction=baseline.introduction ?? ""
+                ui.region=baseline.region ?? "선택 안 함"
+            } else {
+                ui.nickname=ui.profile.nickname
+                ui.introduction=ui.profile.introduction
+                ui.region=ui.profile.region
+            }
+            ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)
+        } else if ui.screen=="T02" {
+            ui.weight=baseline.map { WMemberProfileValidation.weightText($0.weightKg) } ?? ui.profile.weight
+            if baseline != nil { ui.profile.weight=ui.weight }
+        }
+        ui.error=""
+    }
+
+    func saveMemberProfileEdit(){
+        ui.error=""
+        guard remoteReads.hasMemberProfileDependency else {
+            guard WProfileValidation.isValid(nickname:ui.nickname,introduction:ui.introduction) else {
+                ui.error="닉네임은 1–20자, 한 줄 소개는 60자 이내로 입력해 주세요."
+                return
+            }
+            ui.profile.photo=ui.photo
+            ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines)
+            ui.profile.introduction=ui.introduction
+            ui.profile.region=ui.region
+            ui.save();back();return
+        }
+        guard let baseline=memberProfileDraftBaseline,
+              memberProfileDraftScopeID==ui.remoteAccountScopeID,
+              remoteReads.accountScopeID==ui.remoteAccountScopeID,
+              case .loaded=remoteReads.memberProfileState else {
+            ui.error="계정 프로필을 불러온 뒤 저장해 주세요."
+            return
+        }
+        if let error=WMemberProfileValidation.nicknameError(for:ui.nickname){ui.error=error;return}
+        if let error=WMemberProfileValidation.introductionError(for:ui.introduction){ui.error=error;return}
+        if let error=WMemberProfileValidation.regionError(for:ui.region){ui.error=error;return}
+        let patch=WMemberProfileValidation.profilePatch(baseline:baseline,nickname:ui.nickname,introduction:ui.introduction,region:ui.region)
+        guard patch.hasChanges else {
+            applyMemberProfilePublicFields(baseline)
+            ui.profile.photo=ui.photo
+            ui.save();back();return
+        }
+        remoteReads.saveMemberProfile(patch,accountScopeID:ui.remoteAccountScopeID,screen:"M02")
+    }
+
+    func saveMemberProfileWeight(){
+        ui.error=""
+        guard let baseline=memberProfileDraftBaseline,
+              memberProfileDraftScopeID==ui.remoteAccountScopeID,
+              remoteReads.accountScopeID==ui.remoteAccountScopeID,
+              case .loaded=remoteReads.memberProfileState else {
+            ui.error="계정 프로필을 불러온 뒤 저장해 주세요."
+            return
+        }
+        let input=WMemberProfileValidation.weightInput(ui.weight)
+        guard input != .invalid else {
+            ui.error="체중은 20~300 kg 사이로 입력하거나 비워 두세요. 소수 둘째 자리에서 저장돼요."
+            return
+        }
+        let patch=WMemberProfileValidation.weightPatch(baseline:baseline,input:input)
+        guard patch.hasChanges else {
+            ui.weight=WMemberProfileValidation.weightText(baseline.weightKg)
+            ui.profile.weight=ui.weight
+            back();return
+        }
+        remoteReads.saveMemberProfile(patch,accountScopeID:ui.remoteAccountScopeID,screen:"T02")
+    }
+
     var profile:some View {VStack(spacing:0){rootHeader("내 정보");ScrollView{VStack(alignment:.leading,spacing:14){HStack{Text("나의 러닝 카드").font(W.font(17,.semibold));Spacer();Button("카드 편집"){go("M02")}.font(W.font(12)).frame(minHeight:44)}
         runnerIdentityCard()
         if remoteReads.hasMemberProfileDependency { remoteMemberProfileReadPanel }
         gradeProgress.padding(.top,-8)
         WDisclosure(title:"등급 기준",expanded:$ui.gradeExpanded){VStack(alignment:.leading,spacing:12){WText(text:"첫 유효 기록을 완료하면 시작러너가 돼요. 새싹러너부터는 누적 거리와 활동일 수를 함께 확인해요. 하루 유효 구간 합계가 4분 이상이면서 1 km 이상이면 활동일 1일로 계산해요. 같은 날 여러 번 달려도 1일이에요.",small:true);ForEach(Array(zip(["start","sprout","passion","challenge","distance"],["시작러너|첫 유효 기록 완료","새싹러너|누적 10 km + 서로 다른 7일","열정러너|누적 30 km + 서로 다른 10일","도전러너|누적 100 km + 서로 다른 20일","러닝마스터|누적 300 km + 서로 다른 50일"])),id:\.0){key,copy in let parts=copy.components(separatedBy:"|");HStack{Image("Tier-"+key).resizable().scaledToFit().frame(width:24,height:24);Text(parts[0]).font(W.font(13,.medium));Spacer();WText(text:parts[1],small:true)}};WText(text:"저장된 유효 구간의 거리와 활동일을 기준으로 계산해요. 제외된 구간은 합계에 포함하지 않아요.",small:true)}.padding(.top,12)}.font(W.font(13)).padding(.top,-10)
-        Text("개인 설정").font(W.font(12)).foregroundStyle(W.muted).padding(.top,18);WRow(title:"체중 정보",subtitle:"선택 입력 · 러닝 카드에 표시되지 않아요",action:{go("T02")},arrow:true);WText(text:"활동 지역과 소개는 카드 편집에서 변경할 수 있어요.",small:true)
+        Text("개인 설정").font(W.font(12)).foregroundStyle(W.muted).padding(.top,18);WRow(title:"체중 정보",subtitle:"선택 입력 · 러닝 카드에 표시되지 않아요",action:{go("T02")},arrow:true).accessibilityIdentifier("memberProfileWeightRow");WText(text:"활동 지역과 소개는 카드 편집에서 변경할 수 있어요.",small:true)
     }.padding(.horizontal,24).padding(.top,20).padding(.bottom,24)}}}
     @ViewBuilder private var remoteMemberProfileReadPanel:some View {
         VStack(alignment:.leading,spacing:9){
@@ -20,12 +116,14 @@ extension WireframeRoot {
                 HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"계정 정보를 불러오는 중이에요.",small:true)}
             case .loaded(let profile):
                 Text(profile.nickname).font(W.font(16,.medium)).accessibilityIdentifier("remoteProfileNickname")
-                WText(text:"읽기 전용 조회예요. 기기에 저장된 러닝 카드는 변경하지 않았어요.",small:true)
+                if let introduction=profile.introduction,!introduction.isEmpty{WText(text:introduction,small:true)}
+                if let region=profile.region{WText(text:region,small:true)}
+                WText(text:"체중은 본인 프로필에서만 사용하며 러닝 카드에는 표시하지 않아요.",small:true)
             case .failed(let failure):
                 WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteProfileReadFailure")
                 Button("다시 시도"){remoteReads.retryMemberProfile()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteProfileRetry")
             }
-        }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteMemberProfileReadPanel")
+        }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14))
     }
     @ViewBuilder func runnerIdentityCard(decorationID:String? = nil)->some View {
         let card = VStack(alignment:.leading,spacing:0){HStack{Text("러닝 프로필").font(W.font(11)).kerning(0.275).foregroundStyle(W.muted);Spacer();BrandMark(size:28)}.frame(height:28)
@@ -51,11 +149,42 @@ extension WireframeRoot {
     var currentTierKey:String {switch store.tier{case "새싹":"sprout";case "열정":"passion";case "도전":"challenge";case "마스터":"distance";default:"start"}}
     var tierName:String {switch store.tier{case "시작":"시작러너";case "새싹":"새싹러너";case "열정":"열정러너";case "도전":"도전러너";case "마스터":"러닝마스터";default:"등급 없음"}}
     func tierProgress(_ title:String,value:Double,maxValue:Double,unit:String)->some View {VStack(spacing:6){HStack{Text(title);Spacer();Text("\(value,specifier:"%.0f") / \(Int(maxValue)) \(unit)")}.font(W.font(11)).foregroundStyle(W.muted);GeometryReader{g in ZStack(alignment:.leading){Capsule().fill(W.secondary);Capsule().fill(W.lime).frame(width:g.size.width*min(1,value/maxValue))}}.frame(height:5)}}
-    var profileEdit:some View {WPage(title:"러닝 카드 편집",back:back){Text("나를 소개하는 러닝 카드").font(W.font(23,.semibold)).padding(.top,4);WText(text:"닉네임과 활동 지역으로 나를 소개해 보세요.",small:true).padding(.bottom,10)
-        WAvatarEditor(data:$ui.photo).padding(.bottom,9)
-        WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수").padding(.top,5);Text("최대 20자 · 중복 여부는 확인하지 않아요").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(height:17.6,alignment:.leading).padding(.top,-11);WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택").padding(.top,4)
-        (Text("활동 지역").font(W.font(13))+Text("  선택").font(W.font(10)).foregroundColor(W.muted));WRegionPicker(selection:$ui.region);WText(text:"활동 지역은 선택하지 않아도 괜찮아요.",small:true);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
-    }actions:{Button("저장하기"){guard WProfileValidation.isValid(nickname:ui.nickname,introduction:ui.introduction) else{ui.error="닉네임은 1–20자, 한 줄 소개는 60자 이내로 입력해 주세요.";return};ui.profile.photo=ui.photo;ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines);ui.profile.introduction=ui.introduction;ui.profile.region=ui.region;ui.save();back()}.buttonStyle(WButtonStyle());Button("취소",action:back).buttonStyle(WButtonStyle(kind:1))}}
+    var profileEdit:some View {
+        let remote=remoteReads.hasMemberProfileDependency
+        let profileLoaded:Bool={if case .loaded=remoteReads.memberProfileState{return remoteReads.accountScopeID==ui.remoteAccountScopeID};return false}()
+        return WPage(title:"러닝 카드 편집",back:back){
+            Text("나를 소개하는 러닝 카드").font(W.font(23,.semibold)).padding(.top,4)
+            WText(text:"닉네임과 활동 지역으로 나를 소개해 보세요.",small:true).padding(.bottom,10)
+            if remote && !profileLoaded {
+                switch remoteReads.memberProfileState {
+                case .idle,.loading:
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"계정 프로필을 불러오는 중이에요.",small:true)}.accessibilityIdentifier("memberProfileEditLoading")
+                case .failed(let failure):
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("memberProfileEditReadFailure")
+                    Button("다시 시도"){remoteReads.retryMemberProfile()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("memberProfileEditRetry")
+                case .loaded:
+                    WText(text:"계정 프로필을 준비하고 있어요.",small:true)
+                }
+            } else {
+                WAvatarEditor(data:$ui.photo).padding(.bottom,9).disabled(remoteReads.isSavingMemberProfile)
+                WField(label:"닉네임",text:$ui.nickname,limit:12,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"memberProfileEditNickname").padding(.top,5)
+                    .disabled(remoteReads.isSavingMemberProfile)
+                Text(remote ? "2–12자 · 한글·영문·숫자·밑줄 · 중복 여부 확인": "최대 20자 · 중복 여부는 확인하지 않아요")
+                    .font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(height:17.6,alignment:.leading).padding(.top,-11)
+                WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"memberProfileEditIntroduction").padding(.top,4)
+                    .disabled(remoteReads.isSavingMemberProfile)
+                (Text("활동 지역").font(W.font(13))+Text("  선택").font(W.font(10)).foregroundColor(W.muted))
+                WRegionPicker(selection:$ui.region).disabled(remoteReads.isSavingMemberProfile)
+                WText(text:"활동 지역은 선택하지 않아도 괜찮아요.",small:true)
+                if !ui.error.isEmpty{WNotice(text:ui.error,danger:true).accessibilityIdentifier("memberProfileEditFailure")}
+            }
+        }actions:{
+            Button(remoteReads.isSavingMemberProfile ? "저장 중…":"저장하기") {
+                saveMemberProfileEdit()
+            }.buttonStyle(WButtonStyle()).disabled(remoteReads.isSavingMemberProfile || (remote && !profileLoaded)).accessibilityIdentifier("memberProfileEditSave")
+            Button("취소",action:back).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("memberProfileEditCancel")
+        }
+    }
     var notifications:some View {WPage(title:"알림",back:back){VStack(alignment:.leading,spacing:0){
         Text("모브 안내").font(W.font(12,.semibold)).foregroundStyle(W.muted).frame(height:18,alignment:.leading).padding(.bottom,8)
         Text("목표와 기록 관리에 필요한 안내를 확인해요.").font(W.font(13)).lineSpacing(5.95).foregroundStyle(W.muted).frame(height:42.9,alignment:.topLeading).padding(.bottom,22)
@@ -81,6 +210,8 @@ extension WireframeRoot {
     var theme:some View {WPage(title:"화면 테마",back:back){WText(text:"모브의 화면 테마를 선택해 주세요.");ForEach(["light","dark","system"],id:\.self){choice in Button{appearance=choice}label:{HStack{Text(choice=="light" ? "라이트 모드":choice=="dark" ? "다크 모드":"시스템 설정에 따름").font(W.font(15));Spacer();if choice==appearance{Image(systemName:"checkmark").foregroundStyle(W.lime)}}.frame(minHeight:64).overlay(alignment:.bottom){W.line.frame(height:1)}}.accessibilityIdentifier("theme-"+choice).accessibilityAddTraits(choice==appearance ? .isSelected:[])};WText(text:"시스템 설정에 따르면 기기의 화면 설정이 바뀔 때 모브도 함께 바뀌어요.");WText(text:"이 기기에 저장되며, 다시 열어도 유지돼요.",small:true)}actions:{}}
     var weightProfile:some View {
         let onboarding=ui.screen=="A03"
+        let usesRemoteProfile=remoteReads.hasMemberProfileDependency && !onboarding
+        let profileLoaded:Bool={if case .loaded=remoteReads.memberProfileState{return remoteReads.accountScopeID==ui.remoteAccountScopeID};return false}()
         return WPage(title:onboarding ? "프로필":"프로필·체중",back:back){
             if onboarding {
                 WText(text:"02 / 02",small:true).offset(y:6)
@@ -89,11 +220,25 @@ extension WireframeRoot {
                 Text("최대 20자 · 가상 닉네임으로 진행해 주세요").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading)
                 if !ui.error.isEmpty {Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).accessibilityIdentifier("signupNicknameError")}
                 Text("체중은 선택이에요").font(W.font(17,.semibold)).padding(.top,4)
-            } else {WHeading(text:"체중은 선택이에요")}
+            } else {
+                WHeading(text:"체중은 선택이에요")
+                if usesRemoteProfile && !profileLoaded {
+                    switch remoteReads.memberProfileState {
+                    case .idle,.loading:
+                        HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"계정 체중 정보를 불러오는 중이에요.",small:true)}.accessibilityIdentifier("memberProfileWeightLoading")
+                    case .failed(let failure):
+                        WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("memberProfileWeightReadFailure")
+                        Button("다시 시도"){remoteReads.retryMemberProfile()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("memberProfileWeightRetry")
+                    case .loaded:
+                        WText(text:"계정 체중 정보를 준비하고 있어요.",small:true)
+                    }
+                }
+            }
             WText(text:"입력하면 달린 거리를 바탕으로\n추정 소모 칼로리를 보여드려요.")
             HStack(alignment:.bottom,spacing:8){
                 WField(label:onboarding ? "예시 체중":"체중",text:$ui.weight,placeholder:"입력하지 않아도 괜찮아요",textSize:onboarding ? 14:16,placeholderColor:onboarding ? Color.wire(0x686868,0xA5A5A5):nil,accessibilityID:onboarding ? "signupWeightInput":"profileWeightInput")
                     .keyboardType(.decimalPad)
+                    .disabled(usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile))
                 Text("kg").font(W.font(14)).frame(height:54)
             }.padding(.top,onboarding ? 4:0)
             WText(text:onboarding ? "테스트할 예시값만 입력하세요. 실제 체중은 필요 없어요.":"입력한 체중은 러닝 카드에 표시되지 않아요.",small:true)
@@ -104,6 +249,7 @@ extension WireframeRoot {
                 ui.error=""
                 if onboarding, let error=WSignupNicknameValidation.error(for:ui.nickname){ui.error=error;return}
                 if onboarding, reviewTools, let error=WSignupNicknameValidation.fixtureError(for:ui.nickname){ui.error=error;return}
+                if usesRemoteProfile {saveMemberProfileWeight();return}
                 if let error=WSignupWeightValidation.error(for:ui.weight){ui.error=error;return}
                 if onboarding && (!ui.consentTerms || !ui.consentPrivacy){ui.error="필수 항목을 확인해 주세요.";go("A02");return}
                 ui.profile.weight=ui.weight
@@ -114,8 +260,13 @@ extension WireframeRoot {
                     ui.setLoggedIn(true)
                     ui.save();go("A15")
                 } else {ui.save();back()}
-            }.buttonStyle(WButtonStyle()).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
-            if !onboarding {Button("체중 정보 제거"){ui.profile.weight="";ui.weight="";ui.save();back()}.buttonStyle(WButtonStyle(kind:1))}
+            }.buttonStyle(WButtonStyle()).disabled(usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile)).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
+            if !onboarding {Button("체중 정보 제거"){
+                if usesRemoteProfile {ui.weight="";saveMemberProfileWeight()}
+                else {ui.profile.weight="";ui.weight="";ui.save();back()}
+            }.buttonStyle(WButtonStyle(kind:1)).disabled(usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile))}
+            if !ui.error.isEmpty {WNotice(text:ui.error,danger:true).accessibilityIdentifier("memberProfileWeightFailure")}
+            if usesRemoteProfile {WText(text:"체중은 본인 프로필에서만 사용하며 러닝 카드와 커뮤니티 프로필에는 표시하지 않아요.",small:true)}
         }
     }
 }

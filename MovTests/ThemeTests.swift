@@ -19,7 +19,165 @@ private struct V1PointsFixture: Codable {
     var owned: Set<String>
 }
 
+private actor MemberProfileBridgeFake: MemberProfileFetching, MemberProfileUpdating {
+    private var profile:MemberProfile
+    private var writeFailure:MemberProfileFailure?
+    private let holdsWrites:Bool
+    private var writeCountValue=0
+    private var pendingWrite:CheckedContinuation<MemberProfile,Error>?
+
+    init(profile:MemberProfile,writeFailure:MemberProfileFailure?=nil,holdsWrites:Bool=false){
+        self.profile=profile;self.writeFailure=writeFailure;self.holdsWrites=holdsWrites
+    }
+
+    func fetchProfile() async throws -> MemberProfile { profile }
+
+    func updateProfile(_ patch:MemberProfilePatch) async throws -> MemberProfile {
+        writeCountValue+=1
+        if holdsWrites {
+            return try await withCheckedThrowingContinuation { continuation in pendingWrite=continuation }
+        }
+        if let writeFailure { throw writeFailure }
+        return profile
+    }
+
+    func writeCount()->Int{writeCountValue}
+    func hasPendingWrite()->Bool{pendingWrite != nil}
+    func setProfile(_ profile:MemberProfile){self.profile=profile}
+    func completePendingWrite(_ profile:MemberProfile){pendingWrite?.resume(returning:profile);pendingWrite=nil}
+}
+
 final class ThemeTests:XCTestCase {
+    @MainActor func testMemberProfileBridgeBlocksDuplicateWritesAndUsesServerNormalizedResponse() async throws {
+        let original=MemberProfile(nickname:"RunMate",introduction:"기존 소개",region:"모브시 북부권",weightKg:Decimal(string:"63.12"))
+        let normalized=MemberProfile(nickname:"가Runner",introduction:"새 소개",region:"모브시 중부권",weightKg:Decimal(string:"63.12"))
+        let fake=MemberProfileBridgeFake(profile:original,holdsWrites:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            memberProfileLoader:MemberProfileLoader(fetcher:fake),memberProfileUpdater:fake
+        ))
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M02")
+        XCTAssertEqual(bridge.memberProfileState,.loaded(original))
+
+        let patch=MemberProfilePatch(introduction:.set("새 소개"))
+        bridge.saveMemberProfile(patch,accountScopeID:"account-a",screen:"M02")
+        bridge.saveMemberProfile(patch,accountScopeID:"account-a",screen:"M02")
+        XCTAssertEqual(bridge.memberProfileWriteState,.saving)
+        let writeIsPending=await waitUntil { await fake.hasPendingWrite() }
+        XCTAssertTrue(writeIsPending)
+        let writes=await fake.writeCount()
+        XCTAssertEqual(writes,1,"The bridge admits only one in-flight PATCH")
+
+        await fake.completePendingWrite(normalized)
+        let didSave=await waitUntil { bridge.memberProfileWriteState == .saved }
+        XCTAssertTrue(didSave)
+        XCTAssertEqual(bridge.memberProfileState,.loaded(normalized))
+    }
+
+    @MainActor func testMemberProfileNicknameConflictRetainsLoadedBaseline() async throws {
+        let original=MemberProfile(nickname:"RunMate",introduction:"기존 소개",region:"모브시 북부권")
+        let fake=MemberProfileBridgeFake(profile:original,writeFailure:.nicknameAlreadyUsed(requestID:"conflict"))
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            memberProfileLoader:MemberProfileLoader(fetcher:fake),memberProfileUpdater:fake
+        ))
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M02")
+        bridge.saveMemberProfile(MemberProfilePatch(nickname:.set("TakenName")),accountScopeID:"account-a",screen:"M02")
+
+        let didFail=await waitUntil { if case .failed = bridge.memberProfileWriteState{return true};return false }
+        XCTAssertTrue(didFail)
+        XCTAssertEqual(bridge.memberProfileWriteState,.failed(.nicknameAlreadyUsed(requestID:"conflict")))
+        XCTAssertEqual(bridge.memberProfileState,.loaded(original),"A conflict must not replace the existing profile")
+    }
+
+    @MainActor func testLateProfileWriteAfterAccountSwitchCannotReplaceNewAccount() async throws {
+        let accountA=MemberProfile(nickname:"RunnerA",introduction:"A",region:"모브시 북부권")
+        let accountB=MemberProfile(nickname:"RunnerB",introduction:"B",region:"모브시 남부권")
+        let staleResponse=MemberProfile(nickname:"RunnerA2",introduction:"A2",region:"모브시 중부권")
+        let fake=MemberProfileBridgeFake(profile:accountA,holdsWrites:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            memberProfileLoader:MemberProfileLoader(fetcher:fake),memberProfileUpdater:fake
+        ))
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M02")
+        bridge.saveMemberProfile(MemberProfilePatch(nickname:.set("RunnerA2")),accountScopeID:"account-a",screen:"M02")
+        let writeIsPending=await waitUntil { await fake.hasPendingWrite() }
+        XCTAssertTrue(writeIsPending)
+
+        await fake.setProfile(accountB)
+        await bridge.activate(feature:.profile,accountScopeID:"account-b",screen:"M01")
+        XCTAssertEqual(bridge.memberProfileState,.loaded(accountB))
+        await fake.completePendingWrite(staleResponse)
+        try await Task.sleep(for:.milliseconds(50))
+
+        XCTAssertEqual(bridge.memberProfileState,.loaded(accountB))
+        XCTAssertEqual(bridge.memberProfileWriteState,.idle)
+    }
+
+    @MainActor func testLateProfileWriteAfterBackRefreshesTheCardFromTheCurrentServerState() async throws {
+        let original=MemberProfile(nickname:"RunnerA",introduction:"A",region:"모브시 북부권")
+        let committed=MemberProfile(nickname:"RunnerA2",introduction:"A",region:"모브시 북부권")
+        let fake=MemberProfileBridgeFake(profile:original,holdsWrites:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            memberProfileLoader:MemberProfileLoader(fetcher:fake),memberProfileUpdater:fake
+        ))
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M02")
+        bridge.saveMemberProfile(MemberProfilePatch(nickname:.set("RunnerA2")),accountScopeID:"account-a",screen:"M02")
+        let writeIsPending=await waitUntil { await fake.hasPendingWrite() }
+        XCTAssertTrue(writeIsPending)
+
+        await fake.setProfile(committed)
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M01")
+        XCTAssertEqual(bridge.memberProfileState,.loaded(committed))
+        XCTAssertEqual(bridge.memberProfileWriteState,.idle)
+        await fake.completePendingWrite(committed)
+        let refreshedAfterLateCommit=await waitUntil { bridge.memberProfileState == .loaded(committed) }
+        XCTAssertTrue(refreshedAfterLateCommit)
+        XCTAssertEqual(bridge.memberProfileWriteState,.idle)
+    }
+
+    @MainActor func testProfileTransportFailureKeepsTheLoadedBaseline() async throws {
+        let original=MemberProfile(nickname:"RunMate",introduction:"기존 소개",region:"모브시 북부권")
+        let fake=MemberProfileBridgeFake(profile:original,writeFailure:.transport(.timedOut))
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            memberProfileLoader:MemberProfileLoader(fetcher:fake),memberProfileUpdater:fake
+        ))
+        await bridge.activate(feature:.profile,accountScopeID:"account-a",screen:"M02")
+        bridge.saveMemberProfile(MemberProfilePatch(introduction:.set("변경 소개")),accountScopeID:"account-a",screen:"M02")
+        let didFail=await waitUntil { if case .failed = bridge.memberProfileWriteState{return true};return false }
+        XCTAssertTrue(didFail)
+        XCTAssertEqual(bridge.memberProfileWriteState,.failed(.transport(.timedOut)))
+        XCTAssertEqual(bridge.memberProfileState,.loaded(original))
+    }
+
+    @MainActor func testProfileEditingValidationMatchesBackendBoundariesWithoutCoercion() throws {
+        XCTAssertNil(WMemberProfileValidation.nicknameError(for:"가Runner"))
+        XCTAssertNil(WMemberProfileValidation.nicknameError(for:"가Runner"),"NFC-valid input is checked after canonical composition")
+        XCTAssertNotNil(WMemberProfileValidation.nicknameError(for:"A"))
+        XCTAssertNotNil(WMemberProfileValidation.nicknameError(for:"Runner_Name!"))
+        XCTAssertNil(WMemberProfileValidation.introductionError(for:String(repeating:"👨‍👩‍👧‍👦",count:60)))
+        XCTAssertNotNil(WMemberProfileValidation.introductionError(for:String(repeating:"👨‍👩‍👧‍👦",count:61)))
+        XCTAssertNil(WMemberProfileValidation.regionError(for:"모브시 남부권"))
+        XCTAssertNotNil(WMemberProfileValidation.regionError(for:"모브시 중앙"))
+        XCTAssertEqual(WMemberProfileValidation.weightInput("63.123"),.value(Decimal(string:"63.123")!))
+        XCTAssertEqual(WMemberProfileValidation.weightInput("20"),.value(Decimal(20)))
+        XCTAssertEqual(WMemberProfileValidation.weightInput("300"),.value(Decimal(300)))
+        XCTAssertEqual(WMemberProfileValidation.weightInput("300.001"),.invalid)
+        XCTAssertEqual(WMemberProfileValidation.weightInput("19.999"),.invalid)
+
+        let baseline=MemberProfile(nickname:"RunMate",introduction:"설명",region:"모브시 북부권",weightKg:Decimal(string:"63.12"))
+        let partial=WMemberProfileValidation.profilePatch(baseline:baseline,nickname:"RunMate",introduction:"",region:"모브시 북부권")
+        XCTAssertEqual(partial,MemberProfilePatch(introduction:.clear))
+        let weight=WMemberProfileValidation.weightPatch(baseline:baseline,input:.value(Decimal(string:"63.123")!))
+        XCTAssertEqual(weight,MemberProfilePatch(weightKg:.set(Decimal(string:"63.123")!)))
+        XCTAssertEqual(WMemberProfileValidation.weightText(Decimal(string:"63.12")),"63.12")
+    }
+
+    @MainActor private func waitUntil(_ condition:@escaping() async -> Bool) async -> Bool {
+        for _ in 0..<100 {
+            if await condition(){return true}
+            try? await Task.sleep(for:.milliseconds(10))
+        }
+        return false
+    }
+
     func communityPhotoFixture(width:Int=240,height:Int=160,transparent:Bool=false)->Data {
         let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque = !transparent
         let size=CGSize(width:CGFloat(width),height:CGFloat(height))
