@@ -2956,7 +2956,7 @@ extension ThemeTests {
             balanceGates:[1:pointsRetryGate]
         )
         let pointsRetryBridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(pointsWalletLoader:PointsWalletLoader(client:pointsRetryMock)))
-        await pointsRetryBridge.activate(feature:.points,accountScopeID:"account-a")
+        await pointsRetryBridge.activate(feature:.points,accountScopeID:"account-a",screen:"POINTS")
         pointsRetryBridge.retryPoints()
         var pointsRetryIsBlocked=false
         for _ in 0..<500 {
@@ -2988,7 +2988,7 @@ extension ThemeTests {
             entryGates:["next-cursor":pageGate]
         )
         let pageBridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(pointsWalletLoader:PointsWalletLoader(client:pageMock,pageSize:1)))
-        await pageBridge.activate(feature:.points,accountScopeID:"account-a")
+        await pageBridge.activate(feature:.points,accountScopeID:"account-a",screen:"POINTS")
         pageBridge.loadNextPointsPage()
         var pageIsBlocked=false
         for _ in 0..<500 {
@@ -2998,8 +2998,14 @@ extension ThemeTests {
             try? await Task.sleep(nanoseconds:1_000_000)
         }
         XCTAssertTrue(pageIsBlocked)
-        await pageBridge.activate(feature:.points,accountScopeID:"account-a")
-        guard case .loaded(let preservedSnapshot)=pageBridge.pointsState else {XCTFail("Leaving B01 for B02 should retain the loaded first page");return}
+        await pageBridge.activate(feature:.points,accountScopeID:"account-a",screen:"POINTS")
+        let paginationStillWaitsOnSameScreen=await pageGate.isWaiting()
+        XCTAssertTrue(paginationStillWaitsOnSameScreen,"Reactivating POINTS must not cancel the in-flight page request")
+        let cancelledBeforeScreenChange=await pageMock.observedCancelledEntryCalls()
+        XCTAssertEqual(cancelledBeforeScreenChange,0,"The request remains active while the current screen is unchanged")
+
+        await pageBridge.activate(feature:.points,accountScopeID:"account-a",screen:"B02")
+        guard case .loaded(let preservedSnapshot)=pageBridge.pointsState else {XCTFail("Leaving POINTS for B02 should retain the loaded first page");return}
         XCTAssertEqual(preservedSnapshot.entries.map(\.entryID),["first"])
         XCTAssertEqual(preservedSnapshot.nextCursor,"next-cursor")
         for _ in 0..<500 {
