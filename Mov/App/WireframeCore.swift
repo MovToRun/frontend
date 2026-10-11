@@ -379,6 +379,7 @@ struct WireframeRemoteReadDependencies {
     let memberProfileUpdater: (any MemberProfileUpdating)?
     let pointsWalletLoader: PointsWalletLoader?
     let runRecordsLoader: RunRecordsLoader?
+    let runRecordsUpdater: (any RunRecordsUpdating)?
     let runningProgressLoader: RunningProgressLoader?
     let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
@@ -388,6 +389,7 @@ struct WireframeRemoteReadDependencies {
         memberProfileUpdater: (any MemberProfileUpdating)? = nil,
         pointsWalletLoader: PointsWalletLoader? = nil,
         runRecordsLoader: RunRecordsLoader? = nil,
+        runRecordsUpdater: (any RunRecordsUpdating)? = nil,
         runningProgressLoader: RunningProgressLoader? = nil,
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
         sessionLogoutRequester: (any SessionLogoutRequesting)? = nil
@@ -396,10 +398,18 @@ struct WireframeRemoteReadDependencies {
         self.memberProfileUpdater = memberProfileUpdater
         self.pointsWalletLoader = pointsWalletLoader
         self.runRecordsLoader = runRecordsLoader
+        self.runRecordsUpdater = runRecordsUpdater
         self.runningProgressLoader = runningProgressLoader
         self.weeklyGoalWriter = weeklyGoalWriter
         self.sessionLogoutRequester = sessionLogoutRequester
     }
+}
+
+enum WireframeRunRecordEditState: Equatable {
+    case idle
+    case saving(runID: String, field: BackendRunEditField)
+    case refreshingConflict(runID: String, field: BackendRunEditField)
+    case failed(runID: String, field: BackendRunEditField, failure: RunRecordsFailure)
 }
 
 enum SessionLogoutState: Equatable {
@@ -427,6 +437,7 @@ enum SessionLogoutState: Equatable {
     private let memberProfileUpdater: (any MemberProfileUpdating)?
     private let pointsWalletLoader: PointsWalletLoader?
     private let runRecordsLoader: RunRecordsLoader?
+    private let runRecordsUpdater: (any RunRecordsUpdating)?
     private let runningProgressLoader: RunningProgressLoader?
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     private let sessionLogoutRequester: (any SessionLogoutRequesting)?
@@ -444,6 +455,10 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var sessionLogoutTask: Task<Void, Never>?
     @ObservationIgnored private var memberProfileWriteOperationID: UUID?
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var runRecordEditOperationID: UUID?
+    @ObservationIgnored private var runRecordEditTask: Task<Bool, Never>?
+    @ObservationIgnored private var runRecordsNeedsRefresh = false
+    @ObservationIgnored private var staleRunDetailIDs: Set<String> = []
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
     @ObservationIgnored private var manualWeeklyGoalPreviousState: WeeklyGoalReadState?
     private(set) var accountScopeID: String?
@@ -454,6 +469,7 @@ enum SessionLogoutState: Equatable {
     private(set) var pointsState: PointsWalletReadState = .idle
     private(set) var runRecordsState: RunRecordsReadState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
+    private(set) var runRecordEditState: WireframeRunRecordEditState = .idle
     private(set) var activeRunID: String?
     private(set) var progressState: ProgressReadState = .idle
     private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
@@ -467,6 +483,7 @@ enum SessionLogoutState: Equatable {
         memberProfileUpdater = dependencies?.memberProfileUpdater
         pointsWalletLoader = dependencies?.pointsWalletLoader
         runRecordsLoader = dependencies?.runRecordsLoader
+        runRecordsUpdater = dependencies?.runRecordsUpdater
         runningProgressLoader = dependencies?.runningProgressLoader
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
         sessionLogoutRequester = dependencies?.sessionLogoutRequester
@@ -477,6 +494,25 @@ enum SessionLogoutState: Equatable {
     var isSavingMemberProfile: Bool { memberProfileWriteState == .saving }
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
     var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
+    var hasRunRecordsUpdater: Bool { runRecordsLoader != nil && runRecordsUpdater != nil }
+    var isSavingRunRecord: Bool {
+        switch runRecordEditState {
+        case .saving, .refreshingConflict: true
+        case .idle, .failed: false
+        }
+    }
+    func canEditRunRecord(_ runID: String) -> Bool {
+        guard hasRunRecordsUpdater, activeFeature == .runs, activeScreen == "L04",
+              activeRunID == runID, case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID, !isSavingRunRecord else { return false }
+        if case .failed(let failedID, _, .recordNotFound) = runRecordEditState, failedID == runID { return false }
+        return true
+    }
+    func runRecordEditFailure(runID: String, field: BackendRunEditField) -> RunRecordsFailure? {
+        guard case .failed(let failedID, let failedField, let failure) = runRecordEditState,
+              failedID == runID, failedField == field else { return nil }
+        return failure
+    }
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
     var canWriteWeeklyGoal: Bool { runningProgressLoader != nil && weeklyGoalWriter != nil }
     var isSavingWeeklyGoal: Bool { weeklyGoalWriteState == .saving }
@@ -564,6 +600,7 @@ enum SessionLogoutState: Equatable {
         cancelSessionLogout()
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
+        cancelRunRecordEdit()
         cancelManualOperation()
         generation &+= 1
         invalidateDailyProgressRead()
@@ -575,6 +612,9 @@ enum SessionLogoutState: Equatable {
         pointsState = .idle
         runRecordsState = .idle
         runDetailState = .idle
+        runRecordsNeedsRefresh = false
+        staleRunDetailIDs.removeAll()
+        runRecordEditState = .idle
         activeRunID = nil
         progressState = .idle
         weeklyGoalState = .idle
@@ -589,6 +629,14 @@ enum SessionLogoutState: Equatable {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let nextScreen = screen ?? feature?.rawValue
         if activeScreen != nextScreen { cancelSessionLogout() }
+        if runRecordEditOperationID != nil,
+           (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
+            cancelRunRecordEdit()
+        }
+        if runRecordEditState != .idle,
+           (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
+            runRecordEditState = .idle
+        }
         if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
             weeklyGoalConflictRefreshState = .idle
         }
@@ -681,8 +729,9 @@ enum SessionLogoutState: Equatable {
         case .runs:
             guard let runRecordsLoader else { runRecordsState = .idle; runDetailState = .idle; return }
             if let runID {
-                if case .loaded(let detail) = runDetailState, detail.summary.id == runID { return }
-                if case .failed(let failedID, _) = runDetailState, failedID == runID { return }
+                let detailNeedsRefresh = staleRunDetailIDs.contains(runID)
+                if case .loaded(let detail) = runDetailState, detail.summary.id == runID, !detailNeedsRefresh { return }
+                if case .failed(let failedID, _) = runDetailState, failedID == runID, !detailNeedsRefresh { return }
                 runDetailState = .loading(runID: runID)
                 await runRecordsLoader.loadDetail(runID: runID)
                 let result = await runRecordsLoader.detailState
@@ -692,9 +741,15 @@ enum SessionLogoutState: Equatable {
                     activeFeature = nil
                 } else {
                     runDetailState = result
+                    if case .loaded(let detail) = result, detail.summary.id == runID {
+                        staleRunDetailIDs.remove(runID)
+                    }
+                    if case .failed(let failedID, .recordNotFound) = result, failedID == runID {
+                        invalidateRunListAfterMissingRecord(runID: runID)
+                    }
                 }
             } else {
-                guard runRecordsState == .idle else { return }
+                guard runRecordsState == .idle || runRecordsNeedsRefresh else { return }
                 runRecordsState = .loading
                 await runRecordsLoader.load()
                 let result = await runRecordsLoader.state
@@ -704,6 +759,7 @@ enum SessionLogoutState: Equatable {
                     activeFeature = nil
                 } else {
                     runRecordsState = result
+                    if case .loaded = result { runRecordsNeedsRefresh = false }
                 }
             }
         case .progressGoals:
@@ -755,6 +811,221 @@ enum SessionLogoutState: Equatable {
             weeklyGoalState = result
             finishWeeklyGoalRead(result)
         }
+    }
+
+    func saveRunRecordField(
+        _ field: BackendRunEditField,
+        value: String,
+        runID: String,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        guard let updater = runRecordsUpdater,
+              let loader = runRecordsLoader,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              screen == "L04",
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID,
+              runRecordEditOperationID == nil else { return false }
+
+        let characterLimit = field == .title ? 40 : 300
+        guard value.utf16.count <= characterLimit else {
+            runRecordEditState = .failed(runID: runID, field: field, failure: .invalidEdit)
+            return false
+        }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        let baseVersion = detail.summary.version
+        let patch = BackendRunEditPatch(
+            title: field == .title ? value : nil,
+            memo: field == .memo ? value : nil
+        )
+        runRecordEditOperationID = operationID
+        runRecordEditState = .saving(runID: runID, field: field)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performRunRecordFieldSave(
+                updater: updater,
+                loader: loader,
+                field: field,
+                value: value,
+                runID: runID,
+                baseVersion: baseVersion,
+                patch: patch,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen
+            )
+        }
+        runRecordEditTask = task
+        let saved = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelRunRecordEdit(operationID: operationID) }
+        }
+        if runRecordEditOperationID == operationID {
+            runRecordEditTask = nil
+            runRecordEditOperationID = nil
+        }
+        return saved
+    }
+
+    private func performRunRecordFieldSave(
+        updater: any RunRecordsUpdating,
+        loader: RunRecordsLoader,
+        field: BackendRunEditField,
+        value: String,
+        runID: String,
+        baseVersion: Int64,
+        patch: BackendRunEditPatch,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        do {
+            let summary = try await updater.updateRun(id: runID, version: baseVersion, patch: patch)
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            guard baseVersion < Int64.max, summary.version == baseVersion + 1 else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: .invalidResponse)
+                return false
+            }
+            await applyRunRecordSummary(summary, using: loader)
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            runRecordEditState = .idle
+            return true
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            if failure == .cancelled || Task.isCancelled {
+                runRecordEditState = .idle
+                return false
+            }
+            guard failure == .versionConflict else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: failure)
+                if failure == .recordNotFound { invalidateRunListAfterMissingRecord(runID: runID) }
+                return false
+            }
+
+            runRecordEditState = .refreshingConflict(runID: runID, field: field)
+            await loader.loadDetail(runID: runID)
+            let refreshedState = await loader.detailState
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            switch refreshedState {
+            case .loaded(let latest) where latest.summary.id == runID:
+                await applyRunRecordSummary(latest.summary, using: loader)
+                guard isCurrentRunRecordEdit(
+                    operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                    screen: screen, runID: runID
+                ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+                let latestValue = field == .title ? latest.summary.title ?? "" : latest.summary.memo ?? ""
+                if latestValue.utf16.elementsEqual(value.utf16) {
+                    runRecordEditState = .idle
+                    return true
+                }
+                runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflict)
+            case .failed(let failedID, .recordNotFound) where failedID == runID:
+                runRecordEditState = .failed(runID: runID, field: field, failure: .recordNotFound)
+                invalidateRunListAfterMissingRecord(runID: runID)
+            default:
+                runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflictRefreshFailed)
+            }
+            return false
+        } catch {
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            if Task.isCancelled {
+                runRecordEditState = .idle
+            } else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: .invalidResponse)
+            }
+            return false
+        }
+    }
+
+    private func isCurrentRunRecordEdit(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String,
+        runID: String
+    ) -> Bool {
+        guard runRecordEditOperationID == operationID,
+              generation == requestGeneration,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState else { return false }
+        return detail.summary.id == runID
+    }
+
+    private func applyRunRecordSummary(_ summary: BackendRunSummary, using loader: RunRecordsLoader) async {
+        await loader.applyUpdatedSummary(summary)
+        staleRunDetailIDs.remove(summary.id)
+        runRecordsState = await loader.state
+        if case .loaded(let detail) = await loader.detailState,
+           detail.summary.id == summary.id {
+            runDetailState = .loaded(detail)
+        }
+    }
+
+    private func invalidateRunListAfterMissingRecord(runID: String) {
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        runRecordsState = .idle
+    }
+
+    private func handleStaleRunEditResponse(runID: String, accountScopeID: String, using loader: RunRecordsLoader) {
+        guard self.accountScopeID == accountScopeID else { return }
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        guard activeFeature == .runs, activeScreen == "L01", activeRunID == nil else { return }
+        let requestGeneration = generation
+        runRecordsState = .loading
+        Task { @MainActor [weak self] in
+            await loader.load()
+            let result = await loader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .runs,
+                  self.activeScreen == "L01",
+                  self.activeRunID == nil else { return }
+            self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
+        }
+    }
+
+    func cancelRunRecordEdit() {
+        guard runRecordEditOperationID != nil else { return }
+        runRecordEditTask?.cancel()
+        runRecordEditTask = nil
+        runRecordEditOperationID = nil
+        runRecordEditState = .idle
+    }
+
+    private func cancelRunRecordEdit(operationID: UUID) {
+        guard runRecordEditOperationID == operationID else { return }
+        cancelRunRecordEdit()
     }
 
     private func finishWeeklyGoalRead(_ result: WeeklyGoalReadState) {
@@ -1028,6 +1299,7 @@ enum SessionLogoutState: Equatable {
             self.manualOperationKind = nil
             self.manualRunsPreviousState = nil
             self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
         }
     }
 
@@ -1578,6 +1850,7 @@ struct RootView:View {
         if let remoteReadDependencies { return remoteReadDependencies }
         let args = ProcessInfo.processInfo.arguments
         let runFixture = args.contains("-wire-run-records-fixture")
+        let runEditFixture = args.contains("-wire-run-records-edit-fixture")
         let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
         let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
         let logoutFixture = WReviewMode.tools && args.contains("-wire-auth-logout-fixture")
@@ -1604,11 +1877,15 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
+        guard runFixture || runEditFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
-        let runLoader = runFixture ? RunRecordsLoader(client:WireframeRunRecordsFixture(
-            fails:args.contains("-wire-run-records-fail")
-        )):nil
+        let runClient = (runFixture || runEditFixture) ? WireframeRunRecordsFixture(
+            fails:args.contains("-wire-run-records-fail"),
+            failsWrite:args.contains("-wire-run-records-write-fail"),
+            conflictsFirstWrite:args.contains("-wire-run-records-write-conflict"),
+            missingWrite:args.contains("-wire-run-records-write-404")
+        ):nil
+        let runLoader = runClient.map { RunRecordsLoader(client:$0) }
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
             failsOverview:args.contains("-wire-progress-goals-fail"),
             failsDaily:args.contains("-wire-progress-daily-fail"),
@@ -1621,6 +1898,7 @@ struct RootView:View {
             memberProfileLoader:profileLoader,
             memberProfileUpdater:profileFixture,
             runRecordsLoader:runLoader,
+            runRecordsUpdater:runEditFixture ? runClient:nil,
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
             sessionLogoutRequester:logoutFixture
@@ -1823,29 +2101,70 @@ private actor WireframeAuthLogoutFixture: SessionLogoutRequesting {
     }
 }
 
-private struct WireframeRunRecordsFixture:RunRecordsReading {
+private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating {
     let fails:Bool
+    let failsWrite:Bool
+    let missingWrite:Bool
+    private var conflictsFirstWrite:Bool
+    private var recordMissing=false
+    private var currentSummary:BackendRunSummary
+
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false){
+        self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
+        self.missingWrite=missingWrite;self.currentSummary=Self.makeSummary()
+    }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
         if fails { throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-unavailable") }
+        if recordMissing { return BackendRunPage(items:[],nextCursor:nil) }
         guard cursor == nil else { return BackendRunPage(items:[],nextCursor:nil) }
-        return BackendRunPage(items:[summary],nextCursor:nil)
+        return BackendRunPage(items:[currentSummary],nextCursor:nil)
     }
 
     func fetchRun(id:String) async throws -> BackendRunDetail {
-        guard id == summary.id else { throw RunRecordsFailure.recordNotFound }
-        return BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+        guard id == currentSummary.id,!recordMissing else { throw RunRecordsFailure.recordNotFound }
+        return BackendRunDetail(summary:currentSummary,points:[],pauses:[],judgement:nil)
     }
 
-    private var summary:BackendRunSummary {
-        let formatter=ISO8601DateFormatter()
-        return BackendRunSummary(
+    func updateRun(id:String,version:Int64,patch:BackendRunEditPatch) async throws -> BackendRunSummary {
+        guard id == currentSummary.id,!recordMissing else{throw RunRecordsFailure.recordNotFound}
+        if missingWrite {recordMissing=true;throw RunRecordsFailure.recordNotFound}
+        if failsWrite{throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-edit-unavailable")}
+        if conflictsFirstWrite{
+            conflictsFirstWrite=false
+            currentSummary=Self.updated(currentSummary,version:currentSummary.version+1,title:"외부 수정 제목",memo:currentSummary.memo)
+            throw RunRecordsFailure.versionConflict
+        }
+        guard currentSummary.version==version else{throw RunRecordsFailure.versionConflict}
+        guard patch.field != nil,
+              patch.title.map({$0.utf16.count<=40}) ?? true,
+              patch.memo.map({$0.utf16.count<=300}) ?? true else{throw RunRecordsFailure.invalidEdit}
+        var title=currentSummary.title
+        var memo=currentSummary.memo
+        if let value=patch.title{title=value.isEmpty ? nil:value}
+        if let value=patch.memo{memo=value.isEmpty ? nil:value}
+        currentSummary=Self.updated(currentSummary,version:version+1,title:title,memo:memo)
+        return currentSummary
+    }
+
+    private static func makeSummary()->BackendRunSummary {
+        BackendRunSummary(
             id:"fixture-run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:2,
-            startedAt:formatter.date(from:"2026-10-05T23:50:00+09:00")!,endedAt:formatter.date(from:"2026-10-06T00:30:00+09:00"),
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
             runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
             verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
-            title:"서버 밤 러닝",memo:"fixture only",createdAt:formatter.date(from:"2026-10-06T00:31:02+09:00")!,
-            updatedAt:formatter.date(from:"2026-10-06T00:31:02+09:00")!,pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+            title:"서버 밤 러닝",memo:"fixture only",createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+        )
+    }
+
+    private static func updated(_ summary:BackendRunSummary,version:Int64,title:String?,memo:String?)->BackendRunSummary {
+        BackendRunSummary(
+            id:summary.id,clientRunID:summary.clientRunID,version:version,startedAt:summary.startedAt,endedAt:summary.endedAt,
+            runDate:summary.runDate,elapsedSeconds:summary.elapsedSeconds,movingSeconds:summary.movingSeconds,
+            distanceMeters:summary.distanceMeters,verdict:summary.verdict,verdictReason:summary.verdictReason,
+            validDistanceMeters:summary.validDistanceMeters,validSeconds:summary.validSeconds,paceSecondsPerKm:summary.paceSecondsPerKm,
+            title:title,memo:memo,createdAt:summary.createdAt,updatedAt:summary.updatedAt.addingTimeInterval(1),pointReward:summary.pointReward
         )
     }
 }

@@ -87,7 +87,7 @@ extension WireframeRoot {
     }.padding(24)}}
     @ViewBuilder private var remoteRunRecordsPanel:some View {
         VStack(alignment:.leading,spacing:10){
-            Text("서버 러닝 기록 · 읽기 전용").font(W.font(13,.semibold))
+            Text(remoteReads.hasRunRecordsUpdater ? "서버 러닝 기록":"서버 러닝 기록 · 읽기 전용").font(W.font(13,.semibold))
             switch remoteReads.runRecordsState {
             case .idle:
                 WText(text:"조회 준비 중이에요.",small:true)
@@ -108,7 +108,7 @@ extension WireframeRoot {
                 WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteRunsReadFailure")
                 if failure.canManuallyRetry { Button("다시 시도"){remoteReads.retryRunRecords()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRetry") }
             }
-            WText(text:"서버 응답과 기기 저장 기록은 따로 표시해요. 이 화면에서는 기록을 수정하거나 업로드하지 않아요.",small:true)
+            WText(text:remoteReads.hasRunRecordsUpdater ? "서버 응답과 기기 저장 기록은 따로 표시해요. 측정값은 유지하고 제목과 메모만 수정할 수 있어요.":"서버 응답과 기기 저장 기록은 따로 표시해요. 이 화면에서는 기록을 수정하거나 업로드하지 않아요.",small:true)
         }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunRecordsPanel")
     }
     @ViewBuilder private func remoteRunRows(_ items:[BackendRunSummary])->some View {
@@ -117,7 +117,7 @@ extension WireframeRoot {
                 HStack(alignment:.top,spacing:12){
                     Image(systemName:"figure.run.circle.fill").font(.system(size:25)).foregroundStyle(W.lime).frame(width:38,height:42)
                     VStack(alignment:.leading,spacing:5){
-                        Text(summary.title).font(W.font(14,.semibold)).fixedSize(horizontal:false,vertical:true)
+                        Text(summary.title ?? "").font(W.font(14,.semibold)).fixedSize(horizontal:false,vertical:true)
                         Text("\(summary.runDate.replacingOccurrences(of:"-",with:".")) · \(kSTTime(summary.startedAt)) KST").font(W.font(11)).foregroundStyle(W.muted)
                         Text("원본 \(MovNumber.display(Double(summary.distanceMeters)/1000)) km · 유효 \(summary.validDistanceMeters.map{MovNumber.display(Double($0)/1000)+" km"} ?? "확인 중")")
                             .font(W.font(12,.medium)).accessibilityIdentifier("remoteRunDistances-\(summary.id)")
@@ -191,7 +191,18 @@ extension WireframeRoot {
                 case .loaded(let detail) where detail.summary.id == ui.remoteSelectedRunID:
                     let summary=detail.summary
                     WText(text:"\(summary.runDate.replacingOccurrences(of:"-",with:".")) · \(kSTTime(summary.startedAt)) KST 시작",small:true).accessibilityIdentifier("remoteRunStartedAt")
-                    Text(summary.title).font(W.font(23,.semibold)).fixedSize(horizontal:false,vertical:true)
+                    if remoteReads.hasRunRecordsUpdater {
+                        WInlineRecordField(
+                            value:summary.title ?? "",multiline:false,save:{_ in},
+                            focus:{},
+                            saveAsync:{value in await remoteReads.saveRunRecordField(.title,value:value,runID:summary.id,accountScopeID:ui.remoteAccountScopeID,screen:ui.screen)},
+                            isSaving:remoteReads.isSavingRunRecord,
+                            canEdit:remoteReads.canEditRunRecord(summary.id),
+                            failureMessage:remoteReads.runRecordEditFailure(runID:summary.id,field:.title)?.editMessage
+                        ).id("remoteInlineTitle")
+                    } else {
+                        Text(summary.title ?? "").font(W.font(23,.semibold)).fixedSize(horizontal:false,vertical:true)
+                    }
                     VStack(alignment:.leading,spacing:10){
                         remoteRunMetric("원본 거리","\(MovNumber.display(Double(summary.distanceMeters)/1000)) km")
                         remoteRunMetric("유효 거리",summary.validDistanceMeters.map{"\(MovNumber.display(Double($0)/1000)) km"} ?? "확인 중")
@@ -200,14 +211,23 @@ extension WireframeRoot {
                         remoteRunMetric("판정",summary.verdictReason.map{"\(summary.verdict) · \($0)"} ?? summary.verdict)
                     }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunSummaryMetrics")
                     if let reward=remotePointReward(summary.pointReward){WRunPointRewardRow(reward:reward,identifier:"remoteRunReward-detail")}
-                    if let memo=summary.memo,!memo.isEmpty{WText(text:memo,small:true)}
+                    if remoteReads.hasRunRecordsUpdater {
+                        WInlineRecordField(
+                            value:summary.memo ?? "",multiline:true,save:{_ in},
+                            focus:{},
+                            saveAsync:{value in await remoteReads.saveRunRecordField(.memo,value:value,runID:summary.id,accountScopeID:ui.remoteAccountScopeID,screen:ui.screen)},
+                            isSaving:remoteReads.isSavingRunRecord,
+                            canEdit:remoteReads.canEditRunRecord(summary.id),
+                            failureMessage:remoteReads.runRecordEditFailure(runID:summary.id,field:.memo)?.editMessage
+                        ).id("remoteInlineMemo")
+                    } else if let memo=summary.memo,!memo.isEmpty{WText(text:memo,small:true)}
                     WRow(title:"경로 점",value:"\(detail.points.count)개",plain:true)
                     WRow(title:"일시정지 구간",value:"\(detail.pauses.count)개",plain:true)
                     if let judgement=detail.judgement {
                         VStack(alignment:.leading,spacing:8){Text("서버 판정 근거 · \(judgement.algorithmVersion)").font(W.font(13,.semibold));if judgement.exclusions.isEmpty{WText(text:"제외 구간이 없어요.",small:true)}else{ForEach(Array(judgement.exclusions.enumerated()),id:\.offset){_,item in WText(text:"\(item.reason) · \(MovNumber.display(Double(item.distanceMeters)/1000)) km · \(RunRecord.clock(Double(item.seconds)))",small:true)}}}
                             .frame(maxWidth:.infinity,alignment:.leading).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteRunJudgement")
                     }
-                    WNotice(text:"이 정보는 서버가 저장한 기록의 읽기 전용 상세예요. 경로 좌표는 화면에 표시하지 않아요.")
+                    WNotice(text:remoteReads.hasRunRecordsUpdater ? "거리·시간·경로와 판정 값은 수정할 수 없어요. 경로 좌표는 화면에 표시하지 않아요.":"이 정보는 서버가 저장한 기록의 읽기 전용 상세예요. 경로 좌표는 화면에 표시하지 않아요.")
                 case .loaded:
                     WNotice(text:"선택한 기록이 바뀌었어요. 목록으로 돌아가 다시 선택해 주세요.",danger:true)
                 case .failed(_,let failure):
@@ -473,32 +493,65 @@ private struct WInlineRecordField:View {
     let multiline:Bool
     let save:(String)->Void
     let focus:()->Void
+    let saveAsync:((String) async -> Bool)?
+    let isSaving:Bool
+    let canEdit:Bool
+    let failureMessage:String?
     @State private var editing=false
     @State private var draft=""
+    @State private var commitTask:Task<Void,Never>?
     @FocusState private var focused:Bool
     private var limit:Int{multiline ? 300:40}
     private var key:String{multiline ? "Memo":"Title"}
+    private var draftLength:Int{saveAsync == nil ? draft.count:draft.utf16.count}
+    init(
+        value:String,
+        multiline:Bool,
+        save:@escaping (String)->Void,
+        focus:@escaping ()->Void,
+        saveAsync:((String) async -> Bool)?=nil,
+        isSaving:Bool=false,
+        canEdit:Bool=true,
+        failureMessage:String?=nil
+    ){
+        self.value=value;self.multiline=multiline;self.save=save;self.focus=focus
+        self.saveAsync=saveAsync;self.isSaving=isSaving;self.canEdit=canEdit;self.failureMessage=failureMessage
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:8){
             HStack(alignment:.top,spacing:10){
                 if multiline{Text("메모").font(W.font(14,.medium)).frame(minHeight:44)}
-                else if editing{TextField("제목",text:$draft).font(W.font(20,.semibold)).padding(10).background(W.soft,in:RoundedRectangle(cornerRadius:10)).focused($focused).submitLabel(.done).onSubmit(commit).accessibilityIdentifier("inlineTitleInput")}
+                else if editing{TextField("제목",text:$draft).font(W.font(20,.semibold)).padding(10).background(W.soft,in:RoundedRectangle(cornerRadius:10)).focused($focused).submitLabel(.done).onSubmit(commit).disabled(isSaving || !canEdit).accessibilityIdentifier("inlineTitleInput")}
                 else{Text(value).font(W.font(22,.semibold)).fixedSize(horizontal:false,vertical:true).frame(maxWidth:.infinity,alignment:.leading).accessibilityIdentifier("recordTitle")}
                 Spacer(minLength:0)
                 Button{if editing{commit()}else{draft=value;editing=true;focused=true}}label:{
                     Group{if editing{Text("완료").font(W.font(13,.semibold))}else{WRecordEditIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.6,lineCap:.round,lineJoin:.round)).frame(width:20,height:20)}}.frame(width:44,height:44).contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(editing && draft.count>limit).accessibilityLabel((multiline ? "메모":"제목")+(editing ? " 편집 완료":" 편집")).accessibilityIdentifier((editing ? "finish":"edit")+key)
+                }.buttonStyle(.plain).disabled(!canEdit || isSaving || (editing && draftLength>limit)).accessibilityLabel((multiline ? "메모":"제목")+(isSaving ? " 저장 중":editing ? " 편집 완료":" 편집")).accessibilityIdentifier((editing ? "finish":"edit")+key)
             }
             if multiline{
-                if editing{TextField("메모",text:$draft,axis:.vertical).lineLimit(6...6).font(W.font(14)).lineSpacing(6).frame(minHeight:140).padding(10).background(W.soft,in:RoundedRectangle(cornerRadius:12)).focused($focused).accessibilityIdentifier("inlineMemoInput")}
+                if editing{TextField("메모",text:$draft,axis:.vertical).lineLimit(6...6).font(W.font(14)).lineSpacing(6).frame(minHeight:140).padding(10).background(W.soft,in:RoundedRectangle(cornerRadius:12)).focused($focused).disabled(isSaving || !canEdit).accessibilityIdentifier("inlineMemoInput")}
                 else{Text(value.isEmpty ? "러닝의 느낌을 남겨 보세요":value).font(W.font(14)).lineSpacing(6).frame(maxWidth:.infinity,alignment:.leading).padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("recordMemo")}
             }
-            if editing{Text("\(draft.count)/\(limit)").font(W.font(11)).foregroundStyle(draft.count>limit ? .red:W.muted).frame(maxWidth:.infinity,alignment:.trailing).accessibilityIdentifier("inline"+key+"Count")
-                if draft.count>limit{Text("최대 \(limit)자까지 입력해 주세요.").font(W.font(12)).foregroundStyle(.red)}
+            if editing{Text("\(draftLength)/\(limit)").font(W.font(11)).foregroundStyle(draftLength>limit ? .red:W.muted).frame(maxWidth:.infinity,alignment:.trailing).accessibilityIdentifier("inline"+key+"Count")
+                if draftLength>limit{Text("최대 \(limit)자까지 입력해 주세요.").font(W.font(12)).foregroundStyle(.red)}
             }
-        }.onReceive(NotificationCenter.default.publisher(for:UIResponder.keyboardDidShowNotification)){_ in if editing && focused{focus()}}.onDisappear{editing=false;focused=false;draft=""}
+            if let failureMessage{WNotice(text:failureMessage,danger:true).accessibilityIdentifier("inline\(key)SaveFailure")}
+        }.onReceive(NotificationCenter.default.publisher(for:UIResponder.keyboardDidShowNotification)){_ in if editing && focused{focus()}}.onDisappear{commitTask?.cancel();commitTask=nil;editing=false;focused=false;draft=""}
     }
-    private func commit(){guard editing,draft.count<=limit else{return};save(draft);focused=false;editing=false}
+    private func commit(){
+        guard editing,draftLength<=limit,!isSaving,canEdit else{return}
+        focused=false
+        if let saveAsync {
+            commitTask?.cancel()
+            commitTask=Task { @MainActor in
+                let saved=await saveAsync(draft)
+                guard !Task.isCancelled else{return}
+                if saved{editing=false;draft=""}
+            }
+        } else {
+            save(draft);editing=false
+        }
+    }
 }
 
 // Only inset the keyboard overlap that the enclosing custom screen has not already avoided.

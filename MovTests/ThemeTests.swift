@@ -1893,6 +1893,146 @@ private actor WireframeRunRecordsReadMock: RunRecordsReading {
     func observedCancelledPageCalls()->Int{cancelledPageCalls}
 }
 
+private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating {
+    private var details: [String:BackendRunDetail]
+    private var listPages: [BackendRunPage]
+    private var listFetchGates: [Int:WireframeRemoteReadGate]
+    private var failNextListFetches: Int
+    private var listFetchCalls=0
+    private var holdsFirstWrite: Bool
+    private var writeFailure: RunRecordsFailure?
+    private var conflictsFirstWrite: Bool
+    private var conflictTitle: String?
+    private var conflictMemo: String?
+    private var writeCalls=0
+    private var pendingWrite:CheckedContinuation<BackendRunSummary,Error>?
+    private var pendingRunID:String?
+    private var pendingPatch:BackendRunEditPatch?
+
+    init(
+        details:[BackendRunDetail],
+        holdsFirstWrite:Bool=false,
+        writeFailure:RunRecordsFailure?=nil,
+        conflictsFirstWrite:Bool=false,
+        conflictTitle:String?=nil,
+        conflictMemo:String?=nil,
+        listPages:[BackendRunPage]=[],
+        listFetchGates:[Int:WireframeRemoteReadGate]=[:],
+        failNextListFetches:Int=0
+    ){
+        self.details=Dictionary(uniqueKeysWithValues:details.map{($0.summary.id,$0)})
+        self.listPages=listPages
+        self.listFetchGates=listFetchGates
+        self.failNextListFetches=failNextListFetches
+        self.holdsFirstWrite=holdsFirstWrite
+        self.writeFailure=writeFailure
+        self.conflictsFirstWrite=conflictsFirstWrite
+        self.conflictTitle=conflictTitle
+        self.conflictMemo=conflictMemo
+    }
+
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        listFetchCalls+=1
+        let call=listFetchCalls
+        let responsePage:BackendRunPage
+        if !listPages.isEmpty {responsePage=listPages.removeFirst()}
+        else {
+            let items=Array(details.values.map(\.summary).sorted{$0.id<$1.id}.prefix(size))
+            responsePage=BackendRunPage(items:items,nextCursor:nil)
+        }
+        if let gate=listFetchGates[call] {
+            do{try await gate.wait()}
+            catch{throw RunRecordsFailure.cancelled}
+        }
+        if failNextListFetches>0 {
+            failNextListFetches-=1
+            throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")
+        }
+        return responsePage
+    }
+
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard let detail=details[id] else{throw RunRecordsFailure.recordNotFound}
+        return detail
+    }
+
+    func updateRun(id:String,version:Int64,patch:BackendRunEditPatch) async throws -> BackendRunSummary {
+        writeCalls+=1
+        guard let current=details[id] else{throw RunRecordsFailure.recordNotFound}
+        if holdsFirstWrite {
+            holdsFirstWrite=false
+            return try await withCheckedThrowingContinuation { continuation in
+                pendingWrite=continuation;pendingRunID=id;pendingPatch=patch
+            }
+        }
+        if conflictsFirstWrite {
+            conflictsFirstWrite=false
+            let latest=Self.updated(
+                current.summary,version:current.summary.version+1,
+                title:conflictTitle ?? "변경된 제목",memo:conflictMemo ?? current.summary.memo
+            )
+            details[id]=Self.detail(current,summary:latest)
+            throw RunRecordsFailure.versionConflict
+        }
+        if let writeFailure {
+            if writeFailure == .recordNotFound { details[id]=nil }
+            throw writeFailure
+        }
+        guard current.summary.version==version else{throw RunRecordsFailure.versionConflict}
+        let summary=Self.apply(patch,to:current.summary,version:version+1)
+        details[id]=Self.detail(current,summary:summary)
+        return summary
+    }
+
+    func hasPendingWrite()->Bool{pendingWrite != nil}
+    func writeCount()->Int{writeCalls}
+    func listFetchCount()->Int{listFetchCalls}
+    func failNextListFetch(){failNextListFetches=1}
+    func set(_ detail:BackendRunDetail){details[detail.summary.id]=detail}
+
+    func completePendingWrite() {
+        guard let pendingWrite,let id=pendingRunID,let patch=pendingPatch,let current=details[id] else{return}
+        let summary=Self.apply(patch,to:current.summary,version:current.summary.version+1)
+        details[id]=Self.detail(current,summary:summary)
+        self.pendingWrite=nil;pendingRunID=nil;pendingPatch=nil
+        pendingWrite.resume(returning:summary)
+    }
+
+    private static func apply(_ patch:BackendRunEditPatch,to current:BackendRunSummary,version:Int64)->BackendRunSummary {
+        var title=current.title
+        var memo=current.memo
+        if let value=patch.title{title=value.isEmpty ? nil:value}
+        if let value=patch.memo{memo=value.isEmpty ? nil:value}
+        return updated(current,version:version,title:title,memo:memo)
+    }
+
+    private static func updated(_ current:BackendRunSummary,version:Int64,title:String?,memo:String?)->BackendRunSummary {
+        BackendRunSummary(
+            id:current.id,clientRunID:current.clientRunID,version:version,startedAt:current.startedAt,endedAt:current.endedAt,
+            runDate:current.runDate,elapsedSeconds:current.elapsedSeconds,movingSeconds:current.movingSeconds,
+            distanceMeters:current.distanceMeters,verdict:current.verdict,verdictReason:current.verdictReason,
+            validDistanceMeters:current.validDistanceMeters,validSeconds:current.validSeconds,paceSecondsPerKm:current.paceSecondsPerKm,
+            title:title,memo:memo,createdAt:current.createdAt,updatedAt:current.updatedAt.addingTimeInterval(1),pointReward:current.pointReward
+        )
+    }
+
+    private static func detail(_ current:BackendRunDetail,summary:BackendRunSummary)->BackendRunDetail {
+        BackendRunDetail(summary:summary,points:current.points,pauses:current.pauses,judgement:current.judgement)
+    }
+}
+
+private func makeRunEditNormalizationConflictDetail(id: String, title: String?, memo: String?) -> BackendRunDetail {
+    let summary=BackendRunSummary(
+        id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+        startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+        runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+        verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+        title:title,memo:memo,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+        updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+    )
+    return BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+}
+
 private actor WireframeProgressGoalsReadMock: RunningProgressReading {
     private var progressResults:[Result<BackendProgressSummary,ProgressGoalsFailure>]
     private var weeklyResults:[Result<BackendWeeklyGoalStatus,ProgressGoalsFailure>]
@@ -2817,6 +2957,332 @@ extension ThemeTests {
         bridge.accountDidChange(to:"account-b")
         XCTAssertEqual(bridge.runRecordsState,.idle)
         XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testRunRecordEditPatchesOneFieldAndUpdatesDetailAndList() async {
+        let summary=BackendRunSummary(
+            id:"edit-run-1",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"서버 밤 러닝",memo:"그대로 둘 메모",createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+        )
+        let detail=BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+        let fake=WireframeRunRecordsEditFake(details:[detail],holdsFirstWrite:true)
+        let loader=RunRecordsLoader(client:fake,pageSize:1)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:loader,runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id,screen:"L04")
+        XCTAssertTrue(bridge.canEditRunRecord(summary.id))
+
+        let save=Task{@MainActor in
+            await bridge.saveRunRecordField(.title,value:"고요한 밤 러닝",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        }
+        let writeIsPending=await waitUntil{await fake.hasPendingWrite()}
+        XCTAssertTrue(writeIsPending)
+        XCTAssertTrue(bridge.isSavingRunRecord)
+        let duplicate=await bridge.saveRunRecordField(.memo,value:"중복 저장 불가",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertFalse(duplicate)
+        let duplicateWriteCount=await fake.writeCount()
+        XCTAssertEqual(duplicateWriteCount,1)
+
+        await fake.completePendingWrite()
+        let didSave=await save.value
+        XCTAssertTrue(didSave)
+        XCTAssertEqual(bridge.runRecordEditState,.idle)
+        guard case .loaded(let updatedDetail)=bridge.runDetailState else{XCTFail("Expected updated detail");return}
+        XCTAssertEqual(updatedDetail.summary.title,"고요한 밤 러닝")
+        XCTAssertEqual(updatedDetail.summary.memo,"그대로 둘 메모","An omitted field stays unchanged")
+        XCTAssertEqual(updatedDetail.summary.version,2)
+        XCTAssertEqual(updatedDetail.points,detail.points)
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Expected updated list");return}
+        XCTAssertEqual(snapshot.items.first?.title,"고요한 밤 러닝")
+        XCTAssertEqual(snapshot.nextCursor,nil)
+    }
+
+    @MainActor func testRunRecordVersionConflictRefreshesWithoutDiscardingTheDraft() async {
+        let summary=BackendRunSummary(
+            id:"conflict-run",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"기존 제목",memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+        )
+        let fake=WireframeRunRecordsEditFake(
+            details:[BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)],conflictsFirstWrite:true
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id,screen:"L04")
+
+        let firstSave=await bridge.saveRunRecordField(.title,value:"내 초안",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertFalse(firstSave)
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:summary.id,field:.title),.versionConflict)
+        guard case .loaded(let latest)=bridge.runDetailState else{XCTFail("Expected refreshed server detail");return}
+        XCTAssertEqual(latest.summary.title,"변경된 제목")
+        XCTAssertEqual(latest.summary.version,2)
+        XCTAssertTrue(bridge.canEditRunRecord(summary.id),"The draft remains editable after an optimistic-lock conflict")
+
+        let rebasedSave=await bridge.saveRunRecordField(.title,value:"내 초안",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertTrue(rebasedSave)
+        guard case .loaded(let saved)=bridge.runDetailState else{XCTFail("Expected saved detail");return}
+        XCTAssertEqual(saved.summary.title,"내 초안")
+        XCTAssertEqual(saved.summary.version,3)
+        let writeCount=await fake.writeCount()
+        XCTAssertEqual(writeCount,2)
+    }
+
+    @MainActor func testNFCEquivalentTitleAfterVersionConflictKeepsDraftUnapplied() async {
+        let draft="\u{00E9}"
+        let latest="e\u{0301}"
+        XCTAssertEqual(draft,latest,"Swift String equality treats canonical equivalents as equal")
+        XCTAssertNotEqual(Array(draft.utf16),Array(latest.utf16))
+        let detail=makeRunEditNormalizationConflictDetail(id:"unicode-title-run",title:"기존 제목",memo:"기존 메모")
+        let fake=WireframeRunRecordsEditFake(
+            details:[detail],conflictsFirstWrite:true,conflictTitle:latest
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+
+        let didSave=await bridge.saveRunRecordField(.title,value:draft,runID:detail.summary.id,accountScopeID:"account-a",screen:"L04")
+
+        XCTAssertFalse(didSave,"A canonically equivalent but byte-distinct server value must not complete the draft")
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:detail.summary.id,field:.title),.versionConflict)
+        guard case .loaded(let refreshed)=bridge.runDetailState,let refreshedTitle=refreshed.summary.title else {
+            XCTFail("Expected the server's normalized title after conflict refresh");return
+        }
+        XCTAssertEqual(Array(refreshedTitle.utf16),Array(latest.utf16))
+        XCTAssertNotEqual(Array(refreshedTitle.utf16),Array(draft.utf16))
+        XCTAssertTrue(bridge.canEditRunRecord(detail.summary.id),"The title draft remains in the inline editor after the 409")
+    }
+
+    @MainActor func testNFCEquivalentMemoAfterVersionConflictKeepsDraftUnapplied() async {
+        let draft="\u{00E9}"
+        let latest="e\u{0301}"
+        XCTAssertEqual(draft,latest,"Swift String equality treats canonical equivalents as equal")
+        XCTAssertNotEqual(Array(draft.utf16),Array(latest.utf16))
+        let detail=makeRunEditNormalizationConflictDetail(id:"unicode-memo-run",title:"기존 제목",memo:"기존 메모")
+        let fake=WireframeRunRecordsEditFake(
+            details:[detail],conflictsFirstWrite:true,conflictMemo:latest
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+
+        let didSave=await bridge.saveRunRecordField(.memo,value:draft,runID:detail.summary.id,accountScopeID:"account-a",screen:"L04")
+
+        XCTAssertFalse(didSave,"A canonically equivalent but byte-distinct server value must not complete the draft")
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:detail.summary.id,field:.memo),.versionConflict)
+        guard case .loaded(let refreshed)=bridge.runDetailState,let refreshedMemo=refreshed.summary.memo else {
+            XCTFail("Expected the server's normalized memo after conflict refresh");return
+        }
+        XCTAssertEqual(Array(refreshedMemo.utf16),Array(latest.utf16))
+        XCTAssertNotEqual(Array(refreshedMemo.utf16),Array(draft.utf16))
+        XCTAssertTrue(bridge.canEditRunRecord(detail.summary.id),"The memo draft remains in the inline editor after the 409")
+    }
+
+    @MainActor func testLateRunEditAfterReturningToListReloadsTheServerRecord() async {
+        let summary=BackendRunSummary(
+            id:"late-run",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"처음 제목",memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+        )
+        let fake=WireframeRunRecordsEditFake(
+            details:[BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)],holdsFirstWrite:true
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id,screen:"L04")
+        let save=Task{@MainActor in
+            await bridge.saveRunRecordField(.title,value:"저장 직후 이동",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        }
+        let writeIsPending=await waitUntil{await fake.hasPendingWrite()}
+        XCTAssertTrue(writeIsPending)
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        XCTAssertEqual(bridge.runRecordEditState,.idle)
+        await fake.completePendingWrite()
+        let didSave=await save.value
+        XCTAssertFalse(didSave)
+        let listRefreshed=await waitUntil{
+            guard case .loaded(let snapshot)=bridge.runRecordsState else{return false}
+            return snapshot.items.first?.title=="저장 직후 이동"
+        }
+        XCTAssertTrue(listRefreshed,"A completed late write on the same account refreshes the visible list")
+        XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testLateRunEditForAWhileViewingBPreservesBAndRefreshesListOnReturn() async {
+        func summary(_ id:String,_ title:String)->BackendRunSummary {
+            BackendRunSummary(
+                id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+                startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+                runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+                verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+                title:title,memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+                updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+            )
+        }
+        let runA=BackendRunDetail(summary:summary("run-a","기록 A"),points:[],pauses:[],judgement:nil)
+        let runB=BackendRunDetail(summary:summary("run-b","기록 B"),points:[],pauses:[],judgement:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],holdsFirstWrite:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        let save=Task{@MainActor in
+            await bridge.saveRunRecordField(.title,value:"기록 A 수정",runID:runA.summary.id,accountScopeID:"account-a",screen:"L04")
+        }
+        let writeIsPending=await waitUntil{await fake.hasPendingWrite()}
+        XCTAssertTrue(writeIsPending)
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runB.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB))
+        await fake.completePendingWrite()
+        let didSave=await save.value
+        XCTAssertFalse(didSave)
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB),"A's late completion must not clear or replace B's loaded detail")
+        guard case .loaded(let beforeReturn)=bridge.runRecordsState else{XCTFail("Expected the independent list cache");return}
+        XCTAssertEqual(beforeReturn.items.first(where:{$0.id==runA.summary.id})?.title,"기록 A")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        guard case .loaded(let refreshed)=bridge.runRecordsState else{XCTFail("Expected list refresh after returning");return}
+        XCTAssertEqual(refreshed.items.first(where:{$0.id==runA.summary.id})?.title,"기록 A 수정")
+        XCTAssertEqual(refreshed.items.first(where:{$0.id==runB.summary.id})?.title,"기록 B")
+        let listFetchCount=await fake.listFetchCount()
+        XCTAssertEqual(listFetchCount,2)
+    }
+
+    @MainActor func testRunRecordNotFoundInvalidatesListAndFailedRefreshHasWorkingRetry() async {
+        let summary=BackendRunSummary(
+            id:"missing-run",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"처음 제목",memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+        )
+        let detail=BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+        let fake=WireframeRunRecordsEditFake(
+            details:[detail],writeFailure:.recordNotFound
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id,screen:"L04")
+        await fake.failNextListFetch()
+
+        let didSave=await bridge.saveRunRecordField(.title,value:"남길 초안",runID:summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertFalse(didSave)
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:summary.id,field:.title),.recordNotFound)
+        XCTAssertEqual(bridge.runRecordsState,.idle,"A PATCH 404 invalidates the loaded list cache")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        guard case .failed(let refreshFailure)=bridge.runRecordsState else{XCTFail("Expected an explicit refresh failure");return}
+        XCTAssertEqual(refreshFailure,.serverFailure(statusCode:503,requestID:"fixture-runs-refresh"))
+        XCTAssertEqual(bridge.runRecordEditState,.idle,"Leaving detail ends the inline draft; it was retained on the detail until then")
+        bridge.retryRunRecords()
+        let recovered=await waitUntil{
+            guard case .loaded(let snapshot)=bridge.runRecordsState else{return false}
+            return snapshot.items.isEmpty
+        }
+        XCTAssertTrue(recovered,"The existing list retry action re-reads after a failed cache refresh")
+        let listFetchCount=await fake.listFetchCount()
+        XCTAssertEqual(listFetchCount,3)
+    }
+
+    @MainActor func testLateMissingRecordRefreshCannotReplaceTheNextAccountList() async {
+        func summary(_ id:String,_ title:String)->BackendRunSummary {
+            BackendRunSummary(
+                id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+                startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+                runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+                verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+                title:title,memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+                updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+            )
+        }
+        let accountA=BackendRunDetail(summary:summary("account-a-run","A record"),points:[],pauses:[],judgement:nil)
+        let accountB=summary("account-b-run","B record")
+        let gate=WireframeRemoteReadGate()
+        let pages=[
+            BackendRunPage(items:[accountA.summary],nextCursor:nil),
+            BackendRunPage(items:[accountA.summary],nextCursor:nil),
+            BackendRunPage(items:[accountB],nextCursor:nil)
+        ]
+        let fake=WireframeRunRecordsEditFake(
+            details:[accountA],writeFailure:.recordNotFound,listPages:pages,listFetchGates:[2:gate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:accountA.summary.id,screen:"L04")
+        _=await bridge.saveRunRecordField(.title,value:"실패 초안",runID:accountA.summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertEqual(bridge.runRecordsState,.idle)
+
+        let staleRefresh=Task{@MainActor in await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")}
+        let refreshIsWaiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(refreshIsWaiting)
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.runs,accountScopeID:"account-b",screen:"L01")
+        guard case .loaded(let currentAccount)=bridge.runRecordsState else{XCTFail("Expected account B list");return}
+        XCTAssertEqual(currentAccount.items.map(\.id),[accountB.id])
+
+        await gate.release()
+        await staleRefresh.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.runRecordsState,.loaded(currentAccount),"A's delayed cache refresh must not cross an account change")
+    }
+
+    @MainActor func testLateRunEditFromPreviousAccountCannotReplaceTheNewAccountDetail() async {
+        func summary(_ id:String,_ title:String)->BackendRunSummary {
+            BackendRunSummary(
+                id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+                startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+                runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+                verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+                title:title,memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+                updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+            )
+        }
+        let accountA=BackendRunDetail(summary:summary("run-a","회원 A 제목"),points:[],pauses:[],judgement:nil)
+        let accountB=BackendRunDetail(summary:summary("run-b","회원 B 제목"),points:[],pauses:[],judgement:nil)
+        let fake=WireframeRunRecordsEditFake(details:[accountA,accountB],holdsFirstWrite:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:"run-a",screen:"L04")
+        let save=Task{@MainActor in
+            await bridge.saveRunRecordField(.title,value:"회원 A 늦은 응답",runID:"run-a",accountScopeID:"account-a",screen:"L04")
+        }
+        let writeIsPending=await waitUntil{await fake.hasPendingWrite()}
+        XCTAssertTrue(writeIsPending)
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.runs,accountScopeID:"account-b",runID:"run-b",screen:"L04")
+        guard case .loaded(let newAccountDetail)=bridge.runDetailState else{XCTFail("Expected account B detail");return}
+        XCTAssertEqual(newAccountDetail.summary.title,"회원 B 제목")
+
+        await fake.completePendingWrite()
+        let didSave=await save.value
+        XCTAssertFalse(didSave)
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.runDetailState,.loaded(accountB),"A late response must not cross an account boundary")
+        XCTAssertEqual(bridge.runRecordEditState,.idle)
     }
 
     @MainActor func testLeavingRunListCancelsTheReadAndIgnoresItsLateResponse() async {
