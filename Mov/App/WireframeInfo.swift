@@ -94,7 +94,7 @@ extension WireframeRoot {
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
     case "reset-verification":guard ui.screen=="A11",ui.passwordReset.issuedAt != nil else{return};go("A24")
     case "consent-reviewed":ui.error="";if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
-    case "local-login":ui.profile.logged=true;ui.save();go("H00")
+    case "local-login":ui.setLoggedIn(true);ui.save();go("H00")
     case "switch-local-account":if reviewTools{ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
     case "save":saveRun()
     case "delete-week":store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
@@ -102,13 +102,13 @@ extension WireframeRoot {
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
     case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
     case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();shareWorkspace.clear();go("L02")
-    case "logout":guard store.session==nil else{go("T14");return};ui.profile.logged=false;ui.save();ui.authFilled=false;go("A01")
-    case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.profile.logged=true;ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
+    case "logout":guard store.session==nil else{go("T14");return};ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
+    case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.setLoggedIn(true);ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
     case "link":guard ui.screen=="T06",ui.settingsGrant else{return};if !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider);ui.save()};go("T17")
     case "unlink":guard ui.screen=="T08" else{return};guard ui.profile.providers.count>1 else{go("T09");return};ui.profile.providers.removeAll{$0==ui.provider};ui.save();go("T05")
     case "reauth":guard ui.screen=="T15" else{return};ui.settingsGrant=true;go(ui.pending)
     case "cancel-reauth":ui.cancelReauthentication()
-    case "delete-account-demo":guard store.session==nil else{go("T14");return};ui.profile=WLocalProfile();ui.profile.logged=false;ui.save();shareWorkspace.clear();go("T12")
+    case "delete-account-demo":guard store.session==nil else{go("T14");return};ui.profile=WLocalProfile();ui.resetRemoteAccountScope();ui.save();shareWorkspace.clear();go("T12")
     case "delete-account-error":ui.deleteConsent=false;go("T11")
     default:go(action)
     }}

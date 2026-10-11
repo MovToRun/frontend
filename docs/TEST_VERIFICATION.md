@@ -1,5 +1,25 @@
 # Test verification history
 
+## Wireframe profile and points read-state injection
+
+- Branch: `feature/wireframe-read-injection`, based on merged main
+  `05fdb5c845caaa8cbeb9d9a195678b291bbb58be`.
+- App target build: `xcodebuild build` completed successfully with Xcode 26.3
+  and the iOS Simulator SDK 26.2.
+- Five focused `MovTests` passed (5/5, 0 failures) on the existing iPhone 17
+  Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). Tests
+  used a temporary source copy with unique app, unit-test, and UI-test bundle
+  identifiers; parallel simulator testing was disabled. The cases cover
+  default-local mode and screen mapping, successful zero balance and cursor
+  paging, failure and manual retry, clearing the previous member on account
+  change, and cancellation/idle cleanup for both loaders.
+- Result bundle: `/tmp/mov-wireframe-read-injection-tests.xcresult`.
+- The independent `MovNetworkingTests` package passed 35/35 using fixture
+  `MockURLProtocol` responses. No real host or credentials were configured.
+- Only the focused read-bridge unit tests were run; no new UI navigation test
+  or full-app regression suite was run. Functional verification does not
+  establish full source/app pixel or motion parity; that QA remains open.
+
 ## Community discovery and HOT feed (C29, C41)
 
 - Branch: `feature/community-feed-discovery`, based on merged PR #36 main SHA `3d52e241e3010cfadc4c461707c8b416ed9ea730`.

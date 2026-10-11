@@ -5,10 +5,28 @@ import ImageIO
 extension WireframeRoot {
     var profile:some View {VStack(spacing:0){rootHeader("내 정보");ScrollView{VStack(alignment:.leading,spacing:14){HStack{Text("나의 러닝 카드").font(W.font(17,.semibold));Spacer();Button("카드 편집"){go("M02")}.font(W.font(12)).frame(minHeight:44)}
         runnerIdentityCard()
+        if remoteReads.hasMemberProfileDependency { remoteMemberProfileReadPanel }
         gradeProgress.padding(.top,-8)
         WDisclosure(title:"등급 기준",expanded:$ui.gradeExpanded){VStack(alignment:.leading,spacing:12){WText(text:"첫 유효 기록을 완료하면 시작러너가 돼요. 새싹러너부터는 누적 거리와 활동일 수를 함께 확인해요. 하루 유효 구간 합계가 4분 이상이면서 1 km 이상이면 활동일 1일로 계산해요. 같은 날 여러 번 달려도 1일이에요.",small:true);ForEach(Array(zip(["start","sprout","passion","challenge","distance"],["시작러너|첫 유효 기록 완료","새싹러너|누적 10 km + 서로 다른 7일","열정러너|누적 30 km + 서로 다른 10일","도전러너|누적 100 km + 서로 다른 20일","러닝마스터|누적 300 km + 서로 다른 50일"])),id:\.0){key,copy in let parts=copy.components(separatedBy:"|");HStack{Image("Tier-"+key).resizable().scaledToFit().frame(width:24,height:24);Text(parts[0]).font(W.font(13,.medium));Spacer();WText(text:parts[1],small:true)}};WText(text:"저장된 유효 구간의 거리와 활동일을 기준으로 계산해요. 제외된 구간은 합계에 포함하지 않아요.",small:true)}.padding(.top,12)}.font(W.font(13)).padding(.top,-10)
         Text("개인 설정").font(W.font(12)).foregroundStyle(W.muted).padding(.top,18);WRow(title:"체중 정보",subtitle:"선택 입력 · 러닝 카드에 표시되지 않아요",action:{go("T02")},arrow:true);WText(text:"활동 지역과 소개는 카드 편집에서 변경할 수 있어요.",small:true)
     }.padding(.horizontal,24).padding(.top,20).padding(.bottom,24)}}}
+    @ViewBuilder private var remoteMemberProfileReadPanel:some View {
+        VStack(alignment:.leading,spacing:9){
+            Text("계정 프로필 조회").font(W.font(13,.semibold))
+            switch remoteReads.memberProfileState {
+            case .idle:
+                WText(text:"조회 준비 중이에요.",small:true)
+            case .loading:
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"계정 정보를 불러오는 중이에요.",small:true)}
+            case .loaded(let profile):
+                Text(profile.nickname).font(W.font(16,.medium)).accessibilityIdentifier("remoteProfileNickname")
+                WText(text:"읽기 전용 조회예요. 기기에 저장된 러닝 카드는 변경하지 않았어요.",small:true)
+            case .failed(let failure):
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteProfileReadFailure")
+                Button("다시 시도"){Task{await remoteReads.retryMemberProfile()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteProfileRetry")
+            }
+        }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteMemberProfileReadPanel")
+    }
     @ViewBuilder func runnerIdentityCard(decorationID:String? = nil)->some View {
         let card = VStack(alignment:.leading,spacing:0){HStack{Text("러닝 프로필").font(W.font(11)).kerning(0.275).foregroundStyle(W.muted);Spacer();BrandMark(size:28)}.frame(height:28)
             HStack(spacing:14){Group{if let data=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo),let image=UIImage(data:data){Image(uiImage:image).resizable().scaledToFill()}else{Text(String(ui.profile.nickname.prefix(1))).font(W.font(20,.semibold))}}.frame(width:56,height:56).background(W.soft).clipShape(Circle()).overlay(Circle().stroke(W.line)).overlay{if decorationID == "frame"{Circle().stroke(W.lime,lineWidth:3).padding(-5)}};VStack(alignment:.leading,spacing:0){
@@ -93,7 +111,7 @@ extension WireframeRoot {
                     ui.profile.photo=ui.photo
                     ui.profile.nickname=WSignupNicknameValidation.normalized(ui.nickname)
                     if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)}
-                    ui.profile.logged=true
+                    ui.setLoggedIn(true)
                     ui.save();go("A15")
                 } else {ui.save();back()}
             }.buttonStyle(WButtonStyle()).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")

@@ -71,12 +71,12 @@ extension WireframeRoot {
         if ["A16","A17"].contains(id) && !ui.settingsGrant{ui.pending=id;ui.pendingBack="T05";go("T15");return}
         guard validateAuth(id) else{return}
         switch id {
-        case "A01":ui.profile.logged=true;ui.save();go("H00")
+        case "A01":ui.setLoggedIn(true);ui.save();go("H00")
         case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;issueEmailChallenge();go("A19")
         case "A10":submitPasswordResetRequest()
         case "A12":submitPasswordReset()
         case "A16":ui.passwordChanged=false;if !ui.profile.providers.contains("이메일"){ui.profile.providers.append("이메일")};ui.save();go("A18")
-        case "A17":ui.profile.logged=false;ui.save();ui.authFilled=false;ui.passwordChanged=true;go("A18")
+        case "A17":ui.setLoggedIn(false);ui.save();ui.authFilled=false;ui.passwordChanged=true;go("A18")
         default:break
         }
     }
