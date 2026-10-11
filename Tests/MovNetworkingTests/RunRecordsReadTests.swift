@@ -360,6 +360,254 @@ final class RunRecordsReadTests: XCTestCase {
         XCTAssertEqual(passedCursors, [nil, "opaque-A"])
     }
 
+    func testCompleteRefreshBuildsAllPagesBeforeAtomicReplacement() async throws {
+        let old = Self.makeSummary(id: "old")
+        let first = Self.makeSummary(id: "new-1")
+        let second = Self.makeSummary(id: "new-2")
+        let reader = FullListRefreshReader(pages: [
+            .success(BackendRunPage(items: [old], nextCursor: nil)),
+            .success(BackendRunPage(items: [first], nextCursor: "opaque_A-2")),
+            .success(BackendRunPage(items: [second], nextCursor: nil))
+        ])
+        let loader = RunRecordsLoader(client: reader, pageSize: 1)
+        await loader.load()
+
+        let candidate = try await loader.fetchCompleteList()
+        let beforeCommit = await loader.state
+        XCTAssertEqual(beforeCommit, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+        XCTAssertEqual(candidate.snapshot, BackendRunSnapshot(items: [first, second], nextCursor: nil))
+        let applied = await loader.applyCompleteList(candidate)
+        XCTAssertTrue(applied)
+
+        let afterCommit = await loader.state
+        XCTAssertEqual(afterCommit, .loaded(BackendRunSnapshot(items: [first, second], nextCursor: nil)))
+        let cursors = await reader.passedCursors
+        XCTAssertEqual(cursors, [nil, nil, "opaque_A-2"], "Opaque cursors pass through unchanged")
+    }
+
+    func testCompleteRefreshFailurePreservesLastSnapshotAndCanRetry() async throws {
+        let old = Self.makeSummary(id: "old-cache")
+        let partial = Self.makeSummary(id: "partial-new")
+        let recovered = Self.makeSummary(id: "recovered")
+        let reader = FullListRefreshReader(pages: [
+            .success(BackendRunPage(items: [old], nextCursor: nil)),
+            .success(BackendRunPage(items: [partial], nextCursor: "opaque-next")),
+            .failure(.serverFailure(statusCode: 503, requestID: "second-page-outage")),
+            .success(BackendRunPage(items: [recovered], nextCursor: nil))
+        ])
+        let loader = RunRecordsLoader(client: reader, pageSize: 1)
+        await loader.load()
+
+        do {
+            _ = try await loader.fetchCompleteList()
+            XCTFail("A failed later page must fail the whole refresh")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .serverFailure(statusCode: 503, requestID: "second-page-outage"))
+        }
+        let afterFailure = await loader.state
+        XCTAssertEqual(afterFailure, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+
+        let candidate = try await loader.fetchCompleteList()
+        let applied = await loader.applyCompleteList(candidate)
+        XCTAssertTrue(applied)
+        let afterRetry = await loader.state
+        XCTAssertEqual(afterRetry, .loaded(BackendRunSnapshot(items: [recovered], nextCursor: nil)))
+    }
+
+    func testCompleteRefreshStopsRepeatedCursorsAndDuplicateIDsWithoutReplacingCache() async throws {
+        let old = Self.makeSummary(id: "old")
+        let first = Self.makeSummary(id: "duplicate")
+        let repeatedCursorReader = FullListRefreshReader(pages: [
+            .success(BackendRunPage(items: [old], nextCursor: nil)),
+            .success(BackendRunPage(items: [first], nextCursor: "same-cursor")),
+            .success(BackendRunPage(items: [Self.makeSummary(id: "other")], nextCursor: "same-cursor"))
+        ])
+        let repeatedCursorLoader = RunRecordsLoader(client: repeatedCursorReader, pageSize: 1)
+        await repeatedCursorLoader.load()
+        do {
+            _ = try await repeatedCursorLoader.fetchCompleteList()
+            XCTFail("A repeated pagination cursor must stop the read")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .paginationLoop)
+        }
+        let repeatedState = await repeatedCursorLoader.state
+        XCTAssertEqual(repeatedState, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+        let repeatedCursors = await repeatedCursorReader.passedCursors
+        XCTAssertEqual(repeatedCursors, [nil, nil, "same-cursor"], "The repeated cursor is never requested twice")
+
+        let duplicateReader = FullListRefreshReader(pages: [
+            .success(BackendRunPage(items: [old], nextCursor: nil)),
+            .success(BackendRunPage(items: [first], nextCursor: "next")),
+            .success(BackendRunPage(items: [first], nextCursor: nil))
+        ])
+        let duplicateLoader = RunRecordsLoader(client: duplicateReader, pageSize: 1)
+        await duplicateLoader.load()
+        do {
+            _ = try await duplicateLoader.fetchCompleteList()
+            XCTFail("Duplicate IDs across pages must reject the candidate")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .invalidResponse)
+        }
+        let duplicateState = await duplicateLoader.state
+        XCTAssertEqual(duplicateState, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+    }
+
+    func testCompleteRefreshMarksMissingCachedDetailOnlyAfterCommit() async throws {
+        let staleDetail = Self.makeDetail(id: "removed-on-another-device")
+        let remaining = Self.makeSummary(id: "remaining")
+        let reader = FullListRefreshReader(
+            pages: [.success(BackendRunPage(items: [remaining], nextCursor: nil))],
+            details: [staleDetail.summary.id: staleDetail]
+        )
+        let loader = RunRecordsLoader(client: reader)
+        await loader.loadDetail(runID: staleDetail.summary.id)
+        let candidate = try await loader.fetchCompleteList()
+
+        let beforeCommit = await loader.detailState
+        XCTAssertEqual(beforeCommit, .loaded(staleDetail))
+        let applied = await loader.applyCompleteList(candidate)
+        XCTAssertTrue(applied)
+        let afterCommit = await loader.detailState
+        XCTAssertEqual(afterCommit, .failed(runID: staleDetail.summary.id, .recordNotFound))
+    }
+
+    func testCancelledCompleteRefreshPreservesLastSnapshot() async {
+        let old = Self.makeSummary(id: "old-before-cancel")
+        let gate = RunReadGate()
+        let reader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [old], nextCursor: nil)),
+                .success(BackendRunPage(items: [Self.makeSummary(id: "not-committed")], nextCursor: nil))
+            ],
+            gates: [2: gate]
+        )
+        let loader = RunRecordsLoader(client: reader)
+        await loader.load()
+        let refresh = Task { try await loader.fetchCompleteList() }
+        await gate.waitUntilEntered()
+        refresh.cancel()
+        await gate.release()
+        do {
+            _ = try await refresh.value
+            XCTFail("A cancelled scan cannot produce a replacement candidate")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .cancelled)
+        }
+        let state = await loader.state
+        XCTAssertEqual(state, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+    }
+
+    func testCancelledFullRefreshStopsBeforeNextCursorWhenReaderIgnoresCancellation() async {
+        let old = Self.makeSummary(id: "old-before-ignored-cancel")
+        let gate = RunReadGate()
+        let reader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [old], nextCursor: nil)),
+                .success(BackendRunPage(items: [Self.makeSummary(id: "uncommitted-first-page")], nextCursor: "opaque-next")),
+                .success(BackendRunPage(items: [Self.makeSummary(id: "must-not-be-requested")], nextCursor: nil))
+            ],
+            gates: [2: gate]
+        )
+        let loader = RunRecordsLoader(client: reader, pageSize: 1)
+        await loader.load()
+
+        let refresh = Task { try await loader.fetchCompleteList() }
+        await gate.waitUntilEntered()
+        refresh.cancel()
+        await gate.release()
+
+        do {
+            _ = try await refresh.value
+            XCTFail("A reader that returns after cancellation cannot continue to the next cursor")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .cancelled)
+        }
+        let cursors = await reader.passedCursors
+        XCTAssertEqual(cursors, [nil, nil], "Cancellation must be checked before requesting the next page")
+        let state = await loader.state
+        XCTAssertEqual(state, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+    }
+
+    func testCompleteRefreshSupersedesAnInFlightNextPageWithoutAppendingItLater() async throws {
+        let old = Self.makeSummary(id: "old-first-page")
+        let stalePage = Self.makeSummary(id: "stale-next-page")
+        let fresh = Self.makeSummary(id: "fresh-complete-list")
+        let gate = RunReadGate()
+        let reader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [old], nextCursor: "old-page-cursor")),
+                .success(BackendRunPage(items: [stalePage], nextCursor: nil)),
+                .success(BackendRunPage(items: [fresh], nextCursor: nil))
+            ],
+            gates: [2: gate]
+        )
+        let loader = RunRecordsLoader(client: reader, pageSize: 1)
+        await loader.load()
+        let nextPage = Task { await loader.loadNextPage() }
+        await gate.waitUntilEntered()
+
+        let candidate = try await loader.fetchCompleteList()
+        let applied = await loader.applyCompleteList(candidate)
+        XCTAssertTrue(applied)
+        await gate.release()
+        await nextPage.value
+
+        let state = await loader.state
+        XCTAssertEqual(state, .loaded(BackendRunSnapshot(items: [fresh], nextCursor: nil)))
+        let cursors = await reader.passedCursors
+        XCTAssertEqual(cursors, [nil, "old-page-cursor", nil])
+    }
+
+    func testEditOrDeleteInvalidatesAnInFlightFullRefresh() async throws {
+        let original = Self.makeSummary(id: "local-write")
+        let changed = Self.makeSummary(id: "local-write", title: "newer-title")
+        let gate = RunReadGate()
+        let editReader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [original], nextCursor: nil)),
+                .success(BackendRunPage(items: [original], nextCursor: nil))
+            ],
+            gates: [2: gate]
+        )
+        let editLoader = RunRecordsLoader(client: editReader)
+        await editLoader.load()
+        let pendingEditRefresh = Task { try await editLoader.fetchCompleteList() }
+        await gate.waitUntilEntered()
+        await editLoader.applyUpdatedSummary(changed)
+        await gate.release()
+        do {
+            _ = try await pendingEditRefresh.value
+            XCTFail("A response started before an edit cannot replace the updated list")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .cancelled)
+        }
+        let afterEdit = await editLoader.state
+        XCTAssertEqual(afterEdit, .loaded(BackendRunSnapshot(items: [changed], nextCursor: nil)))
+
+        let deleteGate = RunReadGate()
+        let deleteReader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [original], nextCursor: nil)),
+                .success(BackendRunPage(items: [original], nextCursor: nil))
+            ],
+            gates: [2: deleteGate]
+        )
+        let deleteLoader = RunRecordsLoader(client: deleteReader)
+        await deleteLoader.load()
+        let pendingDeleteRefresh = Task { try await deleteLoader.fetchCompleteList() }
+        await deleteGate.waitUntilEntered()
+        await deleteLoader.applyDeletedRun(id: original.id)
+        await deleteGate.release()
+        do {
+            _ = try await pendingDeleteRefresh.value
+            XCTFail("A response started before a delete cannot restore the removed row")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .cancelled)
+        }
+        let afterDelete = await deleteLoader.state
+        XCTAssertEqual(afterDelete, .loaded(BackendRunSnapshot(items: [], nextCursor: nil)))
+    }
+
     func testStaleRunDetailResponseCannotReplaceTheNewSelection() async {
         let gate = RunReadGate()
         let reader = ControlledRunDetailReader(gate: gate)
@@ -374,13 +622,13 @@ final class RunRecordsReadTests: XCTestCase {
         XCTAssertEqual(detailState, .loaded(Self.makeDetail(id: "newer")))
     }
 
-    fileprivate static func makeSummary(id: String = "104") -> BackendRunSummary {
+    fileprivate static func makeSummary(id: String = "104", title: String? = "밤 러닝") -> BackendRunSummary {
         BackendRunSummary(
             id: id, clientRunID: UUID(uuidString: "0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!, version: 3,
             startedAt: Date(timeIntervalSince1970: 1_791_213_000), endedAt: Date(timeIntervalSince1970: 1_791_215_400),
             runDate: "2026-10-05", elapsedSeconds: 2_400, movingSeconds: 2_280, distanceMeters: 6_400,
             verdict: "VALID", verdictReason: nil, validDistanceMeters: 6_100, validSeconds: 2_150,
-            paceSecondsPerKm: 352, title: "밤 러닝", memo: nil, createdAt: Date(timeIntervalSince1970: 1_791_215_462),
+            paceSecondsPerKm: 352, title: title, memo: nil, createdAt: Date(timeIntervalSince1970: 1_791_215_462),
             updatedAt: Date(timeIntervalSince1970: 1_791_215_462), pointReward: nil
         )
     }
@@ -407,14 +655,47 @@ private actor SequencedRunRecordsReader: RunRecordsReading {
     func fetchRun(id: String) async throws -> BackendRunDetail { RunRecordsReadTests.makeDetail(id: id) }
 }
 
+private actor FullListRefreshReader: RunRecordsReading {
+    private var pages: [Result<BackendRunPage, RunRecordsFailure>]
+    private let details: [String: BackendRunDetail]
+    private let gates: [Int: RunReadGate]
+    private(set) var passedCursors: [String?] = []
+
+    init(
+        pages: [Result<BackendRunPage, RunRecordsFailure>],
+        details: [String: BackendRunDetail] = [:],
+        gates: [Int: RunReadGate] = [:]
+    ) {
+        self.pages = pages
+        self.details = details
+        self.gates = gates
+    }
+
+    func fetchRuns(cursor: String?, size: Int) async throws -> BackendRunPage {
+        passedCursors.append(cursor)
+        let call = passedCursors.count
+        guard !pages.isEmpty else { throw RunRecordsFailure.invalidResponse }
+        let result = pages.removeFirst()
+        if let gate = gates[call] { await gate.wait() }
+        return try result.get()
+    }
+
+    func fetchRun(id: String) async throws -> BackendRunDetail {
+        guard let detail = details[id] else { throw RunRecordsFailure.recordNotFound }
+        return detail
+    }
+}
+
 private actor RunReadGate {
     private var continuation: CheckedContinuation<Void, Never>?
     private var entered = false
+    private var released = false
 
     func wait() async {
+        if released { return }
         entered = true
         await withCheckedContinuation { continuation in
-            if entered { continuation.resume() }
+            if released { continuation.resume() }
             else { self.continuation = continuation }
         }
     }
@@ -422,6 +703,7 @@ private actor RunReadGate {
         while !entered { await Task.yield() }
     }
     func release() {
+        released = true
         entered = true
         continuation?.resume()
         continuation = nil

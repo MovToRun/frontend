@@ -1749,6 +1749,7 @@ extension ThemeTests {
 
 private actor WireframeRemoteReadGate {
     private var continuation: CheckedContinuation<Void, Error>?
+    private var ignoringCancellationContinuation: CheckedContinuation<Void, Never>?
     private var entered = false
     private var released = false
 
@@ -1769,13 +1770,24 @@ private actor WireframeRemoteReadGate {
         }
     }
 
+    func waitIgnoringCancellation() async {
+        if released { return }
+        entered = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if released { continuation.resume() }
+            else { ignoringCancellationContinuation = continuation }
+        }
+    }
+
     func release() {
         released = true
         continuation?.resume()
         continuation = nil
+        ignoringCancellationContinuation?.resume()
+        ignoringCancellationContinuation = nil
     }
 
-    func isWaiting() -> Bool { entered && continuation != nil }
+    func isWaiting() -> Bool { entered && (continuation != nil || ignoringCancellationContinuation != nil) }
 
     private func cancelWaiter() {
         continuation?.resume(throwing: CancellationError())
@@ -1897,8 +1909,11 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     private var details: [String:BackendRunDetail]
     private var listPages: [BackendRunPage]
     private var listFetchGates: [Int:WireframeRemoteReadGate]
+    private let listFetchIgnoresCancellation: Set<Int>
     private var failNextListFetches: Int
     private var listFetchCalls=0
+    private var completedListFetchCalls=0
+    private var passedListCursors:[String?]=[]
     private var holdsFirstWrite: Bool
     private var writeFailure: RunRecordsFailure?
     private var conflictsFirstWrite: Bool
@@ -1926,6 +1941,7 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         conflictMemo:String?=nil,
         listPages:[BackendRunPage]=[],
         listFetchGates:[Int:WireframeRemoteReadGate]=[:],
+        listFetchIgnoresCancellation:Set<Int>=[],
         failNextListFetches:Int=0,
         holdsFirstDelete:Bool=false,
         deleteFailure:RunRecordsFailure?=nil,
@@ -1935,6 +1951,7 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         self.details=Dictionary(uniqueKeysWithValues:details.map{($0.summary.id,$0)})
         self.listPages=listPages
         self.listFetchGates=listFetchGates
+        self.listFetchIgnoresCancellation=listFetchIgnoresCancellation
         self.failNextListFetches=failNextListFetches
         self.holdsFirstWrite=holdsFirstWrite
         self.writeFailure=writeFailure
@@ -1950,6 +1967,7 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
         listFetchCalls+=1
         let call=listFetchCalls
+        passedListCursors.append(cursor)
         let responsePage:BackendRunPage
         if !listPages.isEmpty {responsePage=listPages.removeFirst()}
         else {
@@ -1957,13 +1975,19 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
             responsePage=BackendRunPage(items:items,nextCursor:nil)
         }
         if let gate=listFetchGates[call] {
-            do{try await gate.wait()}
-            catch{throw RunRecordsFailure.cancelled}
+            if listFetchIgnoresCancellation.contains(call) {
+                await gate.waitIgnoringCancellation()
+            } else {
+                do{try await gate.wait()}
+                catch{throw RunRecordsFailure.cancelled}
+            }
         }
         if failNextListFetches>0 {
             failNextListFetches-=1
+            completedListFetchCalls+=1
             throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")
         }
+        completedListFetchCalls+=1
         return responsePage
     }
 
@@ -2032,7 +2056,10 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     func deleteCount()->Int{deleteCalls}
     func hasPendingDelete()->Bool{pendingDelete != nil}
     func listFetchCount()->Int{listFetchCalls}
+    func completedListFetchCount()->Int{completedListFetchCalls}
     func failNextListFetch(){failNextListFetches=1}
+    func setListPages(_ pages:[BackendRunPage]){listPages=pages}
+    func observedListCursors()->[String?]{passedListCursors}
     func set(_ detail:BackendRunDetail){details[detail.summary.id]=detail}
 
     func completePendingWrite() {
@@ -3009,6 +3036,233 @@ extension ThemeTests {
         bridge.accountDidChange(to:"account-b")
         XCTAssertEqual(bridge.runRecordsState,.idle)
         XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testRunListReentryReadsEveryPageAndRemovesRemoteDeletionWithoutStaleDetail() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-a",title:"삭제된 원격 기록",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-b",title:"남은 원격 기록",memo:nil)
+        let runC=makeRunEditNormalizationConflictDetail(id:"sync-c",title:"새 원격 기록",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB,runC],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:"older-list-cursor"),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ])
+        let loader=RunRecordsLoader(client:fake,pageSize:1)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:loader))
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        bridge.loadNextRunRecordsPage()
+        let loadedSecondPage=await waitUntil {
+            guard case .loaded(let snapshot)=bridge.runRecordsState else{return false}
+            return snapshot.items.map(\.id)==[runA.summary.id,runB.summary.id]
+        }
+        XCTAssertTrue(loadedSecondPage)
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runA))
+
+        await fake.setListPages([
+            BackendRunPage(items:[runB.summary],nextCursor:"new-list-cursor"),
+            BackendRunPage(items:[runC.summary],nextCursor:nil)
+        ])
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+
+        guard case .loaded(let refreshed)=bridge.runRecordsState else{XCTFail("Expected a completed full refresh");return}
+        XCTAssertEqual(refreshed.items.map(\.id),[runB.summary.id,runC.summary.id])
+        XCTAssertNil(refreshed.nextCursor,"A completed reconciliation has reached the terminal page")
+        XCTAssertEqual(bridge.runDetailState,.failed(runID:runA.summary.id,.recordNotFound),"A run absent from the completed list cannot remain displayed as current detail")
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,"older-list-cursor",nil,"new-list-cursor"])
+    }
+
+    @MainActor func testRunListRefreshFailureKeepsLastCompleteRowsAndCanRetry() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-cache-a",title:"기존 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-cache-b",title:"기존 B",memo:nil)
+        let runC=makeRunEditNormalizationConflictDetail(id:"sync-new-c",title:"새 C",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB,runC],listPages:[
+            BackendRunPage(items:[runA.summary,runB.summary],nextCursor:nil)
+        ])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await fake.failNextListFetch()
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await fake.setListPages([
+            BackendRunPage(items:[runB.summary,runC.summary],nextCursor:"tail"),
+            BackendRunPage(items:[runC.summary],nextCursor:nil)
+        ])
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+
+        guard case .loaded(let preserved)=bridge.runRecordsState else{XCTFail("The prior completed list must stay visible");return}
+        XCTAssertEqual(preserved.items.map(\.id),[runA.summary.id,runB.summary.id])
+        XCTAssertEqual(bridge.runRecordsRefreshState,.failed(.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")))
+
+        await fake.setListPages([BackendRunPage(items:[runB.summary,runC.summary],nextCursor:nil)])
+        await bridge.refreshRunRecords()
+        guard case .loaded(let recovered)=bridge.runRecordsState else{XCTFail("Expected retry to complete the list refresh");return}
+        XCTAssertEqual(recovered.items.map(\.id),[runB.summary.id,runC.summary.id])
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+    }
+
+    @MainActor func testRunListRefreshIsolatedFromAccountSwitchAndDuplicateRefresh() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-account-a",title:"계정 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-account-b",title:"계정 B",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ],listFetchGates:[2:gate])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let refresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting)
+        await bridge.refreshRunRecords()
+        let callsDuringRefresh=await fake.listFetchCount()
+        XCTAssertEqual(callsDuringRefresh,2,"A second refresh tap is ignored while the first scan is active")
+
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.runs,accountScopeID:"account-b",screen:"L01")
+        guard case .loaded(let accountB)=bridge.runRecordsState else{XCTFail("Account B must read its own list");return}
+        XCTAssertEqual(accountB.items.map(\.id),[runB.summary.id])
+        await gate.release()
+        await refresh.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        guard case .loaded(let stillB)=bridge.runRecordsState else{XCTFail("A late account A response cannot replace account B");return}
+        XCTAssertEqual(stillB.items.map(\.id),[runB.summary.id])
+    }
+
+    @MainActor func testParentCancellationCancelsOwnedRefreshBeforeNextPageEvenIfReaderIgnoresCancellation() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"cancel-parent-a",title:"기록 A",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:"must-not-fetch"),
+            BackendRunPage(items:[],nextCursor:nil)
+        ],listFetchGates:[2:gate],listFetchIgnoresCancellation:[2])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let refresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting)
+
+        refresh.cancel()
+        let cancelled=await waitUntil{bridge.runRecordsRefreshState == .idle}
+        XCTAssertTrue(cancelled,"Cancelling the SwiftUI parent must cancel the bridge-owned refresh")
+        await gate.release()
+        let responseReturned=await waitUntil{await fake.completedListFetchCount()==2}
+        XCTAssertTrue(responseReturned)
+        await refresh.value
+
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,nil],"A transport response after cancellation must not start another cursor request")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Cancellation preserves the last complete list");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[runA.summary.id])
+    }
+
+    @MainActor func testExplicitRunListRetryIsOwnedAndCancelledOnScreenExit() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"cancel-retry-a",title:"기록 A",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil)
+        ],listFetchGates:[3:gate],listFetchIgnoresCancellation:[3])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await fake.failNextListFetch()
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        XCTAssertEqual(bridge.runRecordsRefreshState,.failed(.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")))
+
+        await fake.setListPages([
+            BackendRunPage(items:[runA.summary],nextCursor:"retry-tail"),
+            BackendRunPage(items:[],nextCursor:nil)
+        ])
+        bridge.retryRunRecords()
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting,"The explicit retry action starts a bridge-owned refresh task")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+        await gate.release()
+        let responseReturned=await waitUntil{await fake.completedListFetchCount()==3}
+        XCTAssertTrue(responseReturned)
+        for _ in 0..<10 { await Task.yield() }
+
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,nil,nil],"Leaving the list cancels an explicit retry before its next page")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("A cancelled retry cannot replace the prior list");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[runA.summary.id])
+    }
+
+    @MainActor func testLateCancelledRefreshCannotClearNewAccountRefreshState() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"late-refresh-a",title:"계정 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"late-refresh-b",title:"계정 B",memo:nil)
+        let oldGate=WireframeRemoteReadGate()
+        let newGate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:"old-account-tail"),
+            BackendRunPage(items:[runB.summary],nextCursor:nil),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ],listFetchGates:[2:oldGate,4:newGate],listFetchIgnoresCancellation:[2,4])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let oldRefresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let oldWaiting=await waitUntil{await oldGate.isWaiting()}
+        XCTAssertTrue(oldWaiting)
+
+        let activateAccountB=Task{@MainActor in await bridge.activate(feature:.runs,accountScopeID:"account-b",screen:"L01")}
+        await activateAccountB.value
+        guard case .loaded(let accountB)=bridge.runRecordsState else{XCTFail("Account B loads independently");return}
+        XCTAssertEqual(accountB.items.map(\.id),[runB.summary.id])
+
+        let newRefresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let newWaiting=await waitUntil{await newGate.isWaiting()}
+        XCTAssertTrue(newWaiting)
+        await oldGate.release()
+        await oldRefresh.value
+        XCTAssertEqual(bridge.runRecordsRefreshState,.refreshing,"The old task's defer must not clear the newer operation's state")
+        await bridge.refreshRunRecords()
+        XCTAssertEqual(bridge.runRecordsRefreshState,.refreshing,"A duplicate call cannot replace or clear the active account B refresh")
+        let afterOldResponse=await fake.observedListCursors()
+        XCTAssertEqual(afterOldResponse,[nil,nil,nil,nil],"The cancelled account A response does not request another cursor")
+
+        await newGate.release()
+        await newRefresh.value
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+        guard case .loaded(let finalAccountB)=bridge.runRecordsState else{XCTFail("The current account refresh completes");return}
+        XCTAssertEqual(finalAccountB.items.map(\.id),[runB.summary.id])
+    }
+
+    @MainActor func testRunListRefreshCannotOverwriteAnEditOrConfirmedDelete() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-race-a",title:"원래 제목",memo:nil)
+        let refreshedA=makeRunEditNormalizationConflictDetail(id:"sync-race-a",title:"오래된 목록 제목",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[refreshedA.summary],nextCursor:nil)
+        ],listFetchGates:[2:gate])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake,runRecordsDeleter:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let refresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting)
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        let didEdit=await bridge.saveRunRecordField(.title,value:"최신 편집",runID:runA.summary.id,accountScopeID:"account-a",screen:"L04")
+        XCTAssertTrue(didEdit)
+        await gate.release()
+        await refresh.value
+        guard case .loaded(let editedList)=bridge.runRecordsState else{XCTFail("The edit must remain in the remote list cache");return}
+        XCTAssertEqual(editedList.items.first?.title,"최신 편집")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L07")
+        let deleting=Task{@MainActor in await bridge.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")}
+        let deleted=await deleting.value
+        XCTAssertTrue(deleted)
+        guard case .loaded(let afterDelete)=bridge.runRecordsState else{XCTFail("A confirmed delete must remain applied");return}
+        XCTAssertFalse(afterDelete.items.contains{$0.id==runA.summary.id})
     }
 
     @MainActor func testRunDeleteIsOptionalAndOnlyConfirmedSuccessRemovesTheSelectedRun() async {

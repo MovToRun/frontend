@@ -65,6 +65,13 @@ retried because a lost response can follow a committed version increment.
 `RunRecordsLoader` exposes explicit list/detail loading, loaded, and
 failure states, appends list pages in server order, stops cursor loops, and
 ignores older completions after a newer list or detail generation begins.
+Returning to the run list or pulling to refresh reads every page sequentially
+from a nil cursor through the terminal nil `nextCursor`. The cursor remains
+opaque and is used only for list pagination. The bridge replaces the in-memory
+remote snapshot only after the complete scan succeeds; failures and cancellation
+keep the prior visible list. Repeated cursors, duplicate IDs across pages,
+oversized pages, and a defensive 1,000-page ceiling stop the scan. The backend
+does not promise a consistent snapshot across pages.
 `WireframeRemoteReadBridge` adds run reads and optional writes to the existing
 dependency composition. It admits one edit at a time, checks account/screen/run
 scope before applying responses, cancels in-flight work on navigation or
@@ -101,6 +108,12 @@ The detail response includes stored GPS points, but this integration does not
 request device location, render coordinates, submit tracks, upload files, or
 send notifications. It shows point and pause counts only. No host, credential,
 session refresh, live server write, or persistent remote cache was added.
+The list reread follows backend DEC-014: there is no delta endpoint, sync cursor,
+tombstone feed, persistent remote cache, or upload queue here. Completed-list
+reconciliation affects only in-memory remote rows and never removes local runs
+or built-in samples. See
+[`BACKEND_RUN_RECORD_FULL_LIST_RECONCILIATION.md`](BACKEND_RUN_RECORD_FULL_LIST_RECONCILIATION.md)
+for the refresh and deferred upload-queue boundary.
 
 ## Verification and limits
 

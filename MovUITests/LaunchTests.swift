@@ -544,6 +544,28 @@ import UIKit
         app.terminate()
     }
 
+    func testRemoteDeletionOnAnotherDeviceReconcilesWhenReturningToList() {
+        let suite="run-list-reconcile-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-fixture","-wire-run-records-remote-delete-on-refresh","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        let remoteRow=app.buttons["remoteRun-fixture-run-104"]
+        XCTAssertTrue(remoteRow.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"The fixture's local sample is independent of the remote list")
+
+        remoteRow.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8),app.debugDescription)
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:8),app.debugDescription)
+        let remoteRowRemoved=expectation(for:NSPredicate(format:"exists == false"),evaluatedWith:remoteRow)
+        wait(for:[remoteRowRemoved],timeout:10)
+        XCTAssertTrue(app.staticTexts["기기에 저장된 기록"].exists)
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"A remote list refresh must preserve local sample data")
+        XCTAssertFalse(app.descendants(matching:.any)["recordLookupFailure"].exists,"An empty remote result is a successful list, not a local-history failure")
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
     func testInjectedRunRecordEditKeepsInlineFlowAndReappliesDraftAfterConflict() {
         let suite="run-edit-fixture-\(UUID().uuidString)"
         app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-fixture","-wire-run-records-edit-fixture","-wire-run-records-write-conflict","-appearance","light"]

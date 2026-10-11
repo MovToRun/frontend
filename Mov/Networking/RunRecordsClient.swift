@@ -85,6 +85,12 @@ struct BackendRunSnapshot: Equatable, Sendable {
     }
 }
 
+struct BackendRunRefreshCandidate: Equatable, Sendable {
+    let snapshot: BackendRunSnapshot
+    let generation: UInt64
+    let operationID: UUID
+}
+
 enum RunRecordsFailure: Error, Equatable, Sendable {
     case accessTokenUnavailable
     case unauthenticated
@@ -791,11 +797,13 @@ enum RunDetailReadState: Equatable, Sendable {
 }
 
 actor RunRecordsLoader {
+    private static let maximumRefreshPages = 1_000
     private let client: any RunRecordsReading
     private let pageSize: Int
     private var listGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
     private var consumedCursors: Set<String> = []
+    private var fullRefreshOperationID: UUID?
     private(set) var state: RunRecordsReadState = .idle
     private(set) var detailState: RunDetailReadState = .idle
 
@@ -806,6 +814,7 @@ actor RunRecordsLoader {
 
     func load() async {
         listGeneration &+= 1
+        fullRefreshOperationID = nil
         let requestGeneration = listGeneration
         consumedCursors.removeAll()
         state = .loading
@@ -813,17 +822,21 @@ actor RunRecordsLoader {
         do {
             let page = try await client.fetchRuns(cursor: nil, size: pageSize)
             guard requestGeneration == listGeneration else { return }
+            guard !Task.isCancelled else { state = .idle; return }
             state = .loaded(BackendRunSnapshot(items: page.items, nextCursor: page.nextCursor))
         } catch let failure as RunRecordsFailure {
-            guard requestGeneration == listGeneration else { return }; state = .failed(failure)
+            guard requestGeneration == listGeneration else { return }
+            state = Task.isCancelled ? .idle : .failed(failure)
         } catch is CancellationError {
-            guard requestGeneration == listGeneration else { return }; state = .failed(.cancelled)
+            guard requestGeneration == listGeneration else { return }; state = .idle
         } catch {
-            guard requestGeneration == listGeneration else { return }; state = .failed(.invalidResponse)
+            guard requestGeneration == listGeneration else { return }
+            state = Task.isCancelled ? .idle : .failed(.invalidResponse)
         }
     }
 
     func loadNextPage() async {
+        guard fullRefreshOperationID == nil else { return }
         let snapshot: BackendRunSnapshot
         switch state {
         case .loaded(let value), .failedLoadingMore(let value, _): snapshot = value
@@ -837,6 +850,7 @@ actor RunRecordsLoader {
         do {
             let page = try await client.fetchRuns(cursor: cursor, size: pageSize)
             guard requestGeneration == listGeneration else { return }
+            guard !Task.isCancelled else { state = .loaded(snapshot); return }
             var nextCursors = consumedCursors
             nextCursors.insert(cursor)
             if page.nextCursor.map(nextCursors.contains) == true {
@@ -847,14 +861,16 @@ actor RunRecordsLoader {
             state = .loaded(snapshot.appending(page))
         } catch let failure as RunRecordsFailure {
             guard requestGeneration == listGeneration else { return }
+            if Task.isCancelled { state = .loaded(snapshot); return }
             switch failure {
             case .accessTokenUnavailable, .unauthenticated: state = .failed(failure)
             default: state = .failedLoadingMore(snapshot, failure)
             }
         } catch is CancellationError {
-            guard requestGeneration == listGeneration else { return }; state = .failedLoadingMore(snapshot, .cancelled)
+            guard requestGeneration == listGeneration else { return }; state = .loaded(snapshot)
         } catch {
-            guard requestGeneration == listGeneration else { return }; state = .failedLoadingMore(snapshot, .invalidResponse)
+            guard requestGeneration == listGeneration else { return }
+            state = Task.isCancelled ? .loaded(snapshot) : .failedLoadingMore(snapshot, .invalidResponse)
         }
     }
 
@@ -891,9 +907,11 @@ actor RunRecordsLoader {
     }
 
     func applyUpdatedSummary(_ summary: BackendRunSummary) {
+        listGeneration &+= 1
+        fullRefreshOperationID = nil
         switch state {
         case .loaded(let snapshot): state = .loaded(snapshot.replacing(summary))
-        case .loadingMore(let snapshot): state = .loadingMore(snapshot.replacing(summary))
+        case .loadingMore(let snapshot): state = .loaded(snapshot.replacing(summary))
         case .failedLoadingMore(let snapshot, let failure): state = .failedLoadingMore(snapshot.replacing(summary), failure)
         case .idle, .loading, .failed: break
         }
@@ -906,6 +924,7 @@ actor RunRecordsLoader {
 
     func applyDeletedRun(id: String) {
         listGeneration &+= 1
+        fullRefreshOperationID = nil
         switch state {
         case .loaded(let snapshot):
             state = .loaded(snapshot.removing(id))
@@ -925,6 +944,104 @@ actor RunRecordsLoader {
             detailGeneration &+= 1
             detailState = .idle
         }
+    }
+
+    func fetchCompleteList() async throws -> BackendRunRefreshCandidate {
+        guard (1...RunRecordsClient.maximumPageSize).contains(pageSize) else {
+            throw RunRecordsFailure.invalidPageSize
+        }
+        listGeneration &+= 1
+        let requestGeneration = listGeneration
+        let operationID = UUID()
+        fullRefreshOperationID = operationID
+
+        switch state {
+        case .loadingMore(let snapshot), .failedLoadingMore(let snapshot, _): state = .loaded(snapshot)
+        case .loading: state = .idle
+        case .idle, .loaded, .failed: break
+        }
+
+        var cursor: String?
+        var requestedCursors = Set<String>()
+        var seenRunIDs = Set<String>()
+        var items: [BackendRunSummary] = []
+        var pageCount = 0
+
+        do {
+            while true {
+                guard fullRefreshOperationID == operationID,
+                      requestGeneration == listGeneration,
+                      !Task.isCancelled else { throw RunRecordsFailure.cancelled }
+                guard pageCount < Self.maximumRefreshPages else { throw RunRecordsFailure.paginationLoop }
+                if let cursor, !requestedCursors.insert(cursor).inserted {
+                    throw RunRecordsFailure.paginationLoop
+                }
+
+                let page = try await client.fetchRuns(cursor: cursor, size: pageSize)
+                guard fullRefreshOperationID == operationID,
+                      requestGeneration == listGeneration,
+                      !Task.isCancelled else { throw RunRecordsFailure.cancelled }
+                guard page.items.count <= pageSize else { throw RunRecordsFailure.invalidResponse }
+                for item in page.items {
+                    guard seenRunIDs.insert(item.id).inserted else { throw RunRecordsFailure.invalidResponse }
+                    items.append(item)
+                }
+                pageCount += 1
+
+                guard let nextCursor = page.nextCursor else { break }
+                guard nextCursor != cursor, !requestedCursors.contains(nextCursor) else {
+                    throw RunRecordsFailure.paginationLoop
+                }
+                guard fullRefreshOperationID == operationID,
+                      requestGeneration == listGeneration,
+                      !Task.isCancelled else { throw RunRecordsFailure.cancelled }
+                cursor = nextCursor
+            }
+        } catch let failure as RunRecordsFailure {
+            if fullRefreshOperationID == operationID { fullRefreshOperationID = nil }
+            throw failure
+        } catch is CancellationError {
+            if fullRefreshOperationID == operationID { fullRefreshOperationID = nil }
+            throw RunRecordsFailure.cancelled
+        } catch {
+            if fullRefreshOperationID == operationID { fullRefreshOperationID = nil }
+            throw RunRecordsFailure.invalidResponse
+        }
+
+        return BackendRunRefreshCandidate(
+            snapshot: BackendRunSnapshot(items: items, nextCursor: nil),
+            generation: requestGeneration,
+            operationID: operationID
+        )
+    }
+
+    @discardableResult
+    func applyCompleteList(_ candidate: BackendRunRefreshCandidate) -> Bool {
+        guard fullRefreshOperationID == candidate.operationID,
+              listGeneration == candidate.generation else { return false }
+        fullRefreshOperationID = nil
+        listGeneration &+= 1
+        consumedCursors.removeAll()
+        state = .loaded(candidate.snapshot)
+
+        let currentRunIDs = Set(candidate.snapshot.items.map(\.id))
+        switch detailState {
+        case .loaded(let detail) where !currentRunIDs.contains(detail.summary.id):
+            detailGeneration &+= 1
+            detailState = .failed(runID: detail.summary.id, .recordNotFound)
+        case .loading(let runID) where !currentRunIDs.contains(runID):
+            detailGeneration &+= 1
+            detailState = .failed(runID: runID, .recordNotFound)
+        case .idle, .loaded, .loading, .failed:
+            break
+        }
+        return true
+    }
+
+    func discardCompleteList(_ candidate: BackendRunRefreshCandidate) {
+        guard fullRefreshOperationID == candidate.operationID,
+              listGeneration == candidate.generation else { return }
+        fullRefreshOperationID = nil
     }
 
     func cancelAll() {
