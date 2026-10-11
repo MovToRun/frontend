@@ -457,6 +457,8 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var runRecordEditOperationID: UUID?
     @ObservationIgnored private var runRecordEditTask: Task<Bool, Never>?
+    @ObservationIgnored private var runRecordsNeedsRefresh = false
+    @ObservationIgnored private var staleRunDetailIDs: Set<String> = []
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
     @ObservationIgnored private var manualWeeklyGoalPreviousState: WeeklyGoalReadState?
     private(set) var accountScopeID: String?
@@ -610,6 +612,9 @@ enum SessionLogoutState: Equatable {
         pointsState = .idle
         runRecordsState = .idle
         runDetailState = .idle
+        runRecordsNeedsRefresh = false
+        staleRunDetailIDs.removeAll()
+        runRecordEditState = .idle
         activeRunID = nil
         progressState = .idle
         weeklyGoalState = .idle
@@ -627,6 +632,10 @@ enum SessionLogoutState: Equatable {
         if runRecordEditOperationID != nil,
            (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
             cancelRunRecordEdit()
+        }
+        if runRecordEditState != .idle,
+           (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
+            runRecordEditState = .idle
         }
         if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
             weeklyGoalConflictRefreshState = .idle
@@ -720,8 +729,9 @@ enum SessionLogoutState: Equatable {
         case .runs:
             guard let runRecordsLoader else { runRecordsState = .idle; runDetailState = .idle; return }
             if let runID {
-                if case .loaded(let detail) = runDetailState, detail.summary.id == runID { return }
-                if case .failed(let failedID, _) = runDetailState, failedID == runID { return }
+                let detailNeedsRefresh = staleRunDetailIDs.contains(runID)
+                if case .loaded(let detail) = runDetailState, detail.summary.id == runID, !detailNeedsRefresh { return }
+                if case .failed(let failedID, _) = runDetailState, failedID == runID, !detailNeedsRefresh { return }
                 runDetailState = .loading(runID: runID)
                 await runRecordsLoader.loadDetail(runID: runID)
                 let result = await runRecordsLoader.detailState
@@ -731,9 +741,15 @@ enum SessionLogoutState: Equatable {
                     activeFeature = nil
                 } else {
                     runDetailState = result
+                    if case .loaded(let detail) = result, detail.summary.id == runID {
+                        staleRunDetailIDs.remove(runID)
+                    }
+                    if case .failed(let failedID, .recordNotFound) = result, failedID == runID {
+                        invalidateRunListAfterMissingRecord(runID: runID)
+                    }
                 }
             } else {
-                guard runRecordsState == .idle else { return }
+                guard runRecordsState == .idle || runRecordsNeedsRefresh else { return }
                 runRecordsState = .loading
                 await runRecordsLoader.load()
                 let result = await runRecordsLoader.state
@@ -743,6 +759,7 @@ enum SessionLogoutState: Equatable {
                     activeFeature = nil
                 } else {
                     runRecordsState = result
+                    if case .loaded = result { runRecordsNeedsRefresh = false }
                 }
             }
         case .progressGoals:
@@ -876,7 +893,7 @@ enum SessionLogoutState: Equatable {
             guard isCurrentRunRecordEdit(
                 operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                 screen: screen, runID: runID
-            ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
             guard baseVersion < Int64.max, summary.version == baseVersion + 1 else {
                 runRecordEditState = .failed(runID: runID, field: field, failure: .invalidResponse)
                 return false
@@ -885,20 +902,21 @@ enum SessionLogoutState: Equatable {
             guard isCurrentRunRecordEdit(
                 operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                 screen: screen, runID: runID
-            ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
             runRecordEditState = .idle
             return true
         } catch let failure as RunRecordsFailure {
             guard isCurrentRunRecordEdit(
                 operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                 screen: screen, runID: runID
-            ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
             if failure == .cancelled || Task.isCancelled {
                 runRecordEditState = .idle
                 return false
             }
             guard failure == .versionConflict else {
                 runRecordEditState = .failed(runID: runID, field: field, failure: failure)
+                if failure == .recordNotFound { invalidateRunListAfterMissingRecord(runID: runID) }
                 return false
             }
 
@@ -908,14 +926,14 @@ enum SessionLogoutState: Equatable {
             guard isCurrentRunRecordEdit(
                 operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                 screen: screen, runID: runID
-            ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
             switch refreshedState {
             case .loaded(let latest) where latest.summary.id == runID:
                 await applyRunRecordSummary(latest.summary, using: loader)
                 guard isCurrentRunRecordEdit(
                     operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                     screen: screen, runID: runID
-                ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+                ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
                 let latestValue = field == .title ? latest.summary.title ?? "" : latest.summary.memo ?? ""
                 if latestValue == value {
                     runRecordEditState = .idle
@@ -924,6 +942,7 @@ enum SessionLogoutState: Equatable {
                 runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflict)
             case .failed(let failedID, .recordNotFound) where failedID == runID:
                 runRecordEditState = .failed(runID: runID, field: field, failure: .recordNotFound)
+                invalidateRunListAfterMissingRecord(runID: runID)
             default:
                 runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflictRefreshFailed)
             }
@@ -932,7 +951,7 @@ enum SessionLogoutState: Equatable {
             guard isCurrentRunRecordEdit(
                 operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
                 screen: screen, runID: runID
-            ) else { invalidateRunReadsAfterStaleEdit(accountScopeID: accountScopeID); return false }
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
             if Task.isCancelled {
                 runRecordEditState = .idle
             } else {
@@ -961,6 +980,7 @@ enum SessionLogoutState: Equatable {
 
     private func applyRunRecordSummary(_ summary: BackendRunSummary, using loader: RunRecordsLoader) async {
         await loader.applyUpdatedSummary(summary)
+        staleRunDetailIDs.remove(summary.id)
         runRecordsState = await loader.state
         if case .loaded(let detail) = await loader.detailState,
            detail.summary.id == summary.id {
@@ -968,13 +988,17 @@ enum SessionLogoutState: Equatable {
         }
     }
 
-    private func invalidateRunReadsAfterStaleEdit(accountScopeID: String) {
+    private func invalidateRunListAfterMissingRecord(runID: String) {
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        runRecordsState = .idle
+    }
+
+    private func handleStaleRunEditResponse(runID: String, accountScopeID: String, using loader: RunRecordsLoader) {
         guard self.accountScopeID == accountScopeID else { return }
-        runDetailState = .idle
-        guard activeFeature == .runs, activeScreen == "L01", let loader = runRecordsLoader else {
-            runRecordsState = .idle
-            return
-        }
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        guard activeFeature == .runs, activeScreen == "L01", activeRunID == nil else { return }
         let requestGeneration = generation
         runRecordsState = .loading
         Task { @MainActor [weak self] in
@@ -984,8 +1008,10 @@ enum SessionLogoutState: Equatable {
                   self.generation == requestGeneration,
                   self.accountScopeID == accountScopeID,
                   self.activeFeature == .runs,
-                  self.activeScreen == "L01" else { return }
+                  self.activeScreen == "L01",
+                  self.activeRunID == nil else { return }
             self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
         }
     }
 
@@ -1273,6 +1299,7 @@ enum SessionLogoutState: Equatable {
             self.manualOperationKind = nil
             self.manualRunsPreviousState = nil
             self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
         }
     }
 
@@ -1855,7 +1882,8 @@ struct RootView:View {
         let runClient = (runFixture || runEditFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
             failsWrite:args.contains("-wire-run-records-write-fail"),
-            conflictsFirstWrite:args.contains("-wire-run-records-write-conflict")
+            conflictsFirstWrite:args.contains("-wire-run-records-write-conflict"),
+            missingWrite:args.contains("-wire-run-records-write-404")
         ):nil
         let runLoader = runClient.map { RunRecordsLoader(client:$0) }
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
@@ -2076,26 +2104,31 @@ private actor WireframeAuthLogoutFixture: SessionLogoutRequesting {
 private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating {
     let fails:Bool
     let failsWrite:Bool
+    let missingWrite:Bool
     private var conflictsFirstWrite:Bool
+    private var recordMissing=false
     private var currentSummary:BackendRunSummary
 
-    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false){
-        self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite;self.currentSummary=Self.makeSummary()
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false){
+        self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
+        self.missingWrite=missingWrite;self.currentSummary=Self.makeSummary()
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
         if fails { throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-unavailable") }
+        if recordMissing { return BackendRunPage(items:[],nextCursor:nil) }
         guard cursor == nil else { return BackendRunPage(items:[],nextCursor:nil) }
         return BackendRunPage(items:[currentSummary],nextCursor:nil)
     }
 
     func fetchRun(id:String) async throws -> BackendRunDetail {
-        guard id == currentSummary.id else { throw RunRecordsFailure.recordNotFound }
+        guard id == currentSummary.id,!recordMissing else { throw RunRecordsFailure.recordNotFound }
         return BackendRunDetail(summary:currentSummary,points:[],pauses:[],judgement:nil)
     }
 
     func updateRun(id:String,version:Int64,patch:BackendRunEditPatch) async throws -> BackendRunSummary {
-        guard id == currentSummary.id else{throw RunRecordsFailure.recordNotFound}
+        guard id == currentSummary.id,!recordMissing else{throw RunRecordsFailure.recordNotFound}
+        if missingWrite {recordMissing=true;throw RunRecordsFailure.recordNotFound}
         if failsWrite{throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-edit-unavailable")}
         if conflictsFirstWrite{
             conflictsFirstWrite=false

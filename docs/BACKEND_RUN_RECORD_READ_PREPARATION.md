@@ -68,10 +68,11 @@ ignores older completions after a newer list or detail generation begins.
 `WireframeRemoteReadBridge` adds run reads and optional writes to the existing
 dependency composition. It admits one edit at a time, checks account/screen/run
 scope before applying responses, cancels in-flight work on navigation or
-account change, and ignores late responses from the old scope. If a cancelled
-write later returns on the same account, the bridge refreshes the visible list
-or invalidates the cached run state so the next visit reads current server
-data.
+account change, and ignores late responses from the old scope. A late edit
+response only refreshes the run list when that list is still active; it cannot
+replace a different run detail currently on screen. Otherwise the list is
+marked stale and reloads when the user returns to it. The reload applies only
+to the activation generation and account that requested it.
 
 Remote list rows and detail are rendered separately from `RunStore.records`.
 A supplied updater reuses the detail's existing per-field pencil → edit →
@@ -81,7 +82,10 @@ missing, deleted, or owned by another member. On `409 VERSION_CONFLICT`, the
 bridge fetches the current detail and keeps the draft; if that field already
 matches the draft it treats the ambiguous response as completed, otherwise the
 user must press complete again to apply the draft against the refreshed
-version. Read-only compositions keep the existing read-only detail. Record
+version. A PATCH `404` retains the draft in the current detail and marks the
+cached list stale; the list reloads on return or retry, and a failed reload
+remains a retryable read failure. A detail-read `404` also marks the list
+stale. Read-only compositions keep the existing read-only detail. Record
 deletion is not included.
 A request failure remains an error with a retry action where supported; it
 never becomes an empty successful list. The default app entry still injects no
@@ -102,18 +106,21 @@ session refresh, live server write, or persistent remote cache was added.
   `MockURLProtocol`. Run edit cases cover PATCH path/headers/body, per-field
   omission and empty-string clearing, explicit-null response decoding, Java
   UTF-16 length boundaries, 409 conflict, generic 404 and disabled write retry.
-- Focused Xcode bridge/read regression: 5/5 passed on the existing iPhone 17 Pro
+- Focused Xcode bridge/read regression: 8/8 passed on the existing iPhone 17 Pro
   simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It covers
   read-only list/detail composition, one-field update, list/detail refresh,
   simultaneous-save blocking, conflict refresh and draft resubmission,
-  navigation with a late response, and account-scope isolation. Result bundle:
-  `/tmp/task12-run-edit-unit.xcresult`.
-- Focused Xcode UI regression: 3/3 passed on the same simulator. It covers the
+  navigation with a late response, account-scope isolation, a late A edit while
+  B is active, `404` list invalidation and retry after a failed reload, and
+  rejecting a late old-account list response. Result bundle:
+  `/tmp/task12-run-edit-cache-unit-rerun.xcresult`.
+- Focused Xcode UI regression: 4/4 passed on the same simulator. It covers the
   unchanged pencil → edit → complete flow, draft retention on conflict and
-  service failure, title/memo saves, preserved run metrics, and the existing
-  read-only/list-failure path. Each UI test used a unique
+  service failure, title/memo saves, preserved run metrics, the existing
+  read-only/list-failure path, and draft retention after a simulated `404`
+  followed by list refresh. Each UI test used a unique
   `-wire-test-store-suite`; fixture reset stayed within that suite. Result
-  bundle: `/tmp/task12-run-edit-ui-rerun.xcresult`.
+  bundle: `/tmp/task12-run-edit-cache-ui.xcresult`.
 - App build succeeded for the same simulator destination.
 - No live backend request or server write was sent; no real credential or GPS
   capture was used. The app remains unwired to a production host or token

@@ -138,7 +138,7 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
         case .accessTokenUnavailable, .unauthenticated:
             return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
         case .recordNotFound:
-            return "이 러닝 기록을 찾을 수 없어요. 목록을 새로고침해 주세요."
+            return "이 러닝 기록에 저장하지 못했어요. 초안은 이 화면에 남아 있고, 목록으로 돌아가면 서버 기록을 다시 확인해요."
         case .versionConflict, .versionConflictRefreshFailed, .invalidEdit:
             return userMessage
         case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):

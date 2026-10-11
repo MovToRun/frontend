@@ -532,6 +532,30 @@ import UIKit
         app.terminate()
     }
 
+    func testRunRecordEdit404PreservesDraftUntilListReturnAndThenRefreshes() {
+        let suite="run-edit-missing-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-fixture","-wire-run-records-edit-fixture","-wire-run-records-write-404","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        let row=app.buttons["remoteRun-fixture-run-104"]
+        XCTAssertTrue(row.waitForExistence(timeout:8),app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8),app.debugDescription)
+
+        tap("editTitle")
+        let title=app.textFields["inlineTitleInput"]
+        replaceInput(title,"404 뒤 보존할 초안")
+        tap("finishTitle")
+        XCTAssertTrue(app.descendants(matching:.any)["inlineTitleSaveFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(title.value as? String,"404 뒤 보존할 초안")
+
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["서버에 러닝 기록이 없어요."].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"Refreshing the server list leaves local history untouched")
+        app.terminate()
+    }
+
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]
