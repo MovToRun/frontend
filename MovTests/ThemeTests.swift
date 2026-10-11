@@ -1771,9 +1771,134 @@ private enum WireframeProgressGoalsTestData {
             time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
         )
     }
+
+    static func goal(version:Int64,distance:Int64?,time:Int64?,doneMeters:Int64=12_400,doneSeconds:Int64=3_900)->BackendWeeklyGoalStatus {
+        func axis(_ target:Int64?,_ done:Int64)->BackendWeeklyGoalAxis {
+            guard let target else{return .init(goal:nil,done:done,remaining:nil,achieved:false)}
+            return .init(goal:target,done:done,remaining:max(0,target-done),achieved:done>=target)
+        }
+        return BackendWeeklyGoalStatus(
+            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:version,
+            distance:axis(distance,doneMeters),time:axis(time,doneSeconds)
+        )
+    }
+}
+
+private actor WeeklyGoalMutationMock: RunningProgressReading, RunningWeeklyGoalWriting {
+    private var currentGoal:BackendWeeklyGoalStatus
+    private var nextReadGoals:[BackendWeeklyGoalStatus]
+    private let writeFailure:ProgressGoalsFailure?
+    private var writeFailures:[ProgressGoalsFailure]
+    private let conflictServerGoal:BackendWeeklyGoalStatus?
+    private let writeGate:WireframeRemoteReadGate?
+    private let weeklyReadGate:WireframeRemoteReadGate?
+    private let weeklyReadGateOnCall:Int?
+    private var weeklyReadFailures:[Int:ProgressGoalsFailure]
+    private let commitAfterCancellation:Bool
+    private let lateWriteResult:BackendWeeklyGoalStatus?
+    private var writeCalls=0
+    private var completedWrites=0
+    private var weeklyReadCalls=0
+    private var writeVersions:[Int64]=[]
+    private var writeDrafts:[(Int64?,Int64?)]=[]
+
+    init(
+        initialGoal:BackendWeeklyGoalStatus,
+        nextReadGoals:[BackendWeeklyGoalStatus]=[],
+        writeFailure:ProgressGoalsFailure?=nil,
+        writeFailures:[ProgressGoalsFailure]=[],
+        conflictServerGoal:BackendWeeklyGoalStatus?=nil,
+        writeGate:WireframeRemoteReadGate?=nil,
+        weeklyReadGate:WireframeRemoteReadGate?=nil,
+        weeklyReadGateOnCall:Int?=nil,
+        weeklyReadFailures:[Int:ProgressGoalsFailure]=[:],
+        commitAfterCancellation:Bool=false,
+        lateWriteResult:BackendWeeklyGoalStatus?=nil
+    ) {
+        self.currentGoal=initialGoal
+        self.nextReadGoals=nextReadGoals
+        self.writeFailure=writeFailure
+        self.writeFailures=writeFailures
+        self.conflictServerGoal=conflictServerGoal
+        self.writeGate=writeGate
+        self.weeklyReadGate=weeklyReadGate
+        self.weeklyReadGateOnCall=weeklyReadGateOnCall
+        self.weeklyReadFailures=weeklyReadFailures
+        self.commitAfterCancellation=commitAfterCancellation
+        self.lateWriteResult=lateWriteResult
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        WireframeProgressGoalsTestData.summary(distance:12_400)
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyReadCalls+=1
+        let call=weeklyReadCalls
+        if let failure=weeklyReadFailures.removeValue(forKey:call) { throw failure }
+        if !nextReadGoals.isEmpty {
+            currentGoal=nextReadGoals.removeFirst()
+        }
+        let response=currentGoal
+        if let weeklyReadGate,weeklyReadGateOnCall==call { try await weeklyReadGate.wait() }
+        return response
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        BackendDailyProgress(range:range,days:[])
+    }
+
+    func saveWeeklyGoal(version:Int64,distanceGoalMeters:Int64?,timeGoalSeconds:Int64?) async throws -> BackendWeeklyGoalStatus {
+        writeCalls+=1
+        writeVersions.append(version)
+        writeDrafts.append((distanceGoalMeters,timeGoalSeconds))
+        if let writeGate {
+            do { try await writeGate.wait() }
+            catch {
+                guard commitAfterCancellation else { throw ProgressGoalsFailure.cancelled }
+            }
+        }
+        if !writeFailures.isEmpty {
+            let failure=writeFailures.removeFirst()
+            if case .weeklyGoalVersionConflict = failure,let conflictServerGoal { currentGoal=conflictServerGoal }
+            throw failure
+        }
+        if let writeFailure { throw writeFailure }
+        let saved=lateWriteResult ?? WireframeProgressGoalsTestData.goal(
+            version:version+1,distance:distanceGoalMeters,time:timeGoalSeconds,
+            doneMeters:currentGoal.distance.done,doneSeconds:currentGoal.time.done
+        )
+        if lateWriteResult == nil { currentGoal=saved }
+        completedWrites+=1
+        return saved
+    }
+
+    func observedWriteCalls()->Int{writeCalls}
+    func observedCompletedWrites()->Int{completedWrites}
+    func observedWeeklyReadCalls()->Int{weeklyReadCalls}
+    func observedWriteVersions()->[Int64]{writeVersions}
+    func observedWriteDrafts()->[(Int64?,Int64?)]{writeDrafts}
+    func enqueueReadGoal(_ goal:BackendWeeklyGoalStatus){nextReadGoals.append(goal)}
 }
 
 extension ThemeTests {
+    func testWeeklyGoalDraftValidationRejectsFractionalOrWrongStepInputsWithoutTruncating() {
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:30.9))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:31))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:9))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:6_010))
+        XCTAssertEqual(WeeklyGoalDraftValidation.timeMinutes(from:30),30)
+        XCTAssertEqual(WeeklyGoalDraftValidation.timeMinutes(from:6_000),6_000)
+
+        XCTAssertNil(WeeklyGoalDraftValidation.payload(distanceEnabled:true,kilometers:1.25,timeEnabled:false,minutes:30))
+        XCTAssertNil(WeeklyGoalDraftValidation.payload(distanceEnabled:false,kilometers:0,timeEnabled:true,minutes:31))
+        guard let both=WeeklyGoalDraftValidation.payload(distanceEnabled:true,kilometers:1,timeEnabled:true,minutes:30) else {
+            XCTFail("The lowest valid distance and time values should be accepted");return
+        }
+        XCTAssertEqual(both.0,1_000)
+        XCTAssertEqual(both.1,1_800)
+    }
+
     @MainActor func testProgressFailureDoesNotHideWeeklyGoalAndEachReadCanRetryIndependently() async {
         let mock=WireframeProgressGoalsReadMock(
             progressResults:[.failure(.serviceUnavailable(requestID:"progress-outage")),.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
@@ -1946,6 +2071,303 @@ extension ThemeTests {
         guard case .loaded(let goal)=bridge.weeklyGoalState else {XCTFail("The independent weekly goal response should complete");return}
         XCTAssertEqual(progress.total.distanceMeters,12_400)
         XCTAssertEqual(goal.distance.done,12_400)
+    }
+
+    @MainActor func testWeeklyGoalMutationIgnoresDuplicateTapAndRefreshesTheQueryAfterSave() async {
+        let gate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeGate:gate)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline))
+
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:40_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.saving)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"The prior query state stays visible while PUT is pending")
+        let pendingWriteCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(pendingWriteCalls,1,"A second tap must not start another PUT")
+
+        await gate.release()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalWriteState == .saved {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let refreshed)=bridge.weeklyGoalState else {XCTFail("The post-save query should load");return}
+        XCTAssertEqual(refreshed.version,4)
+        XCTAssertEqual(refreshed.distance.goal,30_000)
+        XCTAssertEqual(refreshed.time.goal,7_200)
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        XCTAssertEqual(weeklyReadCalls,2,"Saving should synchronize from a second GET")
+    }
+
+    @MainActor func testWeeklyGoalWriteFailurePreservesThePreviousLoadedStatus() async {
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeFailure:.serviceUnavailable(requestID:"weekly-put-outage"))
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if case .failed = bridge.weeklyGoalWriteState {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.failed(.serviceUnavailable(requestID:"weekly-put-outage")))
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"A rejected or unavailable PUT must not replace the previous query state")
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        let writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(weeklyReadCalls,1,"A failed write must not imply that a query was synchronized")
+        XCTAssertEqual(writeCalls,1)
+    }
+
+    @MainActor func testWeeklyGoalConflictRefreshIsGatedAndRequiresAConfirmedSaveWithTheNewVersion() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.failed(.weeklyGoalVersionConflict(requestID:"weekly-conflict")))
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"A version conflict keeps the previous query state visible until refresh")
+        XCTAssertTrue(bridge.needsWeeklyGoalConflictRefresh)
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        var readIsWaiting=false
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() {readIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(readIsWaiting,"Conflict recovery must wait for its latest-goal GET")
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.refreshing)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline))
+        var writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCalls,1,"A GET must not auto-resubmit the draft")
+
+        await refreshGate.release()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .refreshed { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent))
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCalls,1,"The changed goal only loads; the user must confirm a second save")
+
+        bridge.saveWeeklyGoal(version:4,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalWriteState == .saved { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let saved)=bridge.weeklyGoalState else {XCTFail("The confirmed retry must synchronize the saved goal");return}
+        XCTAssertEqual(saved.version,5)
+        XCTAssertEqual(saved.distance.goal,30_000)
+        XCTAssertNil(saved.time.goal)
+        let writeVersions=await mock.observedWriteVersions()
+        XCTAssertEqual(writeVersions,[3,4])
+        let drafts=await mock.observedWriteDrafts()
+        XCTAssertEqual(drafts.count,2)
+        XCTAssertEqual(drafts[0].0,30_000)
+        XCTAssertNil(drafts[0].1)
+        XCTAssertEqual(drafts[1].0,30_000)
+        XCTAssertNil(drafts[1].1)
+    }
+
+    @MainActor func testWeeklyGoalConflictRefreshFailureCanBeRetriedWithoutSavingOrChangingTheDraft() async {
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,
+            weeklyReadFailures:[2:.serviceUnavailable(requestID:"conflict-refresh-outage")]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if case .failed = bridge.weeklyGoalConflictRefreshState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.failed(.serviceUnavailable(requestID:"conflict-refresh-outage")))
+        XCTAssertTrue(bridge.needsWeeklyGoalConflictRefresh)
+        let writeCallsAfterConflict=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCallsAfterConflict,1)
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .refreshed { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent))
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        let writeCallsAfterRetry=await mock.observedWriteCalls()
+        let weeklyReadsAfterRetry=await mock.observedWeeklyReadCalls()
+        XCTAssertEqual(writeCallsAfterRetry,1,"Refreshing after a read failure must not resubmit the saved draft")
+        XCTAssertEqual(weeklyReadsAfterRetry,3)
+    }
+
+    @MainActor func testLeavingEditorDuringConflictRefreshCancelsItsTaskAndReloadsWithoutSaving() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.activeScreen,"H00")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent),"Returning to the home screen must reload the pending version conflict")
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        await refreshGate.release()
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent),"The canceled editor refresh cannot overwrite the new query")
+        let writeCallsAfterBack=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCallsAfterBack,1,"Back navigation never confirms or repeats a PUT")
+    }
+
+    @MainActor func testAccountSwitchDuringConflictRefreshDropsTheOldAccountResponse() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let accountBGoal=WireframeProgressGoalsTestData.goal(version:9,distance:nil,time:18_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        await mock.enqueueReadGoal(accountBGoal)
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal))
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.idle)
+        await refreshGate.release()
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal),"The late conflict refresh from account A cannot replace account B")
+        let versionsAfterSwitch=await mock.observedWriteVersions()
+        XCTAssertEqual(versionsAfterSwitch,[3],"Account switching never retries the conflicting PUT")
+    }
+
+    @MainActor func testCancelledWeeklyGoalWriteRefreshesAfterLateCommitWhenReturningToHome() async {
+        let gate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeGate:gate,commitAfterCancellation:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.idle,"Leaving the editor cancels its visible mutation state")
+        await gate.release()
+        for _ in 0..<500 {
+            if await mock.observedCompletedWrites()==1, await mock.observedWeeklyReadCalls()>=3,
+               case .loaded(let goal)=bridge.weeklyGoalState, goal.version==4 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let refreshed)=bridge.weeklyGoalState else {XCTFail("The late commit should cause a fresh query");return}
+        XCTAssertEqual(refreshed.version,4)
+        XCTAssertEqual(refreshed.distance.goal,30_000)
+        XCTAssertEqual(refreshed.time.goal,7_200)
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        XCTAssertGreaterThanOrEqual(weeklyReadCalls,3,"The cancelled mutation requires an eventual consistency read")
+    }
+
+    @MainActor func testLateWeeklyGoalWriteCannotCrossAnAccountSwitch() async {
+        let gate=WireframeRemoteReadGate()
+        let accountAGoal=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let accountBGoal=WireframeProgressGoalsTestData.goal(version:9,distance:nil,time:12_000)
+        let lateACommit=WireframeProgressGoalsTestData.goal(version:4,distance:30_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:accountAGoal,nextReadGoals:[accountAGoal,accountBGoal],writeGate:gate,
+            commitAfterCancellation:true,lateWriteResult:lateACommit
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal))
+        await gate.release()
+        for _ in 0..<500 {
+            if await mock.observedCompletedWrites()==1 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal),"A delayed response from account A must not overwrite account B")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.idle)
     }
 
     func testH08ToH09SameRangeKeepsSwiftUITaskIdentityStable() throws {

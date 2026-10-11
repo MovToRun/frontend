@@ -286,7 +286,7 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
         case "M01": .profile
         case "POINTS", "B02": .points
         case "L01", "L04": .runs
-        case "H00", "H07", "H08", "H09": .progressGoals
+        case "H00", "H04", "H07", "H08", "H09", "H10": .progressGoals
         default: nil
         }
     }
@@ -304,17 +304,20 @@ struct WireframeRemoteReadDependencies {
     let pointsWalletLoader: PointsWalletLoader?
     let runRecordsLoader: RunRecordsLoader?
     let runningProgressLoader: RunningProgressLoader?
+    let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
         pointsWalletLoader: PointsWalletLoader? = nil,
         runRecordsLoader: RunRecordsLoader? = nil,
-        runningProgressLoader: RunningProgressLoader? = nil
+        runningProgressLoader: RunningProgressLoader? = nil,
+        weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.pointsWalletLoader = pointsWalletLoader
         self.runRecordsLoader = runRecordsLoader
         self.runningProgressLoader = runningProgressLoader
+        self.weeklyGoalWriter = weeklyGoalWriter
     }
 }
 
@@ -328,6 +331,7 @@ struct WireframeRemoteReadDependencies {
         case runDetailRetry
         case progressRetry
         case weeklyGoalRetry
+        case weeklyGoalConflictRefresh
         case progressDailyRetry
     }
 
@@ -335,6 +339,7 @@ struct WireframeRemoteReadDependencies {
     private let pointsWalletLoader: PointsWalletLoader?
     private let runRecordsLoader: RunRecordsLoader?
     private let runningProgressLoader: RunningProgressLoader?
+    private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var dailyGeneration: UInt64 = 0
     @ObservationIgnored private var dailyProgressTask: Task<Void, Never>?
@@ -343,6 +348,10 @@ struct WireframeRemoteReadDependencies {
     @ObservationIgnored private var manualOperationKind: ManualOperationKind?
     @ObservationIgnored private var manualPointsPreviousState: PointsWalletReadState?
     @ObservationIgnored private var manualRunsPreviousState: RunRecordsReadState?
+    @ObservationIgnored private var weeklyGoalWriteOperationID: UUID?
+    @ObservationIgnored private var weeklyGoalWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var weeklyGoalNeedsRefresh = false
+    @ObservationIgnored private var manualWeeklyGoalPreviousState: WeeklyGoalReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
     private(set) var activeScreen: String?
@@ -353,6 +362,8 @@ struct WireframeRemoteReadDependencies {
     private(set) var activeRunID: String?
     private(set) var progressState: ProgressReadState = .idle
     private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
+    private(set) var weeklyGoalWriteState: WeeklyGoalWriteState = .idle
+    private(set) var weeklyGoalConflictRefreshState: WeeklyGoalConflictRefreshState = .idle
     private(set) var dailyProgressState: DailyProgressReadState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
@@ -360,12 +371,16 @@ struct WireframeRemoteReadDependencies {
         pointsWalletLoader = dependencies?.pointsWalletLoader
         runRecordsLoader = dependencies?.runRecordsLoader
         runningProgressLoader = dependencies?.runningProgressLoader
+        weeklyGoalWriter = dependencies?.weeklyGoalWriter
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
     var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
+    var canWriteWeeklyGoal: Bool { runningProgressLoader != nil && weeklyGoalWriter != nil }
+    var isSavingWeeklyGoal: Bool { weeklyGoalWriteState == .saving }
+    var needsWeeklyGoalConflictRefresh: Bool { weeklyGoalNeedsRefresh }
     var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency }
 
     private func invalidateDailyProgressRead() {
@@ -376,6 +391,7 @@ struct WireframeRemoteReadDependencies {
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
+        cancelWeeklyGoalMutation()
         cancelManualOperation()
         generation &+= 1
         invalidateDailyProgressRead()
@@ -389,12 +405,22 @@ struct WireframeRemoteReadDependencies {
         activeRunID = nil
         progressState = .idle
         weeklyGoalState = .idle
+        weeklyGoalWriteState = .idle
+        weeklyGoalNeedsRefresh = false
+        weeklyGoalConflictRefreshState = .idle
+        manualWeeklyGoalPreviousState = nil
         dailyProgressState = .idle
     }
 
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let nextScreen = screen ?? feature?.rawValue
+        if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
+            weeklyGoalConflictRefreshState = .idle
+        }
+        if weeklyGoalWriteOperationID != nil, nextScreen != activeScreen {
+            cancelWeeklyGoalMutation()
+        }
         if activeFeature == feature, activeScreen == nextScreen, activeRunID == (feature == .runs ? runID : nil) {
             return
         }
@@ -511,10 +537,13 @@ struct WireframeRemoteReadDependencies {
                 return
             }
             let shouldLoadProgress = progressState == .idle
-            let shouldLoadWeeklyGoal = weeklyGoalState == .idle
+            let shouldLoadWeeklyGoal = weeklyGoalState == .idle || weeklyGoalNeedsRefresh
             guard shouldLoadProgress || shouldLoadWeeklyGoal else { return }
             if shouldLoadProgress { progressState = .loading }
-            if shouldLoadWeeklyGoal { weeklyGoalState = .loading }
+            if shouldLoadWeeklyGoal {
+                weeklyGoalState = .loading
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .refreshing }
+            }
             if shouldLoadProgress && shouldLoadWeeklyGoal {
                 async let progressRead: Void = completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
                 async let weeklyGoalRead: Void = completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
@@ -547,6 +576,24 @@ struct WireframeRemoteReadDependencies {
             activeFeature = nil
         } else {
             weeklyGoalState = result
+            finishWeeklyGoalRead(result)
+        }
+    }
+
+    private func finishWeeklyGoalRead(_ result: WeeklyGoalReadState) {
+        guard weeklyGoalNeedsRefresh else { return }
+        switch result {
+        case .loaded:
+            weeklyGoalNeedsRefresh = false
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .refreshed
+            }
+        case .failed(let failure):
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .failed(failure)
+            }
+        case .idle, .loading:
+            break
         }
     }
 
@@ -757,6 +804,10 @@ struct WireframeRemoteReadDependencies {
     }
 
     func retryWeeklyGoal() {
+        if weeklyGoalNeedsRefresh {
+            refreshWeeklyGoalAfterConflict()
+            return
+        }
         guard activeFeature == .progressGoals, manualOperationTask == nil,
               case .failed(let failure) = weeklyGoalState,
               failure.canManuallyRetry, let runningProgressLoader else { return }
@@ -774,6 +825,181 @@ struct WireframeRemoteReadDependencies {
             self.manualOperationID = nil
             self.manualOperationKind = nil
             self.weeklyGoalState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func refreshWeeklyGoalAfterConflict() {
+        guard activeFeature == .progressGoals,
+              weeklyGoalNeedsRefresh,
+              manualOperationTask == nil,
+              let runningProgressLoader,
+              weeklyGoalConflictRefreshState == .required || isWeeklyGoalConflictRefreshFailed else { return }
+        let requestGeneration = generation
+        let requestScopeID = accountScopeID
+        let requestScreen = activeScreen
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalConflictRefresh
+        manualWeeklyGoalPreviousState = weeklyGoalState
+        weeklyGoalConflictRefreshState = .refreshing
+        let previousState = weeklyGoalState
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.loadWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == requestScopeID,
+                  self.activeScreen == requestScreen,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualWeeklyGoalPreviousState = nil
+            if Task.isCancelled {
+                self.weeklyGoalState = previousState
+                self.weeklyGoalConflictRefreshState = .required
+            } else {
+                self.weeklyGoalState = result
+                self.finishWeeklyGoalRead(result)
+            }
+        }
+    }
+
+    private var isWeeklyGoalConflictRefreshFailed: Bool {
+        if case .failed = weeklyGoalConflictRefreshState { return true }
+        return false
+    }
+
+    func saveWeeklyGoal(
+        version: Int64,
+        distanceGoalMeters: Int64?,
+        timeGoalSeconds: Int64?,
+        accountScopeID: String,
+        screen: String
+    ) {
+        guard weeklyGoalWriteOperationID == nil else { return }
+        guard accountScopeID == self.accountScopeID, screen == activeScreen else { return }
+        guard !weeklyGoalNeedsRefresh else { return }
+        guard let weeklyGoalWriter, let runningProgressLoader else {
+            weeklyGoalWriteState = .failed(.weeklyGoalWriteUnavailable)
+            return
+        }
+        guard case .loaded(let baseline) = weeklyGoalState, baseline.version == version else {
+            weeklyGoalWriteState = .failed(.weeklyGoalBaselineUnavailable)
+            return
+        }
+
+        let requestGeneration = generation
+        let operationID = UUID()
+        weeklyGoalWriteOperationID = operationID
+        weeklyGoalConflictRefreshState = .idle
+        weeklyGoalWriteState = .saving
+        weeklyGoalWriteTask = Task { @MainActor [weak self, weeklyGoalWriter, runningProgressLoader] in
+            do {
+                let saved = try await weeklyGoalWriter.saveWeeklyGoal(
+                    version: version,
+                    distanceGoalMeters: distanceGoalMeters,
+                    timeGoalSeconds: timeGoalSeconds
+                )
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+
+                let refreshed = await runningProgressLoader.loadWeeklyGoal()
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                if case .loaded(let current) = refreshed {
+                    self.weeklyGoalState = .loaded(current)
+                } else {
+                    // PUT already returned the server's complete status. Keep that committed state if the follow-up read is unavailable.
+                    self.weeklyGoalState = .loaded(saved)
+                    self.weeklyGoalNeedsRefresh = true
+                }
+                self.weeklyGoalConflictRefreshState = .idle
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .saved
+            } catch let failure as ProgressGoalsFailure {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(failure)
+                if case .weeklyGoalVersionConflict = failure {
+                    self.weeklyGoalNeedsRefresh = true
+                    self.weeklyGoalConflictRefreshState = .required
+                }
+            } catch is CancellationError {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(.cancelled)
+            } catch {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(.invalidResponse)
+            }
+        }
+    }
+
+    func cancelWeeklyGoalMutation() {
+        guard weeklyGoalWriteOperationID != nil else { return }
+        weeklyGoalWriteTask?.cancel()
+        weeklyGoalWriteTask = nil
+        weeklyGoalWriteOperationID = nil
+        weeklyGoalNeedsRefresh = true
+        weeklyGoalWriteState = .idle
+    }
+
+    func consumeWeeklyGoalWriteResult() {
+        guard weeklyGoalWriteState == .saved else { return }
+        weeklyGoalWriteState = .idle
+    }
+
+    private func refreshWeeklyGoalAfterStaleMutation(accountScopeID: String, using loader: RunningProgressLoader) {
+        guard self.accountScopeID == accountScopeID else { return }
+        weeklyGoalNeedsRefresh = true
+        guard activeFeature == .progressGoals else { return }
+        let requestGeneration = generation
+        Task { @MainActor [weak self] in
+            let refreshed = await loader.loadWeeklyGoal()
+            guard let self,
+                  self.accountScopeID == accountScopeID,
+                  self.generation == requestGeneration,
+                  self.activeFeature == .progressGoals,
+                  self.weeklyGoalNeedsRefresh else { return }
+            self.weeklyGoalState = refreshed
+            self.weeklyGoalNeedsRefresh = false
         }
     }
 
@@ -826,6 +1052,9 @@ struct WireframeRemoteReadDependencies {
                 progressState = .idle
             case .weeklyGoalRetry:
                 weeklyGoalState = .idle
+            case .weeklyGoalConflictRefresh:
+                if let previous = manualWeeklyGoalPreviousState { weeklyGoalState = previous }
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .required }
             case .progressDailyRetry:
                 dailyProgressState = .idle
             case nil:
@@ -835,6 +1064,7 @@ struct WireframeRemoteReadDependencies {
         manualOperationKind = nil
         manualPointsPreviousState = nil
         manualRunsPreviousState = nil
+        manualWeeklyGoalPreviousState = nil
         task?.cancel()
     }
 }
@@ -1057,16 +1287,25 @@ struct RootView:View {
         if let remoteReadDependencies { return remoteReadDependencies }
         let args = ProcessInfo.processInfo.arguments
         let runFixture = args.contains("-wire-run-records-fixture")
-        let progressFixture = args.contains("-wire-progress-goals-fixture")
+        let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
+        let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
         guard runFixture || progressFixture else { return nil }
         let runLoader = runFixture ? RunRecordsLoader(client:WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail")
         )):nil
-        let progressLoader = progressFixture ? RunningProgressLoader(client:WireframeProgressGoalsFixture(
+        let progressClient = progressFixture ? WireframeProgressGoalsFixture(
             failsOverview:args.contains("-wire-progress-goals-fail"),
-            failsDaily:args.contains("-wire-progress-daily-fail")
-        )):nil
-        return WireframeRemoteReadDependencies(runRecordsLoader:runLoader,runningProgressLoader:progressLoader)
+            failsDaily:args.contains("-wire-progress-daily-fail"),
+            failsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-fail"),
+            conflictsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-conflict"),
+            failsConflictRefreshOnce:args.contains("-wire-weekly-goal-conflict-refresh-fail-once")
+        ):nil
+        let progressLoader = progressClient.map { RunningProgressLoader(client:$0) }
+        return WireframeRemoteReadDependencies(
+            runRecordsLoader:runLoader,
+            runningProgressLoader:progressLoader,
+            weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil
+        )
     }
 
     var body: some View {
@@ -1085,13 +1324,32 @@ struct RootView:View {
     }
 }
 
-private actor WireframeProgressGoalsFixture: RunningProgressReading {
+private actor WireframeProgressGoalsFixture: RunningProgressReading, RunningWeeklyGoalWriting {
     private let failsOverview: Bool
     private let failsDaily: Bool
+    private let failsWeeklyGoalWrite: Bool
+    private let conflictsWeeklyGoalWrite: Bool
+    private var failsConflictRefreshOnce: Bool
+    private var weeklyGoalReadCalls=0
+    private var didConflictWeeklyGoalWrite=false
+    private var weeklyGoal = BackendWeeklyGoalStatus(
+        weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
+        distance:.init(goal:20_000,done:12_400,remaining:7_600,achieved:false),
+        time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+    )
 
-    init(failsOverview: Bool, failsDaily: Bool) {
+    init(
+        failsOverview: Bool,
+        failsDaily: Bool,
+        failsWeeklyGoalWrite: Bool = false,
+        conflictsWeeklyGoalWrite: Bool = false,
+        failsConflictRefreshOnce: Bool = false
+    ) {
         self.failsOverview=failsOverview
         self.failsDaily=failsDaily
+        self.failsWeeklyGoalWrite=failsWeeklyGoalWrite
+        self.conflictsWeeklyGoalWrite=conflictsWeeklyGoalWrite
+        self.failsConflictRefreshOnce=failsConflictRefreshOnce
     }
 
     func fetchProgress() async throws -> BackendProgressSummary {
@@ -1105,12 +1363,39 @@ private actor WireframeProgressGoalsFixture: RunningProgressReading {
     }
 
     func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyGoalReadCalls+=1
+        if weeklyGoalReadCalls>1 && failsConflictRefreshOnce {
+            failsConflictRefreshOnce=false
+            throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-conflict-refresh")
+        }
         if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal") }
-        return BackendWeeklyGoalStatus(
-            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
-            distance:.init(goal:20_000,done:12_400,remaining:7_600,achieved:false),
-            time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+        return weeklyGoal
+    }
+
+    func saveWeeklyGoal(version: Int64, distanceGoalMeters: Int64?, timeGoalSeconds: Int64?) async throws -> BackendWeeklyGoalStatus {
+        if failsWeeklyGoalWrite { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-write") }
+        if conflictsWeeklyGoalWrite && !didConflictWeeklyGoalWrite {
+            didConflictWeeklyGoalWrite=true
+            weeklyGoal=BackendWeeklyGoalStatus(
+                weekStartDate:weeklyGoal.weekStartDate,weekEndDate:weeklyGoal.weekEndDate,version:weeklyGoal.version+1,
+                distance:.init(goal:40_000,done:weeklyGoal.distance.done,remaining:27_600,achieved:false),
+                time:.init(goal:12_000,done:weeklyGoal.time.done,remaining:8_100,achieved:false)
+            )
+            throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict")
+        }
+        guard version == weeklyGoal.version else { throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict") }
+        guard Self.isValidGoal(distanceGoalMeters, step:1_000, maximum:500_000),
+              Self.isValidGoal(timeGoalSeconds, step:600, maximum:360_000) else {
+            throw ProgressGoalsFailure.weeklyGoalValidationFailed(requestID:"fixture-weekly-goal-validation")
+        }
+        weeklyGoal = BackendWeeklyGoalStatus(
+            weekStartDate:weeklyGoal.weekStartDate,
+            weekEndDate:weeklyGoal.weekEndDate,
+            version:weeklyGoal.version + 1,
+            distance:Self.axis(distanceGoalMeters, done:weeklyGoal.distance.done),
+            time:Self.axis(timeGoalSeconds, done:weeklyGoal.time.done)
         )
+        return weeklyGoal
     }
 
     func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
@@ -1121,6 +1406,16 @@ private actor WireframeProgressGoalsFixture: RunningProgressReading {
             BackendDailyProgressDay(date:"2026-10-05",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)
         ]
         return BackendDailyProgress(range:range,days:all.filter{$0.date >= range.fromDate && $0.date <= range.toDate})
+    }
+
+    private static func isValidGoal(_ value:Int64?,step:Int64,maximum:Int64)->Bool {
+        guard let value else{return true}
+        return value >= step && value <= maximum && value.isMultiple(of:step)
+    }
+
+    private static func axis(_ goal:Int64?,done:Int64)->BackendWeeklyGoalAxis {
+        guard let goal else{return .init(goal:nil,done:done,remaining:nil,achieved:false)}
+        return .init(goal:goal,done:done,remaining:max(0,goal-done),achieved:done>=goal)
     }
 }
 
@@ -1158,6 +1453,10 @@ struct WireframeRoot:View {
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
+    @State var weeklyGoalDraftVersion:Int64?
+    @State var weeklyGoalDraftScopeID:String?
+    @State var weeklyGoalDraftDirty=false
+    @State var weeklyTimeDraftInvalid=false
     init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil){
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
@@ -1239,6 +1538,46 @@ struct WireframeRoot:View {
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var body:some View {
+        rootCommunityManageUpdates.alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
+            Button("계속 편집",role:.cancel){clearCommunityDiscardDestinations()}
+            Button("버리기",role:.destructive){discardCurrentCommunityDraft()}
+        }message:{Text(communityDiscardContext?.message ?? "")}
+    }
+    var rootCommunityManageUpdates:some View {
+        rootCommunityTextUpdates
+            .onChange(of:ui.communityCrewManageDraft?.name ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.boardNameLimit);if limited != value{draft.name=limited;ui.communityCrewManageDraft=draft}}
+            .onChange(of:ui.communityCrewManageDraft?.title ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.announcementTitleLimit);if limited != value{draft.title=limited;ui.communityCrewManageDraft=draft}}
+            .onChange(of:ui.communityCrewManageDraft?.text ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limit=draft.kind == .guidance ? WCommunityCrewPolicy.guidanceLimit:WCommunityCrewPolicy.announcementTextLimit;let limited=WCommunityTextLimit.apply(value,limit:limit);if limited != value{draft.text=limited;ui.communityCrewManageDraft=draft}}
+    }
+    var rootCommunityTextUpdates:some View {
+        rootRemoteStateUpdates
+            .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
+            .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
+            .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
+            .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
+            .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
+            .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
+            .onChange(of:ui.communityCrewMemberWarningDraft){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.memberWarningLimit);if limited != value{ui.communityCrewMemberWarningDraft=limited}}
+    }
+    var rootRemoteStateUpdates:some View {
+        rootTaskViews
+            .onChange(of:scenePhase){_,phase in handleScenePhaseChange(phase)}
+            .onChange(of:ui.remoteAccountScopeID){_,scopeID in handleRemoteAccountScopeChange(scopeID)}
+            .onChange(of:remoteReads.weeklyGoalState){_,state in handleRemoteWeeklyGoalStateChange(state)}
+            .onChange(of:remoteReads.weeklyGoalWriteState){_,state in handleRemoteWeeklyGoalWriteStateChange(state)}
+            .onChange(of:remoteReads.weeklyGoalConflictRefreshState){_,state in handleRemoteWeeklyGoalConflictRefreshStateChange(state)}
+    }
+    var rootTaskViews:some View {
+        rootStyledLayers
+            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID,screen:ui.screen)}
+            .task { await configureRootForLaunch() }
+    }
+    var rootStyledLayers:some View {
+        rootLayers.background(W.paper).foregroundStyle(W.ink).tint(W.ink)
+            .preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme)
+            .clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
+    }
+    var rootLayers:some View {
         ZStack {
             VStack(spacing:0){
                 GeometryReader { geo in
@@ -1276,9 +1615,9 @@ struct WireframeRoot:View {
             if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
             if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
-        }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
-            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID,screen:ui.screen)}
-            .task{
+        }
+    }
+    func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
                 if WReviewMode.tools && args.contains("-wire-community-not-member"){ui.communityJoinedCrewIDs.removeAll()}
@@ -1324,22 +1663,51 @@ struct WireframeRoot:View {
                         if let reward {store.records[index].pointReward=reward;store.persist()}
                     }
                 }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
-            }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
-            .onChange(of:ui.remoteAccountScopeID){_,scopeID in remoteReads.accountDidChange(to:scopeID)}
-            .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
-            .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
-            .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
-            .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
-            .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
-            .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
-            .onChange(of:ui.communityCrewMemberWarningDraft){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.memberWarningLimit);if limited != value{ui.communityCrewMemberWarningDraft=limited}}
-            .onChange(of:ui.communityCrewManageDraft?.name ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.boardNameLimit);if limited != value{draft.name=limited;ui.communityCrewManageDraft=draft}}
-            .onChange(of:ui.communityCrewManageDraft?.title ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.announcementTitleLimit);if limited != value{draft.title=limited;ui.communityCrewManageDraft=draft}}
-            .onChange(of:ui.communityCrewManageDraft?.text ?? ""){_,value in guard var draft=ui.communityCrewManageDraft else{return};let limit=draft.kind == .guidance ? WCommunityCrewPolicy.guidanceLimit:WCommunityCrewPolicy.announcementTextLimit;let limited=WCommunityTextLimit.apply(value,limit:limit);if limited != value{draft.text=limited;ui.communityCrewManageDraft=draft}}
-            .alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
-                Button("계속 편집",role:.cancel){clearCommunityDiscardDestinations()}
-                Button("버리기",role:.destructive){discardCurrentCommunityDraft()}
-            }message:{Text(communityDiscardContext?.message ?? "")}
+    }
+    func handleScenePhaseChange(_ phase:ScenePhase){
+        if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false}
+        if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}
+    }
+    func handleRemoteAccountScopeChange(_ scopeID:String){
+        remoteReads.accountDidChange(to:scopeID)
+        guard ["H04","H10"].contains(ui.screen) else{return}
+        weeklyGoalDraftVersion=nil
+        weeklyGoalDraftScopeID=scopeID
+        weeklyGoalDraftDirty=false
+        weeklyTimeDraftInvalid=false
+        ui.weekly=emptyWeeklyGoalDraft()
+        ui.error=""
+    }
+    func handleRemoteWeeklyGoalStateChange(_ state:WeeklyGoalReadState){
+        guard ["H04","H10"].contains(ui.screen),weeklyGoalDraftScopeID==ui.remoteAccountScopeID,
+              case .loaded(let status)=state else{return}
+        weeklyGoalDraftVersion=status.version
+        if ui.screen=="H04" && !weeklyGoalDraftDirty{applyWeeklyGoalDraft(status)}
+    }
+    func handleRemoteWeeklyGoalWriteStateChange(_ state:WeeklyGoalWriteState){
+        switch state {
+        case .failed(let failure):
+            if ["H04","H10"].contains(ui.screen){
+                ui.error=failure.weeklyGoalWriteMessage
+                if case .weeklyGoalVersionConflict = failure { weeklyGoalDraftDirty=true }
+            }
+        case .saved:
+            let destination=ui.screen
+            ui.error=""
+            remoteReads.consumeWeeklyGoalWriteResult()
+            if destination=="H10"{go("H00")}else if destination=="H04"{back()}
+        case .idle,.saving:
+            break
+        }
+    }
+    func handleRemoteWeeklyGoalConflictRefreshStateChange(_ state:WeeklyGoalConflictRefreshState){
+        guard ["H04","H10"].contains(ui.screen) else{return}
+        switch state {
+        case .failed,.refreshed:
+            ui.error=""
+        case .idle,.required,.refreshing:
+            break
+        }
     }
     func discardCurrentCommunityDraft(){
         switch communityDiscardContext {
@@ -1352,9 +1720,9 @@ struct WireframeRoot:View {
         communityDiscardContext=nil
     }
     func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return};if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return};performNavigation(route)}
-    func performNavigation(_ route:String){if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
+    func performNavigation(_ route:String){if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return};performBack()}
-    func performBack(){withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
+    func performBack(){if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
@@ -1444,13 +1812,48 @@ struct WireframeRoot:View {
         if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
     }
     func prepare(_ id:String){
-        if id=="H03"{ui.goal=store.goal};if id=="H04"{ui.weekly=store.weekly}
+        if id=="H03"{ui.goal=store.goal}
+        if id=="H04"{
+            weeklyGoalDraftDirty=false
+            weeklyTimeDraftInvalid=false
+            if remoteReads.hasRunningProgressDependency {
+                weeklyGoalDraftScopeID=ui.remoteAccountScopeID
+                if case .loaded(let status)=remoteReads.weeklyGoalState,remoteReads.accountScopeID==ui.remoteAccountScopeID {
+                    applyWeeklyGoalDraft(status)
+                } else {
+                    weeklyGoalDraftVersion=nil
+                    ui.weekly=emptyWeeklyGoalDraft()
+                }
+            } else {
+                weeklyGoalDraftVersion=nil
+                weeklyGoalDraftScopeID=nil
+                ui.weekly=store.weekly
+            }
+        }
         if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
         if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)}
         if id=="T02"{ui.weight=ui.profile.weight}
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
         if id=="C12",ui.communitySelectedCourse==nil{ui.communitySelectedCourse=WCommunityCourseFixtures.sample}
         if id=="C13"{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID}
+    }
+    func applyWeeklyGoalDraft(_ status:BackendWeeklyGoalStatus){
+        weeklyGoalDraftVersion=status.version
+        weeklyGoalDraftScopeID=ui.remoteAccountScopeID
+        var draft=WeeklyGoal()
+        if let meters=status.distance.goal{draft.distanceEnabled=true;draft.kilometers=Double(meters)/1_000}
+        else{draft.distanceEnabled=false}
+        if let seconds=status.time.goal{draft.timeEnabled=true;draft.minutes=Int(seconds/60)}
+        else{draft.timeEnabled=false}
+        ui.weekly=draft
+        weeklyTimeDraftInvalid=false
+        weeklyGoalDraftDirty=false
+    }
+    func emptyWeeklyGoalDraft()->WeeklyGoal{
+        var draft=WeeklyGoal()
+        draft.distanceEnabled=false
+        draft.timeEnabled=false
+        return draft
     }
     var nav:some View {
         let tabsEnabled=isRoot || ui.screen=="C20"

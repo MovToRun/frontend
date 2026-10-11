@@ -95,7 +95,11 @@ struct APIClientResponse: Sendable {
     let requestID: String?
 }
 
-final class APIClient: @unchecked Sendable {
+protocol APIResponseSending: Sendable {
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse
+}
+
+final class APIClient: APIResponseSending, @unchecked Sendable {
     private let configuration: APIClientConfiguration
     private let session: URLSession
 
