@@ -1846,6 +1846,12 @@ extension ThemeTests {
             try? await Task.sleep(nanoseconds:1_000_000)
         }
         XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"Account A's weekly goal request must begin before switching accounts")
         bridge.accountDidChange(to:"account-b")
         XCTAssertEqual(bridge.progressState,.idle)
         XCTAssertEqual(bridge.weeklyGoalState,.idle)
@@ -1883,6 +1889,12 @@ extension ThemeTests {
             try? await Task.sleep(nanoseconds:1_000_000)
         }
         XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"The parallel weekly read must begin before cancellation")
         request.cancel()
         await request.value
         XCTAssertEqual(bridge.progressState,.idle)
@@ -1916,6 +1928,12 @@ extension ThemeTests {
             try? await Task.sleep(nanoseconds:1_000_000)
         }
         XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"The parallel weekly read must begin during the first activation")
         await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
         XCTAssertEqual(bridge.progressState,.loading)
         let progressCalls=await mock.observedProgressCalls()
