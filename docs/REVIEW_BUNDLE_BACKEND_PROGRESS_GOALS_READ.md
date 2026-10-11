@@ -77,14 +77,23 @@ was created.
   range separation. Added a pending-read account-switch case and daily-read
   retry coverage. Existing range movement coverage still rejects stale
   responses.
-- Follow-up verification on 2026-10-11: Swift parser accepted
-  `WireframeCore.swift` and `ThemeTests.swift`; the standalone Networking package
-  passed **50 tests, 0 failures**. The iOS bridge/UI tests were not executed in
-  this follow-up because simulator use had ended. The earlier 11/11 iPhone 17
-  Pro result above applies to the prior commit, before this cancellation fix.
-- No API server, token provider, credential, simulator data, or app installation
-  was changed in this follow-up. The same fixed-ID app remains at the prior
-  installed revision until a later simulator session can install the new build.
+- Follow-up verification on 2026-10-11: final source head
+  `ed09b3b352cfa97cbc7c1c7ea4ed8a146dafe859` built successfully and selected
+  tests passed on the existing iPhone 17 Pro (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`,
+  iOS 26.3.1): **9 passed, 0 failed, 0 skipped** (6 bridge, 3 UI). Bridge tests
+  covered same-range cancellation before and after the old view task completes,
+  changed-range response rejection, account switching, and retry. UI tests
+  exercised the home-to-H07 navigation, H08/H09 presentations, and period/month
+  switching. H08 and H09 are review fixtures without an in-app navigation path
+  between them, so UI automation launched each fixture separately. Result:
+  `/tmp/mov-pr51-final.xcresult`.
+- The final `com.movtorun.mov` bundle was installed on that same simulator. Its
+  sorted file-manifest SHA-256 is `57b44fafdc153fa4991fb4bd39cba4fd4153583d6f455c9bccf7aee772925f7a`;
+  the main executable SHA-256 is `7e90e6e2ddd89011bbe3d254c5759db92d5bad260269ddbab7878ad08c2c61aa`.
+- No simulator erase/reset or app uninstall command was used. The data-container
+  path reported immediately before and after the explicit install differed, so
+  container continuity could not be confirmed. No API server, token provider,
+  or credential was used.
 
 ## Follow-up boundary
 
