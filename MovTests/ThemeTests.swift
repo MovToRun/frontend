@@ -1688,7 +1688,153 @@ private actor WireframeRunRecordsReadMock: RunRecordsReading {
     func observedCancelledPageCalls()->Int{cancelledPageCalls}
 }
 
+private actor WireframeProgressGoalsReadMock: RunningProgressReading {
+    private var progressResults:[Result<BackendProgressSummary,ProgressGoalsFailure>]
+    private var weeklyResults:[Result<BackendWeeklyGoalStatus,ProgressGoalsFailure>]
+    private var dailyResults:[Result<[BackendDailyProgressDay],ProgressGoalsFailure>]
+    private let progressGates:[Int:WireframeRemoteReadGate]
+    private var progressCalls=0
+    private var weeklyCalls=0
+    private var dailyCalls=0
+    private var cancelledProgressCalls=0
+
+    init(
+        progressResults:[Result<BackendProgressSummary,ProgressGoalsFailure>],
+        weeklyResults:[Result<BackendWeeklyGoalStatus,ProgressGoalsFailure>],
+        dailyResults:[Result<[BackendDailyProgressDay],ProgressGoalsFailure>]=[],
+        progressGates:[Int:WireframeRemoteReadGate]=[:]
+    ) {
+        self.progressResults=progressResults
+        self.weeklyResults=weeklyResults
+        self.dailyResults=dailyResults
+        self.progressGates=progressGates
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        let call=progressCalls;progressCalls+=1
+        let result=progressResults.isEmpty ? .failure(.invalidResponse):progressResults.removeFirst()
+        if let gate=progressGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledProgressCalls+=1;throw ProgressGoalsFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyCalls+=1
+        guard !weeklyResults.isEmpty else { throw ProgressGoalsFailure.invalidResponse }
+        return try weeklyResults.removeFirst().get()
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        dailyCalls+=1
+        guard !dailyResults.isEmpty else { throw ProgressGoalsFailure.invalidResponse }
+        return BackendDailyProgress(range:range,days:try dailyResults.removeFirst().get())
+    }
+
+    func observedProgressCalls()->Int{progressCalls}
+    func observedWeeklyCalls()->Int{weeklyCalls}
+    func observedDailyCalls()->Int{dailyCalls}
+    func observedCancelledProgressCalls()->Int{cancelledProgressCalls}
+}
+
+private enum WireframeProgressGoalsTestData {
+    static func summary(distance:Int64)->BackendProgressSummary {
+        BackendProgressSummary(
+            grade:"SPROUT",gradeAchievedAt:nil,
+            window:.init(fromDate:"2026-07-04",toDate:"2026-10-01",distanceMeters:distance,activityDays:8),
+            nextGrade:.init(grade:"PASSION",requiredDistanceMeters:30_000,requiredActivityDays:10,remainingDistanceMeters:max(0,30_000-distance),remainingActivityDays:2),
+            total:.init(distanceMeters:distance,seconds:7_800,activityDays:8,runCount:10)
+        )
+    }
+
+    static func goals(done:Int64)->BackendWeeklyGoalStatus {
+        BackendWeeklyGoalStatus(
+            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
+            distance:.init(goal:20_000,done:done,remaining:max(0,20_000-done),achieved:done>=20_000),
+            time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+        )
+    }
+}
+
 extension ThemeTests {
+    @MainActor func testProgressGoalsBridgeLoadsRemoteOverviewAndClearsOnAccountChange() async {
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400)),.success(WireframeProgressGoalsTestData.summary(distance:7_200))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400)),.success(WireframeProgressGoalsTestData.goals(done:7_200))]
+        )
+        let loader=RunningProgressLoader(client:mock)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:loader))
+        XCTAssertTrue(bridge.hasRunningProgressDependency)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H00"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H07"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H08"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H09"),.progressGoals)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        guard case .loaded(let accountA)=bridge.progressOverviewState else {XCTFail("Expected remote progress and weekly goal data");return}
+        XCTAssertEqual(accountA.progress.total.distanceMeters,12_400)
+        XCTAssertEqual(accountA.weeklyGoal.distance.done,12_400)
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.progressOverviewState,.idle)
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        guard case .loaded(let accountB)=bridge.progressOverviewState else {XCTFail("Expected the new account's remote data");return}
+        XCTAssertEqual(accountB.progress.total.distanceMeters,7_200)
+        XCTAssertEqual(accountB.weeklyGoal.distance.done,7_200)
+        let calls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(calls,2)
+        XCTAssertEqual(weeklyCalls,2)
+    }
+
+    @MainActor func testDuplicateProgressActivationDoesNotInvalidateTheActiveOverviewRead() async {
+        let gate=WireframeRemoteReadGate()
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400))],
+            progressGates:[0:gate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        let request=Task{@MainActor in await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            let waiting=await gate.isWaiting()
+            if waiting {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.progressOverviewState,.loading)
+        let progressCalls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(progressCalls,1)
+        XCTAssertEqual(weeklyCalls,1)
+        await gate.release()
+        await request.value
+        guard case .loaded(let overview)=bridge.progressOverviewState else {XCTFail("The first response should complete the active read");return}
+        XCTAssertEqual(overview.weeklyGoal.distance.done,12_400)
+    }
+
+    @MainActor func testRemoteDailyProgressUsesItsOwnRangeAndIsNotMixedAcrossAccounts() async throws {
+        let range=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let days=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.success(days)]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.loadDailyProgress(range:range,accountScopeID:"account-a",screen:"H07")
+        guard case .loaded(let snapshot)=bridge.dailyProgressState else {XCTFail("Expected loaded daily progress");return}
+        XCTAssertEqual(snapshot.range,range)
+        XCTAssertEqual(snapshot.distanceMeters,7_200)
+        XCTAssertEqual(snapshot.seconds,3_600)
+        XCTAssertEqual(snapshot.runCount,1)
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,1)
+    }
+
     @MainActor func testRemoteReadDependencyInjectionKeepsDefaultLocalModeAndScreenScopes() async {
         let localBridge=WireframeRemoteReadBridge()
         XCTAssertFalse(localBridge.isEnabled)

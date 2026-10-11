@@ -2762,6 +2762,53 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts["아직 러닝 기록이 없어요"].exists)
     }
 
+    func testInjectedProgressGoalAndDailySummaryStayOnTheRemoteReadPath() {
+        let suite="mov.wireframe.test.remote-progress-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-capture-viewport","-wire-progress-goals-fixture","-wire-home-weekly-example","both","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        let distance=app.staticTexts["homeSummaryActual-distance"]
+        XCTAssertTrue(distance.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(distance.label,"12.40 km","The remote amount remains distinct from the local 12.00 km fixture")
+        XCTAssertEqual(app.staticTexts["homeSummaryActual-time"].label,"1시간 5분")
+        XCTAssertFalse(app.buttons["homeEditWeeklyGoal"].isEnabled,"Remote goal state is read only")
+        XCTAssertTrue(app.staticTexts["기기 저장 기록"].exists,"Recent device records are labeled as local while remote metrics are shown")
+
+        app.buttons["homeWeeklySummary"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H07"].waitForExistence(timeout:8))
+        let periodDistance=app.staticTexts["periodDistanceValue"]
+        XCTAssertTrue(periodDistance.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(periodDistance.label,"12.40 km","The daily endpoint range must sum to the weekly goal response")
+        let validSummary=app.descendants(matching:.any)["periodValidSummary"]
+        XCTAssertTrue(validSummary.exists,app.debugDescription)
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+
+    func testInjectedProgressFailureDoesNotFallBackToLocalWeeklyOrDailyMetrics() {
+        let overviewSuite="mov.wireframe.test.remote-progress-fail-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",overviewSuite,
+            "-wire-reset","-wire-progress-goals-fixture","-wire-progress-goals-fail","-wire-home-weekly-example","both","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        XCTAssertTrue(app.descendants(matching:.any)["remoteHomeProgressFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists,"A failed server read must not be replaced by local ring totals")
+        XCTAssertTrue(app.staticTexts["기기 저장 기록"].exists)
+        app.terminate()
+        UserDefaults(suiteName:overviewSuite)?.removePersistentDomain(forName:overviewSuite)
+
+        let dailySuite="mov.wireframe.test.remote-daily-fail-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","H07","-wire-fixture","-wire-test-store-suite",dailySuite,
+            "-wire-reset","-wire-progress-goals-fixture","-wire-progress-daily-fail","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H07"].waitForExistence(timeout:15))
+        XCTAssertTrue(app.descendants(matching:.any)["remoteDailyProgressFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.staticTexts["periodDistanceValue"].exists,"A failed daily read must not display local period totals")
+        app.terminate()
+        UserDefaults(suiteName:dailySuite)?.removePersistentDomain(forName:dailySuite)
+    }
+
     func testReview52StatisticsEmptyAndOverGoalMatchSourcePresentation() {
         for (screen,expectedDistance) in [("H08","0.00 km"),("H09","23.00 km")] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.wireframe.test.h08-h09","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]

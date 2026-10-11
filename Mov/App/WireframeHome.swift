@@ -948,12 +948,12 @@ extension WireframeRoot {
                     }.buttonStyle(WReview54HomeCTAStyle()).accessibilityIdentifier("homeStartRun")
                         .padding(.top,0)
                     W.line.frame(height:1).padding(.top,25).padding(.bottom,16)
-                    HStack { Text("최근 기록").font(W.font(17,.semibold)); Spacer(); Button("전체 보기"){go("L01")}.font(W.font(12)) }
+                    HStack { Text(remoteReads.hasRunningProgressDependency ? "기기 저장 기록":"최근 기록").font(W.font(17,.semibold)); Spacer(); Button(remoteReads.hasRunningProgressDependency ? "기기 기록 보기":"전체 보기"){go("L01")}.font(W.font(12)) }
                     if let r=store.records.first(where:{$0.isValid}) {
                         homeRecentRecord(r).padding(.top,7)
                     } else {
                         VStack(alignment:.leading,spacing:5) {
-                            Text("아직 러닝 기록이 없어요").font(W.font(15,.medium))
+                            Text(remoteReads.hasRunningProgressDependency ? "기기에 저장된 기록이 없어요":"아직 러닝 기록이 없어요").font(W.font(15,.medium))
                             WText(text:"첫 달리기를 시작해 보세요",small:true)
                         }.padding(.vertical,18)
                     }
@@ -962,6 +962,15 @@ extension WireframeRoot {
         }
     }
     var homeWeekLabel:String {
+        if remoteReads.hasRunningProgressDependency {
+            guard case .loaded(let overview)=remoteReads.progressOverviewState else { return "이번 주" }
+            func short(_ value:String)->String {
+                let parts=value.split(separator:"-")
+                guard parts.count==3,let month=Int(parts[1]),let day=Int(parts[2]) else{return value}
+                return "\(month).\(day)"
+            }
+            return "\(short(overview.weeklyGoal.weekStartDate)) — \(short(overview.weeklyGoal.weekEndDate))"
+        }
         let date=WReviewClock.now
         var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current
         guard let interval=calendar.dateInterval(of:.weekOfYear,for:date),
@@ -990,7 +999,11 @@ extension WireframeRoot {
         }.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}
             .accessibilityIdentifier("homeRecentRecord")
     }
-    var homeRings:some View {
+    @ViewBuilder var homeRings:some View {
+        if remoteReads.hasRunningProgressDependency { remoteHomeRings }
+        else { localHomeRings }
+    }
+    var localHomeRings:some View {
         let distance=store.weeklyDistance
         let seconds=store.weeklySeconds
         let distanceGoal=store.weekly.distanceEnabled ? Double(store.weekly.kilometers):nil
@@ -1014,6 +1027,41 @@ extension WireframeRoot {
             }
         }.frame(maxWidth:.infinity).padding(.top,14).accessibilityElement(children:.contain).accessibilityIdentifier("homeWeeklyRings")
     }
+    @ViewBuilder var remoteHomeRings:some View {
+        VStack(spacing:0) {
+            switch remoteReads.progressOverviewState {
+            case .idle,.loading:
+                VStack(spacing:10){ProgressView();WText(text:"이번 주 정보를 불러오는 중이에요",small:true)}
+                    .frame(maxWidth:.infinity,minHeight:218).accessibilityIdentifier("remoteHomeProgressLoading")
+            case .failed(let failure):
+                VStack(spacing:10){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryProgressOverview()}.font(W.font(13,.medium)).frame(minHeight:44).accessibilityIdentifier("remoteHomeProgressRetry")}}
+                    .frame(maxWidth:.infinity,minHeight:218).accessibilityIdentifier("remoteHomeProgressFailure")
+            case .loaded(let overview):
+                remoteGoalRings(overview.weeklyGoal)
+            }
+        }.frame(maxWidth:.infinity).padding(.top,14).accessibilityElement(children:.contain).accessibilityIdentifier("homeWeeklyRings")
+    }
+    @ViewBuilder func remoteGoalRings(_ status:BackendWeeklyGoalStatus)->some View {
+        let distance=Double(status.distance.done)/1_000
+        let minutes=Double(status.time.done)/60
+        let distanceGoal=status.distance.goal.map{Double($0)/1_000}
+        let timeGoal=status.time.goal.map{Double($0)/60}
+        if let distanceGoal,let timeGoal {
+            WReview55GoalSelector(distance:distance,minutes:minutes,distanceGoal:distanceGoal,timeGoal:timeGoal,reduceMotion:reduceMotion,ring:{value,unit,target,percent,identifier in
+                AnyView(homeRing(value:value,unit:unit,target:target,percent:percent,identifier:identifier,reduceMotion:reduceMotion,stableReview55Slots:true))
+            })
+            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue("조회 전용")
+        } else if let target=distanceGoal {
+            homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
+            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityValue("조회 전용")
+        } else if let target=timeGoal {
+            homeRing(value:minutes,unit:"분",target:target,percent:WeeklyGoal.percent(value:minutes,goal:target),identifier:"time")
+            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityValue("조회 전용")
+        } else {
+            homeRing(value:distance,unit:"km",target:nil,percent:nil,identifier:"distance")
+            WText(text:"아직 주간 목표가 없어요",small:true).padding(.top,8).frame(minHeight:44)
+        }
+    }
     func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220,reduceMotion:Bool=false,stableReview55Slots:Bool=false)->some View {
         let displayed=unit=="km" ? WReview52StatisticsFormat.kilometers(value):RunGoal.duration(Int(value))
         let targetText=target.map{unit=="km" ? MovNumber.display($0):RunGoal.duration(Int($0))} ?? ""
@@ -1036,12 +1084,33 @@ extension WireframeRoot {
             }
         }.frame(maxWidth:.infinity).accessibilityElement(children:.contain).accessibilityIdentifier("homeRingMetric-\(identifier)")
     }
-    var weeklySummary:some View {
+    @ViewBuilder var weeklySummary:some View {
+        if remoteReads.hasRunningProgressDependency { remoteWeeklySummary }
+        else { localWeeklySummary }
+    }
+    var localWeeklySummary:some View {
         VStack(alignment:.leading,spacing:18){
             if store.weekly.distanceEnabled{progress("거리 목표",value:store.weeklyDistance,goal:Double(store.weekly.kilometers),unit:"km")}
             if store.weekly.timeEnabled{progress("시간 목표",value:store.weeklySeconds/60,goal:Double(store.weekly.minutes),unit:"분")}
             if !store.weekly.distanceEnabled && !store.weekly.timeEnabled{WText(text:"아직 주간 목표가 없어요",small:true)}
             Button("주간 목표 변경"){go("H04")}.font(W.font(12,.medium)).frame(maxWidth:.infinity,minHeight:44,alignment:.trailing)
+        }
+    }
+    @ViewBuilder var remoteWeeklySummary:some View {
+        switch remoteReads.progressOverviewState {
+        case .idle,.loading:
+            VStack(spacing:8){ProgressView();WText(text:"주간 목표를 불러오는 중이에요",small:true)}.frame(maxWidth:.infinity,minHeight:96).accessibilityIdentifier("remoteWeeklySummaryLoading")
+        case .failed(let failure):
+            VStack(spacing:8){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryProgressOverview()}.font(W.font(12)).frame(minHeight:44).accessibilityIdentifier("remoteWeeklySummaryRetry")}}
+                .frame(maxWidth:.infinity,minHeight:96).accessibilityIdentifier("remoteWeeklySummaryFailure")
+        case .loaded(let overview):
+            let status=overview.weeklyGoal
+            VStack(alignment:.leading,spacing:18){
+                if let target=status.distance.goal{progress("거리 목표",value:Double(status.distance.done)/1_000,goal:Double(target)/1_000,unit:"km")}
+                if let target=status.time.goal{progress("시간 목표",value:Double(status.time.done)/60,goal:Double(target)/60,unit:"분")}
+                if status.distance.goal == nil && status.time.goal == nil{WText(text:"아직 주간 목표가 없어요",small:true)}
+                Button("주간 목표 변경"){}.font(W.font(12)).frame(maxWidth:.infinity,minHeight:44,alignment:.trailing).disabled(true).accessibilityValue("조회 전용")
+            }.accessibilityIdentifier("remoteWeeklyGoalSummary")
         }
     }
     func progress(_ label:String,value:Double,goal:Double,unit:String)->some View {
@@ -1122,6 +1191,18 @@ extension WireframeRoot {
     var statistics:some View {
         let summary=RunPeriodSummary(records:periodRecords)
         return WPage(title:"나의 러닝",back:back){WPeriodControl(month:$ui.month)
+            if remoteReads.hasRunningProgressDependency {
+                remoteStatistics(range:remoteDailyProgressRange)
+            } else {
+                localStatistics(summary)
+            }
+        } actions:{}
+            .task(id:remoteDailyProgressTaskKey){
+                guard remoteReads.hasRunningProgressDependency, ["H07","H08","H09"].contains(ui.screen) else{return}
+                await remoteReads.loadDailyProgress(range:remoteDailyProgressRange,accountScopeID:ui.remoteAccountScopeID,screen:ui.screen)
+            }
+    }
+    @ViewBuilder func localStatistics(_ summary:RunPeriodSummary)->some View {
             WText(text:ui.month ? "월간 유효 거리":"이번 주 유효 거리",small:true)
             (Text(WReview52StatisticsFormat.kilometers(summary.kilometers)).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold))).accessibilityIdentifier("periodDistanceValue")
             HStack(spacing:0){VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 횟수",small:true);Text("\(summary.recordCount) 회").font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading);W.line.frame(width:1,height:48).padding(.horizontal,18).accessibilityHidden(true);VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 시간",small:true);Text(RunRecord.clock(summary.seconds)).font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading)}.accessibilityElement(children:.contain).accessibilityIdentifier("periodValidSummary")
@@ -1132,7 +1213,46 @@ extension WireframeRoot {
                 if ["H08","H09"].contains(ui.screen){WText(text:WReview52StatisticsFormat.weekDateNote(asOf:WReviewClock.now),small:true).accessibilityIdentifier("statisticsDateRange")}
                 else{WText(text:"월요일부터 일요일까지의 유효 기록을 합산해요.",small:true)}
             }
-        } actions:{}
+    }
+    @ViewBuilder func remoteStatistics(range:BackendDailyProgressRange)->some View {
+        switch remoteReads.dailyProgressState {
+        case .loaded(let daily) where daily.range == range:
+            let kilometers=Double(daily.distanceMeters)/1_000
+            WText(text:ui.month ? "월간 유효 거리":"이번 주 유효 거리",small:true)
+            (Text(WReview52StatisticsFormat.kilometers(kilometers)).font(W.font(48,.bold))+Text(" km").font(W.font(20,.semibold))).accessibilityIdentifier("periodDistanceValue")
+            HStack(spacing:0){VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 횟수",small:true);Text("\(daily.runCount) 회").font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading);W.line.frame(width:1,height:48).padding(.horizontal,18).accessibilityHidden(true);VStack(alignment:.leading,spacing:8){WText(text:"유효 러닝 시간",small:true);Text(RunRecord.clock(Double(daily.seconds))).font(W.font(24,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading)}.accessibilityElement(children:.contain).accessibilityIdentifier("periodValidSummary")
+            W.line.frame(height:1).padding(.vertical,10)
+            if ui.month {
+                WCalendar(month:$ui.calendarMonth,selected:$ui.calendarDay,records:[],remoteDays:daily.days)
+                if let selected=ui.calendarDay {
+                    let dateKey=wireProgressDateKey(selected)
+                    let day=daily.days.first{$0.date==dateKey}
+                    HStack{Text("\(wireProgressDayLabel(selected)) 기록").font(W.font(14,.semibold)).accessibilityIdentifier("calendarSelectedDayTitle");Spacer();if let day,day.runCount>0{WText(text:"\(day.runCount)회",small:true).accessibilityIdentifier("calendarSelectedDayCount")}}
+                    if let day,day.runCount>0 {
+                        HStack{WText(text:"유효 거리",small:true);Spacer();Text("\(WReview52StatisticsFormat.kilometers(Double(day.validDistanceMeters)/1_000)) km").font(W.font(16,.semibold));W.line.frame(width:1,height:24).padding(.horizontal,12);WText(text:"유효 시간",small:true);Spacer();Text(RunRecord.clock(Double(day.validSeconds))).font(W.font(16,.semibold))}.accessibilityIdentifier("remoteCalendarSelectedDaySummary")
+                    } else { WText(text:"이날은 유효 러닝 기록이 없어요",small:true) }
+                }
+            } else {
+                Text("이번 주 목표").font(W.font(17,.semibold));weeklySummary
+                WText(text:"월요일부터 일요일까지의 유효 기록을 합산해요.",small:true)
+            }
+        case .failed(let failedRange,let failure) where failedRange == range:
+            VStack(spacing:10){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryDailyProgress(range:range)}.font(W.font(13,.medium)).frame(minHeight:44).accessibilityIdentifier("remoteDailyProgressRetry")}}
+                .frame(maxWidth:.infinity,minHeight:220).accessibilityIdentifier("remoteDailyProgressFailure")
+        case .idle,.loading,.loaded,.failed:
+            VStack(spacing:10){ProgressView();WText(text:"러닝 요약을 불러오는 중이에요",small:true)}
+                .frame(maxWidth:.infinity,minHeight:220).accessibilityIdentifier("remoteDailyProgressLoading")
+        }
+    }
+    private func wireProgressDateKey(_ date:Date)->String {
+        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(identifier:"Asia/Seoul")!
+        let parts=calendar.dateComponents([.year,.month,.day],from:date)
+        return String(format:"%04d-%02d-%02d",parts.year ?? 0,parts.month ?? 0,parts.day ?? 0)
+    }
+    private func wireProgressDayLabel(_ date:Date)->String {
+        var calendar=Calendar(identifier:.gregorian);calendar.timeZone=TimeZone(identifier:"Asia/Seoul")!
+        let parts=calendar.dateComponents([.month,.day],from:date)
+        return "\(parts.month ?? 0)월 \(parts.day ?? 0)일"
     }
     @ViewBuilder var community:some View {
         if ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID { communityOwnProfile }
@@ -2578,18 +2698,34 @@ struct WCalendar:View {
     @Binding var month:Date
     @Binding var selected:Date?
     var records:[RunRecord]
-    var calendar:Calendar{Calendar.current}
+    var remoteDays:[BackendDailyProgressDay]? = nil
+    var calendar:Calendar{
+        guard remoteDays != nil else{return .current}
+        var value=Calendar(identifier:.gregorian);value.timeZone=TimeZone(identifier:"Asia/Seoul")!;return value
+    }
     var first:Date{calendar.dateInterval(of:.month,for:month)!.start}
     var count:Int{calendar.range(of:.day,in:.month,for:month)!.count}
     var offset:Int{calendar.component(.weekday,from:first)-1}
-    var runDays:Int{Set(records.filter{calendar.isDate($0.date,equalTo:month,toGranularity:.month)}.map{calendar.startOfDay(for:$0.date)}).count}
+    var runDays:Int{
+        if let remoteDays{return remoteDays.filter{$0.runCount>0}.count}
+        return Set(records.filter{calendar.isDate($0.date,equalTo:month,toGranularity:.month)}.map{calendar.startOfDay(for:$0.date)}).count
+    }
     var isReferenceMonth:Bool{calendar.isDate(month,equalTo:WReviewClock.now,toGranularity:.month)}
     var introMonth:String{isReferenceMonth ? "이번 달":"\(calendar.component(.month,from:month))월"}
+    func dateKey(_ date:Date)->String{let p=calendar.dateComponents([.year,.month,.day],from:date);return String(format:"%04d-%02d-%02d",p.year ?? 0,p.month ?? 0,p.day ?? 0)}
+    func hasRun(_ date:Date)->Bool{
+        if let remoteDays{return (remoteDays.first{$0.date==dateKey(date)}?.runCount ?? 0) > 0}
+        return records.contains{calendar.isDate($0.date,inSameDayAs:date)}
+    }
+    var monthTitle:String{
+        guard remoteDays != nil else{return month.formatted(.dateTime.year().month())}
+        let p=calendar.dateComponents([.year,.month],from:month);return "\(p.year ?? 0)년 \(p.month ?? 0)월"
+    }
     var body:some View {VStack(spacing:12){
         HStack(alignment:.firstTextBaseline,spacing:8){(Text(introMonth+" ").font(W.font(17,.medium))+Text("\(runDays)일").font(W.font(17,.bold))+Text(" 달렸어요").font(W.font(17,.medium))).accessibilityIdentifier("calendarRunDaySummary");Spacer(minLength:0);HStack(spacing:5){Circle().fill(W.lime).frame(width:4,height:4);Text("달린 날").font(W.font(11)).foregroundStyle(W.muted)}.fixedSize().accessibilityIdentifier("calendarRunDayLegend")}.padding(.bottom,5)
-        HStack{Button{month=calendar.date(byAdding:.month,value:-1,to:month)!;selected=nil}label:{Image(systemName:"chevron.left").frame(width:44,height:44)}.accessibilityLabel("이전 달");Spacer();Text(month.formatted(.dateTime.year().month())).font(W.font(17,.semibold)).accessibilityIdentifier("calendarMonthTitle");Spacer();Button{month=calendar.date(byAdding:.month,value:1,to:month)!;selected=nil}label:{Image(systemName:"chevron.right").frame(width:44,height:44)}.accessibilityLabel("다음 달")}.padding(.bottom,8)
-        LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:0),count:7),spacing:8){ForEach(["일","월","화","수","목","금","토"],id:\.self){Text($0).font(W.font(12)).foregroundStyle(W.muted)};ForEach(0..<(offset+count),id:\.self){index in if index<offset{Color.clear.frame(height:44)}else{let date=calendar.date(byAdding:.day,value:index-offset,to:first)!;let hasRun=records.contains{calendar.isDate($0.date,inSameDayAs:date)};Button{selected=date}label:{VStack(spacing:3){Text("\(index-offset+1)").font(W.font(14));Circle().fill(hasRun ? W.lime:.clear).frame(width:4,height:4)}.frame(maxWidth:.infinity,minHeight:44).background(selected.map{calendar.isDate($0,inSameDayAs:date)} == true ? W.secondary:Color.clear,in:RoundedRectangle(cornerRadius:8))}.accessibilityLabel(date.formatted(.dateTime.month().day())+(hasRun ? " 러닝 기록 있음":""))}}}
-        if runDays==0{Text("이 달에 저장된 러닝 기록이 없어요").font(W.font(12)).foregroundStyle(W.muted).frame(maxWidth:.infinity).padding(.top,13).accessibilityIdentifier("calendarEmptyMonthMessage")}
+        HStack{Button{month=calendar.date(byAdding:.month,value:-1,to:month)!;selected=nil}label:{Image(systemName:"chevron.left").frame(width:44,height:44)}.accessibilityLabel("이전 달");Spacer();Text(monthTitle).font(W.font(17,.semibold)).accessibilityIdentifier("calendarMonthTitle");Spacer();Button{month=calendar.date(byAdding:.month,value:1,to:month)!;selected=nil}label:{Image(systemName:"chevron.right").frame(width:44,height:44)}.accessibilityLabel("다음 달")}.padding(.bottom,8)
+        LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:0),count:7),spacing:8){ForEach(["일","월","화","수","목","금","토"],id:\.self){Text($0).font(W.font(12)).foregroundStyle(W.muted)};ForEach(0..<(offset+count),id:\.self){index in if index<offset{Color.clear.frame(height:44)}else{let date=calendar.date(byAdding:.day,value:index-offset,to:first)!;let hasRun=hasRun(date);let monthDay=calendar.component(.month,from:date);let day=calendar.component(.day,from:date);let dayLabel=remoteDays == nil ? date.formatted(.dateTime.month().day()):"\(monthDay)월 \(day)일";Button{selected=date}label:{VStack(spacing:3){Text("\(day)").font(W.font(14));Circle().fill(hasRun ? W.lime:.clear).frame(width:4,height:4)}.frame(maxWidth:.infinity,minHeight:44).background(selected.map{calendar.isDate($0,inSameDayAs:date)} == true ? W.secondary:Color.clear,in:RoundedRectangle(cornerRadius:8))}.accessibilityLabel(dayLabel+(hasRun ? " 러닝 기록 있음":""))}}}
+        if runDays==0{Text(remoteDays == nil ? "이 달에 저장된 러닝 기록이 없어요":"이 달에 유효 러닝 기록이 없어요").font(W.font(12)).foregroundStyle(W.muted).frame(maxWidth:.infinity).padding(.top,13).accessibilityIdentifier("calendarEmptyMonthMessage")}
         VStack(alignment:.leading,spacing:7){Text(selected.map{"\($0.formatted(.dateTime.month().day())) 기록"} ?? "날짜별 기록").font(W.font(14,.semibold));if selected==nil{WText(text:"날짜를 선택하면 그날의 기록을 볼 수 있어요",small:true)}}.frame(maxWidth:.infinity,alignment:.leading).padding(.top,18).overlay(alignment:.top){W.line.frame(height:1)}.accessibilityIdentifier("calendarDetailsHeading")
     }}
 }
