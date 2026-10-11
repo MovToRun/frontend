@@ -76,15 +76,20 @@ extension WireframeRoot {
         }
     }
     var records:some View {VStack(spacing:0){WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("H01")}else{back()}});recordsContent}}
-    @ViewBuilder private var recordsContent:some View {ScrollView{VStack(alignment:.leading,spacing:16){
-        if remoteReads.hasRunRecordsDependency { remoteRunRecordsPanel }
-        if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
-        if ui.screen == "L03" && store.records.isEmpty {
-            VStack(alignment:.leading,spacing:12){Text("기록을 확인할 수 없어요").font(W.font(20,.semibold));WText(text:"조회에 실패해 기록이 0건이라고 단정하지 않아요. 다시 불러오거나 나중에 다시 확인해 주세요.")}.padding(.vertical,28).accessibilityIdentifier("recordLookupFailure")
-        } else if ui.screen=="L02" || (store.records.isEmpty && ui.screen != "L03") {
-            VStack(spacing:0){Text(remoteReads.hasRunRecordsDependency ? "기기에 저장된 기록이 없어요":"아직 러닝 기록이 없어요").font(W.font(23,.semibold)).padding(.top,13).padding(.bottom,31);WText(text:"첫 러닝을 시작해 보세요").padding(.bottom,20);button("러닝 시작","H02")}.padding(.vertical,65)
-        } else {WText(text:"기기에 저장된 기록",small:true);ForEach(store.records){r in recordRow(r)}}
-    }.padding(24)}}
+    @ViewBuilder private var recordsContent:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:16){
+                if remoteReads.hasRunRecordsDependency { remoteRunRecordsPanel }
+                if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
+                if ui.screen == "L03" && store.records.isEmpty {
+                    VStack(alignment:.leading,spacing:12){Text("기록을 확인할 수 없어요").font(W.font(20,.semibold));WText(text:"조회에 실패해 기록이 0건이라고 단정하지 않아요. 다시 불러오거나 나중에 다시 확인해 주세요.")}.padding(.vertical,28).accessibilityIdentifier("recordLookupFailure")
+                } else if ui.screen=="L02" || (store.records.isEmpty && ui.screen != "L03") {
+                    VStack(spacing:0){Text(remoteReads.hasRunRecordsDependency ? "기기에 저장된 기록이 없어요":"아직 러닝 기록이 없어요").font(W.font(23,.semibold)).padding(.top,13).padding(.bottom,31);WText(text:"첫 러닝을 시작해 보세요").padding(.bottom,20);button("러닝 시작","H02")}.padding(.vertical,65)
+                } else {WText(text:"기기에 저장된 기록",small:true);ForEach(store.records){r in recordRow(r)}}
+            }.padding(24)
+        }
+        .refreshable { await remoteReads.refreshRunRecords() }
+    }
     @ViewBuilder private var remoteRunRecordsPanel:some View {
         VStack(alignment:.leading,spacing:10){
             Text(remoteReads.hasRunRecordsUpdater ? "서버 러닝 기록":"서버 러닝 기록 · 읽기 전용").font(W.font(13,.semibold))
@@ -96,7 +101,7 @@ extension WireframeRoot {
             case .loaded(let snapshot):
                 remoteRunRows(snapshot.items)
                 if snapshot.items.isEmpty { WText(text:"서버에 러닝 기록이 없어요.",small:true).padding(.vertical,8) }
-                if snapshot.nextCursor != nil { Button("다음 기록 불러오기"){remoteReads.loadNextRunRecordsPage()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsLoadMore") }
+                if snapshot.nextCursor != nil, remoteReads.runRecordsRefreshState != .refreshing { Button("다음 기록 불러오기"){remoteReads.loadNextRunRecordsPage()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsLoadMore") }
             case .loadingMore(let snapshot):
                 remoteRunRows(snapshot.items)
                 HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"다음 기록을 불러오는 중이에요.",small:true)}
@@ -107,6 +112,22 @@ extension WireframeRoot {
                 remoteRunRows(snapshot.items)
                 WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteRunsReadFailure")
                 if failure.canManuallyRetry { Button("다시 시도"){remoteReads.retryRunRecords()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRetry") }
+            }
+            switch remoteReads.runRecordsRefreshState {
+            case .idle:
+                EmptyView()
+            case .refreshing:
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"서버 기록을 전체 확인하는 중이에요.",small:true)}
+                    .accessibilityIdentifier("remoteRunsRefreshing")
+            case .failed(let failure):
+                VStack(alignment:.leading,spacing:8){
+                    WNotice(text:"새로고침을 완료하지 못했어요. 기존 목록은 유지했어요. \(failure.userMessage)",danger:true)
+                        .accessibilityIdentifier("remoteRunsRefreshFailure")
+                    if failure.canManuallyRetry {
+                        Button("목록 다시 새로고침"){Task{await remoteReads.refreshRunRecords()}}
+                            .buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRefreshRetry")
+                    }
+                }
             }
             WText(text:remoteReads.hasRunRecordsUpdater ? "서버 응답과 기기 저장 기록은 따로 표시해요. 측정값은 유지하고 제목과 메모만 수정할 수 있어요.":"서버 응답과 기기 저장 기록은 따로 표시해요. 이 화면에서는 기록을 수정하거나 업로드하지 않아요.",small:true)
         }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunRecordsPanel")

@@ -40,6 +40,11 @@ response from changing the next detail; a confirmed same-account late success
 can reconcile the list, while a response from a prior account cannot affect the
 current account. Local records and local sample data are separate and unchanged.
 
+`410 RUN_DELETED` handling belongs to a future authenticated upload queue. When
+that queue is implemented, it should remove only the pending upload for the
+same account and `clientRunId`, as required by the backend upload contract. This
+read/delete seam does not add an upload queue or change a device-local run.
+
 ## Synthetic test fixtures
 
 The UI fake is opt-in with `-wire-run-records-delete-fixture`. Additional

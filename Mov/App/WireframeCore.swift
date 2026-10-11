@@ -421,6 +421,12 @@ enum WireframeRunRecordDeleteState: Equatable {
     case failed(runID: String, failure: RunRecordsFailure)
 }
 
+enum WireframeRunRecordsRefreshState: Equatable {
+    case idle
+    case refreshing
+    case failed(RunRecordsFailure)
+}
+
 enum SessionLogoutState: Equatable {
     case idle
     case loggingOut
@@ -469,6 +475,7 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var runRecordEditTask: Task<Bool, Never>?
     @ObservationIgnored private var runRecordDeleteOperationID: UUID?
     @ObservationIgnored private var runRecordDeleteTask: Task<Bool, Never>?
+    @ObservationIgnored private var runRecordsRefreshOperationID: UUID?
     @ObservationIgnored private var runRecordsNeedsRefresh = false
     @ObservationIgnored private var staleRunDetailIDs: Set<String> = []
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
@@ -480,6 +487,7 @@ enum SessionLogoutState: Equatable {
     private(set) var memberProfileWriteState: MemberProfileWriteState = .idle
     private(set) var pointsState: PointsWalletReadState = .idle
     private(set) var runRecordsState: RunRecordsReadState = .idle
+    private(set) var runRecordsRefreshState: WireframeRunRecordsRefreshState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
     private(set) var runRecordEditState: WireframeRunRecordEditState = .idle
     private(set) var runRecordDeleteState: WireframeRunRecordDeleteState = .idle
@@ -646,6 +654,8 @@ enum SessionLogoutState: Equatable {
         runRecordsState = .idle
         runDetailState = .idle
         runRecordsNeedsRefresh = false
+        runRecordsRefreshOperationID = nil
+        runRecordsRefreshState = .idle
         staleRunDetailIDs.removeAll()
         runRecordEditState = .idle
         runRecordDeleteState = .idle
@@ -662,6 +672,12 @@ enum SessionLogoutState: Equatable {
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let nextScreen = screen ?? feature?.rawValue
+        if activeFeature == .runs, activeScreen == "L01",
+           (feature != .runs || nextScreen != "L01" || runID != nil) {
+            runRecordsNeedsRefresh = true
+            runRecordsRefreshOperationID = nil
+            runRecordsRefreshState = .idle
+        }
         if activeScreen != nextScreen { cancelSessionLogout() }
         if runRecordEditOperationID != nil,
            (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
@@ -793,7 +809,11 @@ enum SessionLogoutState: Equatable {
                     }
                 }
             } else {
-                guard runRecordsState == .idle || runRecordsNeedsRefresh else { return }
+                if runRecordsNeedsRefresh {
+                    await refreshRunRecords()
+                    return
+                }
+                guard runRecordsState == .idle else { return }
                 runRecordsState = .loading
                 await runRecordsLoader.load()
                 let result = await runRecordsLoader.state
@@ -832,6 +852,105 @@ enum SessionLogoutState: Equatable {
                 await completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
             }
         }
+    }
+
+    func refreshRunRecords() async {
+        guard let loader = runRecordsLoader,
+              runRecordsRefreshOperationID == nil,
+              activeFeature == .runs,
+              activeScreen == "L01",
+              activeRunID == nil,
+              let accountScopeID else { return }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        runRecordsRefreshOperationID = operationID
+        runRecordsNeedsRefresh = true
+        runRecordsRefreshState = .refreshing
+        var restartAfterStaleCompletion = false
+        defer {
+            if runRecordsRefreshOperationID == operationID {
+                runRecordsRefreshOperationID = nil
+                if restartAfterStaleCompletion,
+                   runRecordsNeedsRefresh,
+                   self.accountScopeID == accountScopeID,
+                   activeFeature == .runs,
+                   activeScreen == "L01",
+                   activeRunID == nil {
+                    Task { @MainActor [weak self] in await self?.refreshRunRecords() }
+                }
+            }
+        }
+
+        do {
+            let candidate = try await loader.fetchCompleteList()
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else {
+                await loader.discardCompleteList(candidate)
+                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
+                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
+                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
+                return
+            }
+            guard await loader.applyCompleteList(candidate) else {
+                runRecordsRefreshState = .idle
+                runRecordsNeedsRefresh = true
+                restartAfterStaleCompletion = true
+                return
+            }
+            runRecordsState = await loader.state
+            runDetailState = await loader.detailState
+            runRecordsNeedsRefresh = false
+            runRecordsRefreshState = .idle
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else {
+                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
+                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
+                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
+                return
+            }
+            runRecordsState = await loader.state
+            if failure == .cancelled || Task.isCancelled {
+                runRecordsRefreshState = .idle
+            } else {
+                runRecordsRefreshState = .failed(failure)
+            }
+            runRecordsNeedsRefresh = true
+        } catch {
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else {
+                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
+                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
+                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
+                return
+            }
+            runRecordsState = await loader.state
+            runRecordsRefreshState = .failed(.invalidResponse)
+            runRecordsNeedsRefresh = true
+        }
+    }
+
+    private func isCurrentRunRecordsRefresh(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String
+    ) -> Bool {
+        runRecordsRefreshOperationID == operationID
+            && generation == requestGeneration
+            && self.accountScopeID == accountScopeID
+            && activeFeature == .runs
+            && activeScreen == "L01"
+            && activeRunID == nil
     }
 
     private func completeProgressRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
@@ -1515,7 +1634,12 @@ enum SessionLogoutState: Equatable {
 
     func retryRunRecords() {
         guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              runRecordsRefreshOperationID == nil,
               let runRecordsLoader else { return }
+        if runRecordsNeedsRefresh {
+            Task { @MainActor [weak self] in await self?.refreshRunRecords() }
+            return
+        }
         switch runRecordsState {
         case .failed(let failure) where failure.canManuallyRetry:
             runRecordsState = .loading
@@ -1544,6 +1668,7 @@ enum SessionLogoutState: Equatable {
 
     func loadNextRunRecordsPage() {
         guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              runRecordsRefreshOperationID == nil,
               case .loaded(let snapshot) = runRecordsState, snapshot.nextCursor != nil,
               let runRecordsLoader else { return }
         let requestGeneration = generation
@@ -2125,7 +2250,8 @@ struct RootView:View {
             conflictsFirstWrite:args.contains("-wire-run-records-write-conflict"),
             missingWrite:args.contains("-wire-run-records-write-404"),
             deletionFailure:args.contains("-wire-run-records-delete-404") ? .recordNotFound : args.contains("-wire-run-records-delete-fail") ? .serverFailure(statusCode:503,requestID:"fixture-run-delete-unavailable") : nil,
-            losesFirstDeleteResponse:args.contains("-wire-run-records-delete-response-lost")
+            losesFirstDeleteResponse:args.contains("-wire-run-records-delete-response-lost"),
+            removesRunOnNextRefresh:args.contains("-wire-run-records-remote-delete-on-refresh")
         ):nil
         let runLoader = runClient.map { RunRecordsLoader(client:$0) }
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
@@ -2352,15 +2478,25 @@ private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating,Ru
     private var losesFirstDeleteResponse:Bool
     private var conflictsFirstWrite:Bool
     private var recordMissing=false
+    private var removesRunOnNextRefresh:Bool
+    private var listReadCount=0
     private var currentSummary:BackendRunSummary
 
-    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false){
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false,removesRunOnNextRefresh:Bool=false){
         self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
-        self.missingWrite=missingWrite;self.deletionFailure=deletionFailure;self.losesFirstDeleteResponse=losesFirstDeleteResponse;self.currentSummary=Self.makeSummary()
+        self.missingWrite=missingWrite;self.deletionFailure=deletionFailure;self.losesFirstDeleteResponse=losesFirstDeleteResponse
+        self.removesRunOnNextRefresh=removesRunOnNextRefresh;self.currentSummary=Self.makeSummary()
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
         if fails { throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-unavailable") }
+        if cursor == nil {
+            listReadCount += 1
+            if removesRunOnNextRefresh && listReadCount > 1 {
+                recordMissing=true
+                removesRunOnNextRefresh=false
+            }
+        }
         if recordMissing { return BackendRunPage(items:[],nextCursor:nil) }
         guard cursor == nil else { return BackendRunPage(items:[],nextCursor:nil) }
         return BackendRunPage(items:[currentSummary],nextCursor:nil)
