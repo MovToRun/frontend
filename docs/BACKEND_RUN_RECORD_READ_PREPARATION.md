@@ -79,14 +79,15 @@ A supplied updater reuses the detail's existing per-field pencil → edit →
 complete inline control; no separate editor flow is introduced. A failed save
 keeps its draft visible. `404` is shown without revealing whether a record is
 missing, deleted, or owned by another member. On `409 VERSION_CONFLICT`, the
-bridge fetches the current detail and keeps the draft; if that field already
-matches the draft it treats the ambiguous response as completed, otherwise the
-user must press complete again to apply the draft against the refreshed
-version. A PATCH `404` retains the draft in the current detail and marks the
-cached list stale; the list reloads on return or retry, and a failed reload
-remains a retryable read failure. A detail-read `404` also marks the list
-stale. Read-only compositions keep the existing read-only detail. Record
-deletion is not included.
+bridge fetches the current detail and keeps the draft. It treats the conflict
+as completed only when the fetched field's UTF-16 code units exactly equal the
+draft; canonically equivalent NFC/decomposed values remain conflicts so the
+draft is not discarded. Otherwise the user must press complete again to apply
+the draft against the refreshed version. A PATCH `404` retains the draft in the
+current detail and marks the cached list stale; the list reloads on return or
+retry, and a failed reload remains a retryable read failure. A detail-read
+`404` also marks the list stale. Read-only compositions keep the existing
+read-only detail. Record deletion is not included.
 A request failure remains an error with a retry action where supported; it
 never becomes an empty successful list. The default app entry still injects no
 remote loader. A caller must provide both the configured transport and an
@@ -106,21 +107,23 @@ session refresh, live server write, or persistent remote cache was added.
   `MockURLProtocol`. Run edit cases cover PATCH path/headers/body, per-field
   omission and empty-string clearing, explicit-null response decoding, Java
   UTF-16 length boundaries, 409 conflict, generic 404 and disabled write retry.
-- Focused Xcode bridge/read regression: 8/8 passed on the existing iPhone 17 Pro
+- Focused Xcode bridge/read regression: 10/10 passed on the existing iPhone 17 Pro
   simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It covers
   read-only list/detail composition, one-field update, list/detail refresh,
   simultaneous-save blocking, conflict refresh and draft resubmission,
   navigation with a late response, account-scope isolation, a late A edit while
   B is active, `404` list invalidation and retry after a failed reload, and
-  rejecting a late old-account list response. Result bundle:
-  `/tmp/task12-run-edit-cache-unit-rerun.xcresult`.
+  rejecting a late old-account list response. Title and memo conflict tests
+  verify that canonically equivalent but code-unit-distinct server values do
+  not close the draft editor. Result bundle:
+  `/tmp/task12-run-edit-normalization-bridge.xcresult`.
 - Focused Xcode UI regression: 4/4 passed on the same simulator. It covers the
   unchanged pencil → edit → complete flow, draft retention on conflict and
   service failure, title/memo saves, preserved run metrics, the existing
   read-only/list-failure path, and draft retention after a simulated `404`
   followed by list refresh. Each UI test used a unique
   `-wire-test-store-suite`; fixture reset stayed within that suite. Result
-  bundle: `/tmp/task12-run-edit-cache-ui.xcresult`.
+  bundle: `/tmp/task12-run-edit-normalization-ui.xcresult`.
 - App build succeeded for the same simulator destination.
 - No live backend request or server write was sent; no real credential or GPS
   capture was used. The app remains unwired to a production host or token

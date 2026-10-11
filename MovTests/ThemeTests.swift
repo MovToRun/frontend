@@ -1902,6 +1902,8 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     private var holdsFirstWrite: Bool
     private var writeFailure: RunRecordsFailure?
     private var conflictsFirstWrite: Bool
+    private var conflictTitle: String?
+    private var conflictMemo: String?
     private var writeCalls=0
     private var pendingWrite:CheckedContinuation<BackendRunSummary,Error>?
     private var pendingRunID:String?
@@ -1912,6 +1914,8 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         holdsFirstWrite:Bool=false,
         writeFailure:RunRecordsFailure?=nil,
         conflictsFirstWrite:Bool=false,
+        conflictTitle:String?=nil,
+        conflictMemo:String?=nil,
         listPages:[BackendRunPage]=[],
         listFetchGates:[Int:WireframeRemoteReadGate]=[:],
         failNextListFetches:Int=0
@@ -1923,6 +1927,8 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         self.holdsFirstWrite=holdsFirstWrite
         self.writeFailure=writeFailure
         self.conflictsFirstWrite=conflictsFirstWrite
+        self.conflictTitle=conflictTitle
+        self.conflictMemo=conflictMemo
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
@@ -1961,7 +1967,10 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         }
         if conflictsFirstWrite {
             conflictsFirstWrite=false
-            let latest=Self.updated(current.summary,version:current.summary.version+1,title:"변경된 제목",memo:current.summary.memo)
+            let latest=Self.updated(
+                current.summary,version:current.summary.version+1,
+                title:conflictTitle ?? "변경된 제목",memo:conflictMemo ?? current.summary.memo
+            )
             details[id]=Self.detail(current,summary:latest)
             throw RunRecordsFailure.versionConflict
         }
@@ -2010,6 +2019,18 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     private static func detail(_ current:BackendRunDetail,summary:BackendRunSummary)->BackendRunDetail {
         BackendRunDetail(summary:summary,points:current.points,pauses:current.pauses,judgement:current.judgement)
     }
+}
+
+private func makeRunEditNormalizationConflictDetail(id: String, title: String?, memo: String?) -> BackendRunDetail {
+    let summary=BackendRunSummary(
+        id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+        startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+        runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+        verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+        title:title,memo:memo,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+        updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+    )
+    return BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
 }
 
 private actor WireframeProgressGoalsReadMock: RunningProgressReading {
@@ -3014,6 +3035,58 @@ extension ThemeTests {
         XCTAssertEqual(saved.summary.version,3)
         let writeCount=await fake.writeCount()
         XCTAssertEqual(writeCount,2)
+    }
+
+    @MainActor func testNFCEquivalentTitleAfterVersionConflictKeepsDraftUnapplied() async {
+        let draft="\u{00E9}"
+        let latest="e\u{0301}"
+        XCTAssertEqual(draft,latest,"Swift String equality treats canonical equivalents as equal")
+        XCTAssertNotEqual(Array(draft.utf16),Array(latest.utf16))
+        let detail=makeRunEditNormalizationConflictDetail(id:"unicode-title-run",title:"기존 제목",memo:"기존 메모")
+        let fake=WireframeRunRecordsEditFake(
+            details:[detail],conflictsFirstWrite:true,conflictTitle:latest
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+
+        let didSave=await bridge.saveRunRecordField(.title,value:draft,runID:detail.summary.id,accountScopeID:"account-a",screen:"L04")
+
+        XCTAssertFalse(didSave,"A canonically equivalent but byte-distinct server value must not complete the draft")
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:detail.summary.id,field:.title),.versionConflict)
+        guard case .loaded(let refreshed)=bridge.runDetailState,let refreshedTitle=refreshed.summary.title else {
+            XCTFail("Expected the server's normalized title after conflict refresh");return
+        }
+        XCTAssertEqual(Array(refreshedTitle.utf16),Array(latest.utf16))
+        XCTAssertNotEqual(Array(refreshedTitle.utf16),Array(draft.utf16))
+        XCTAssertTrue(bridge.canEditRunRecord(detail.summary.id),"The title draft remains in the inline editor after the 409")
+    }
+
+    @MainActor func testNFCEquivalentMemoAfterVersionConflictKeepsDraftUnapplied() async {
+        let draft="\u{00E9}"
+        let latest="e\u{0301}"
+        XCTAssertEqual(draft,latest,"Swift String equality treats canonical equivalents as equal")
+        XCTAssertNotEqual(Array(draft.utf16),Array(latest.utf16))
+        let detail=makeRunEditNormalizationConflictDetail(id:"unicode-memo-run",title:"기존 제목",memo:"기존 메모")
+        let fake=WireframeRunRecordsEditFake(
+            details:[detail],conflictsFirstWrite:true,conflictMemo:latest
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsUpdater:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+
+        let didSave=await bridge.saveRunRecordField(.memo,value:draft,runID:detail.summary.id,accountScopeID:"account-a",screen:"L04")
+
+        XCTAssertFalse(didSave,"A canonically equivalent but byte-distinct server value must not complete the draft")
+        XCTAssertEqual(bridge.runRecordEditFailure(runID:detail.summary.id,field:.memo),.versionConflict)
+        guard case .loaded(let refreshed)=bridge.runDetailState,let refreshedMemo=refreshed.summary.memo else {
+            XCTFail("Expected the server's normalized memo after conflict refresh");return
+        }
+        XCTAssertEqual(Array(refreshedMemo.utf16),Array(latest.utf16))
+        XCTAssertNotEqual(Array(refreshedMemo.utf16),Array(draft.utf16))
+        XCTAssertTrue(bridge.canEditRunRecord(detail.summary.id),"The memo draft remains in the inline editor after the 409")
     }
 
     @MainActor func testLateRunEditAfterReturningToListReloadsTheServerRecord() async {

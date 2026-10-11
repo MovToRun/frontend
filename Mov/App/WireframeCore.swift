@@ -935,7 +935,7 @@ enum SessionLogoutState: Equatable {
                     screen: screen, runID: runID
                 ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
                 let latestValue = field == .title ? latest.summary.title ?? "" : latest.summary.memo ?? ""
-                if latestValue == value {
+                if latestValue.utf16.elementsEqual(value.utf16) {
                     runRecordEditState = .idle
                     return true
                 }
