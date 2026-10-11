@@ -924,6 +924,22 @@ private struct WReview55RingFooter: View {
     }
 }
 
+enum WeeklyGoalDraftValidation {
+    static let timeInputMessage="시간 목표는 10분 단위로 10~6,000분(100시간)까지 입력해 주세요."
+
+    static func timeMinutes(from value:Double)->Int? {
+        guard value.isFinite,(10...6_000).contains(value),value.rounded()==value,
+              value.truncatingRemainder(dividingBy:10)==0 else{return nil}
+        return Int(value)
+    }
+
+    static func payload(distanceEnabled:Bool,kilometers:Double,timeEnabled:Bool,minutes:Int)->(Int64?,Int64?)? {
+        guard !distanceEnabled || (kilometers.isFinite && (1...500).contains(kilometers) && kilometers.rounded()==kilometers),
+              !timeEnabled || ((10...6_000).contains(minutes) && minutes.isMultiple(of:10)) else{return nil}
+        return (distanceEnabled ? Int64(kilometers*1_000):nil,timeEnabled ? Int64(minutes*60):nil)
+    }
+}
+
 extension WireframeRoot {
     var home:some View {
         VStack(spacing:0){
@@ -1050,16 +1066,17 @@ extension WireframeRoot {
             WReview55GoalSelector(distance:distance,minutes:minutes,distanceGoal:distanceGoal,timeGoal:timeGoal,reduceMotion:reduceMotion,ring:{value,unit,target,percent,identifier in
                 AnyView(homeRing(value:value,unit:unit,target:target,percent:percent,identifier:identifier,reduceMotion:reduceMotion,stableReview55Slots:true))
             })
-            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue("조회 전용")
+            Button("주간 목표 변경"){go("H04")}.font(W.font(13)).frame(minHeight:44).disabled(!remoteReads.canWriteWeeklyGoal).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue(remoteReads.canWriteWeeklyGoal ? "":"조회 전용")
         } else if let target=distanceGoal {
             homeRing(value:distance,unit:"km",target:target,percent:WeeklyGoal.percent(value:distance,goal:target),identifier:"distance")
-            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityValue("조회 전용")
+            Button("주간 목표 변경"){go("H04")}.font(W.font(13)).frame(minHeight:44).disabled(!remoteReads.canWriteWeeklyGoal).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue(remoteReads.canWriteWeeklyGoal ? "":"조회 전용")
         } else if let target=timeGoal {
             homeRing(value:minutes,unit:"분",target:target,percent:WeeklyGoal.percent(value:minutes,goal:target),identifier:"time")
-            Button("주간 목표 변경"){}.font(W.font(13)).frame(minHeight:44).disabled(true).accessibilityValue("조회 전용")
+            Button("주간 목표 변경"){go("H04")}.font(W.font(13)).frame(minHeight:44).disabled(!remoteReads.canWriteWeeklyGoal).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue(remoteReads.canWriteWeeklyGoal ? "":"조회 전용")
         } else {
             homeRing(value:distance,unit:"km",target:nil,percent:nil,identifier:"distance")
             WText(text:"아직 주간 목표가 없어요",small:true).padding(.top,8).frame(minHeight:44)
+            Button("주간 목표 설정 하기"){go("H04")}.font(W.font(13)).frame(minHeight:44).disabled(!remoteReads.canWriteWeeklyGoal).accessibilityIdentifier("homeEditWeeklyGoal").accessibilityValue(remoteReads.canWriteWeeklyGoal ? "":"조회 전용")
         }
     }
     func homeRing(value:Double,unit:String,target:Double?,percent:Int?,identifier:String,size:CGFloat=220,reduceMotion:Bool=false,stableReview55Slots:Bool=false)->some View {
@@ -1108,7 +1125,7 @@ extension WireframeRoot {
                 if let target=status.distance.goal{progress("거리 목표",value:Double(status.distance.done)/1_000,goal:Double(target)/1_000,unit:"km")}
                 if let target=status.time.goal{progress("시간 목표",value:Double(status.time.done)/60,goal:Double(target)/60,unit:"분")}
                 if status.distance.goal == nil && status.time.goal == nil{WText(text:"아직 주간 목표가 없어요",small:true)}
-                Button("주간 목표 변경"){}.font(W.font(12)).frame(maxWidth:.infinity,minHeight:44,alignment:.trailing).disabled(true).accessibilityValue("조회 전용")
+                Button("주간 목표 변경"){go("H04")}.font(W.font(12)).frame(maxWidth:.infinity,minHeight:44,alignment:.trailing).disabled(!remoteReads.canWriteWeeklyGoal).accessibilityValue(remoteReads.canWriteWeeklyGoal ? "":"조회 전용")
             }.accessibilityIdentifier("remoteWeeklyGoalSummary")
         }
     }
@@ -1160,28 +1177,64 @@ extension WireframeRoot {
     }
     var weeklyGoal:some View {
         WPage(title:"이번 주 목표",back:back){WHeading(text:"차곡차곡,\n나만의 목표로").padding(.top,8);WText(text:"거리나 시간을 선택해 보세요.\n둘 다 선택하면 각각 채워져요.")
+            if remoteReads.hasRunningProgressDependency && weeklyGoalDraftVersion == nil {
+                switch remoteReads.weeklyGoalState {
+                case .failed(let failure):WNotice(text:failure.userMessage,danger:true)
+                default:HStack(spacing:8){ProgressView();WText(text:"주간 목표를 불러오는 중이에요",small:true)}.frame(maxWidth:.infinity,minHeight:44,alignment:.leading)
+                }
+            }
             VStack(spacing:14){weeklyEditor(time:false);weeklyEditor(time:true)}.padding(.top,16);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
             WText(text:"월요일부터 일요일까지 유효 러닝만 합산해요.\n일시정지와 제외 구간은 더하지 않아요.\n이번 러닝 1회의 목표와는 별도로 관리해요.",small:true).padding(.top,8)
             Button("주간 목표 삭제"){go("H10")}.font(W.font(13)).frame(minHeight:44)
-        } actions:{Button("목표 저장"){guard (!ui.weekly.distanceEnabled || (1...500).contains(ui.weekly.kilometers)), (!ui.weekly.timeEnabled || ((10...6000).contains(ui.weekly.minutes) && ui.weekly.minutes % 10 == 0)) else {ui.error="거리 1–500 km, 시간 10분 단위·최대 100시간으로 입력해 주세요.";return};store.weekly=ui.weekly;store.persist();back()}.buttonStyle(WButtonStyle()).accessibilityIdentifier("saveWeeklyGoal")}
+        } actions:{Button(remoteReads.isSavingWeeklyGoal ? "저장 중…":"목표 저장"){
+            if remoteReads.hasRunningProgressDependency {
+                guard let version=weeklyGoalDraftVersion,weeklyGoalDraftScopeID==ui.remoteAccountScopeID else {ui.error=ProgressGoalsFailure.weeklyGoalBaselineUnavailable.userMessage;return}
+                guard !weeklyTimeDraftInvalid || !ui.weekly.timeEnabled else {ui.error=WeeklyGoalDraftValidation.timeInputMessage;return}
+                guard let (distanceMeters,timeSeconds)=weeklyGoalMutationPayload() else {ui.error="거리 1km 단위 1–500 km, 시간 10분 단위·최대 100시간으로 입력해 주세요.";return}
+                remoteReads.saveWeeklyGoal(version:version,distanceGoalMeters:distanceMeters,timeGoalSeconds:timeSeconds,accountScopeID:ui.remoteAccountScopeID,screen:"H04")
+            } else {
+                guard (!ui.weekly.distanceEnabled || (1...500).contains(ui.weekly.kilometers)), (!ui.weekly.timeEnabled || ((10...6000).contains(ui.weekly.minutes) && ui.weekly.minutes % 10 == 0)) else {ui.error="거리 1–500 km, 시간 10분 단위·최대 100시간으로 입력해 주세요.";return}
+                store.weekly=ui.weekly;store.persist();back()
+            }
+        }.buttonStyle(WButtonStyle()).disabled(remoteReads.isSavingWeeklyGoal || (remoteReads.hasRunningProgressDependency && (!remoteReads.canWriteWeeklyGoal || weeklyGoalDraftVersion == nil || weeklyGoalDraftScopeID != ui.remoteAccountScopeID))).accessibilityIdentifier("saveWeeklyGoal")}
+    }
+    func weeklyGoalMutationPayload()->(Int64?,Int64?)? {
+        guard !weeklyTimeDraftInvalid || !ui.weekly.timeEnabled else{return nil}
+        return WeeklyGoalDraftValidation.payload(
+            distanceEnabled:ui.weekly.distanceEnabled,kilometers:ui.weekly.kilometers,
+            timeEnabled:ui.weekly.timeEnabled,minutes:ui.weekly.minutes
+        )
     }
     func weeklyEditor(time:Bool)->some View {
         let enabled=time ? ui.weekly.timeEnabled:ui.weekly.distanceEnabled
         let value=time ? Double(ui.weekly.minutes):ui.weekly.kilometers
         let maxValue=time ? 6000.0:500.0
+        let distanceBinding=Binding<Double>(get:{ui.weekly.kilometers},set:{ui.weekly.kilometers=$0;weeklyGoalDraftDirty=true})
+        let timeBinding=Binding<Double>(get:{Double(ui.weekly.minutes)},set:{input in
+            weeklyGoalDraftDirty=true
+            guard remoteReads.hasRunningProgressDependency else{ui.weekly.minutes=Int(input);return}
+            guard let minutes=WeeklyGoalDraftValidation.timeMinutes(from:input) else{
+                weeklyTimeDraftInvalid=true
+                ui.error=WeeklyGoalDraftValidation.timeInputMessage
+                return
+            }
+            weeklyTimeDraftInvalid=false
+            ui.weekly.minutes=minutes
+            if ui.error==WeeklyGoalDraftValidation.timeInputMessage{ui.error=""}
+        })
         return VStack(alignment:.leading,spacing:0){
-            Button{withAnimation(reduceMotion ? nil:.easeOut(duration:0.14)){if time{ui.weekly.timeEnabled.toggle()}else{ui.weekly.distanceEnabled.toggle()}}}label:{HStack{VStack(alignment:.leading,spacing:5){Text(time ? "시간 목표":"거리 목표").font(W.font(16,.semibold));Text(time ? "유효 러닝 시간으로 채워요":"달린 유효 거리로 채워요").font(W.font(12)).foregroundStyle(enabled ? MovTokens.onBrand.opacity(0.72):W.muted)};Spacer();WCheck().stroke(enabled ? MovTokens.onBrand:W.border,style:StrokeStyle(lineWidth:1.7,lineCap:.round,lineJoin:.round)).frame(width:24,height:24).frame(width:28,height:28)}.foregroundStyle(enabled ? MovTokens.onBrand:W.ink).padding(16).frame(minHeight:80).background(enabled ? W.lime:W.soft)}.accessibilityIdentifier(time ? "weeklyTimeToggle":"weeklyDistanceToggle").accessibilityAddTraits(enabled ? .isSelected:[]).accessibilityRemoveTraits(enabled ? []:.isSelected).accessibilityValue(enabled ? "선택됨":"선택 안 됨")
+            Button{withAnimation(reduceMotion ? nil:.easeOut(duration:0.14)){if time{ui.weekly.timeEnabled.toggle();weeklyTimeDraftInvalid=false;if ui.error==WeeklyGoalDraftValidation.timeInputMessage{ui.error=""}}else{ui.weekly.distanceEnabled.toggle()};weeklyGoalDraftDirty=true}}label:{HStack{VStack(alignment:.leading,spacing:5){Text(time ? "시간 목표":"거리 목표").font(W.font(16,.semibold));Text(time ? "유효 러닝 시간으로 채워요":"달린 유효 거리로 채워요").font(W.font(12)).foregroundStyle(enabled ? MovTokens.onBrand.opacity(0.72):W.muted)};Spacer();WCheck().stroke(enabled ? MovTokens.onBrand:W.border,style:StrokeStyle(lineWidth:1.7,lineCap:.round,lineJoin:.round)).frame(width:24,height:24).frame(width:28,height:28)}.foregroundStyle(enabled ? MovTokens.onBrand:W.ink).padding(16).frame(minHeight:80).background(enabled ? W.lime:W.soft)}.accessibilityIdentifier(time ? "weeklyTimeToggle":"weeklyDistanceToggle").accessibilityAddTraits(enabled ? .isSelected:[]).accessibilityRemoveTraits(enabled ? []:.isSelected).accessibilityValue(enabled ? "선택됨":"선택 안 됨")
             if enabled{VStack(alignment:.leading,spacing:10){Text(time ? "주간 시간 목표":"주간 거리 목표").font(W.font(13,.medium)).frame(height:20,alignment:.leading);HStack(spacing:10){
                 Button("−"){adjustWeekly(time,-(time ? 10:1))}.frame(width:48,height:54).background(W.secondary,in:RoundedRectangle(cornerRadius:10)).disabled(value <= (time ? 10:1))
-                TextField("목표",value:time ? Binding(get:{Double(ui.weekly.minutes)},set:{ui.weekly.minutes=Int($0)}):$ui.weekly.kilometers,format:.number).keyboardType(time ? .numberPad:.decimalPad).multilineTextAlignment(.center).font(W.font(21,.medium)).frame(minHeight:56).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder))
+                TextField("목표",value:time ? timeBinding:distanceBinding,format:.number).keyboardType(time ? .numberPad:.decimalPad).multilineTextAlignment(.center).font(W.font(21,.medium)).frame(minHeight:56).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder))
                 Button("+"){adjustWeekly(time,time ? 10:1)}.frame(width:48,height:54).background(W.secondary,in:RoundedRectangle(cornerRadius:10)).disabled(value>=maxValue);Text(time ? "분":"km").font(W.font(14))}
                 if time{Text(RunGoal.duration(ui.weekly.minutes)).font(W.font(18,.bold))}
                 HStack(spacing:4){ForEach(time ? [30,60,180,300,600]:[1,5,10],id:\.self){n in Button{adjustWeekly(time,n)}label:{Text(time ? "+"+RunGoal.duration(n):"+\(n)km").font(W.font(12)).padding(.horizontal,7).frame(minHeight:28).background(W.soft,in:RoundedRectangle(cornerRadius:6))}.frame(minWidth:44,minHeight:44).disabled(value>=maxValue)}}
                 WText(text:time ? "10분 단위 · 최대 100시간":"1~500 km · 직접 입력할 수 있어요",small:true)
             }.padding(16).padding(.bottom,4).background(W.paper).overlay(alignment:.top){W.line.frame(height:1)}}
-        }.clipShape(RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(enabled ? W.lime:W.border,lineWidth:1))
+        }.clipShape(RoundedRectangle(cornerRadius:14)).overlay(RoundedRectangle(cornerRadius:14).stroke(enabled ? W.lime:W.border,lineWidth:1)).disabled(remoteReads.isSavingWeeklyGoal)
     }
-    func adjustWeekly(_ time:Bool,_ delta:Int){if time{ui.weekly.minutes=min(6000,max(10,ui.weekly.minutes+delta))}else{ui.weekly.kilometers=min(500,max(1,ui.weekly.kilometers+Double(delta)))}}
+    func adjustWeekly(_ time:Bool,_ delta:Int){if time{ui.weekly.minutes=min(6000,max(10,ui.weekly.minutes+delta));weeklyTimeDraftInvalid=false;if ui.error==WeeklyGoalDraftValidation.timeInputMessage{ui.error=""}}else{ui.weekly.kilometers=min(500,max(1,ui.weekly.kilometers+Double(delta)))};weeklyGoalDraftDirty=true}
     var periodRecords:[RunRecord] {
         if ui.screen=="H08"{return []}
         if ui.month{let range=Calendar.current.dateInterval(of:.month,for:ui.calendarMonth)!;return store.records.filter{$0.isValid && range.contains($0.date)}}

@@ -86,9 +86,10 @@ extension WireframeRoot {
         if ui.screen=="P04"{VStack(spacing:0){ForEach(["1. 기기 설정에서 이 앱 열기","2. 위치 접근 허용","3. 정확한 위치 켜기"],id:\.self){WRow(title:$0)}}}
         if ui.screen=="T03"{VStack(spacing:0){WRow(title:"거리",value:"km");WRow(title:"페이스",value:"분/km");WRow(title:"추정 칼로리",value:"kcal");WRow(title:"체중",value:"kg")}}
         if !data.notice.isEmpty{if ui.screen=="L07"{WRecordDeletionParagraph(text:data.notice).offset(y:-3).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4)}else if ui.screen.hasPrefix("A") || ["T06","T07","T08","T10","T13","T15","T16","T17"].contains(ui.screen){WAuthNotice(text:data.notice,danger:ui.screen=="T13",sourceWrapping:["A04","T10","T17"].contains(ui.screen))}else{WNotice(text:data.notice,danger:["P05","R11","T13"].contains(ui.screen))}}
+        if ui.screen=="H10",!ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
         if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
-    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty)}}}}
+    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && remoteReads.isSavingWeeklyGoal))}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
@@ -97,7 +98,13 @@ extension WireframeRoot {
     case "local-login":ui.setLoggedIn(true);ui.save();go("H00")
     case "switch-local-account":if reviewTools{ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
     case "save":saveRun()
-    case "delete-week":store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
+    case "delete-week":
+        if remoteReads.hasRunningProgressDependency {
+            guard let version=weeklyGoalDraftVersion,weeklyGoalDraftScopeID==ui.remoteAccountScopeID else {ui.error=ProgressGoalsFailure.weeklyGoalBaselineUnavailable.userMessage;return}
+            remoteReads.saveWeeklyGoal(version:version,distanceGoalMeters:nil,timeGoalSeconds:nil,accountScopeID:ui.remoteAccountScopeID,screen:"H10")
+        } else {
+            store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
+        }
     case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
     case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")

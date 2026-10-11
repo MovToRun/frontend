@@ -104,12 +104,21 @@ protocol RunningProgressReading: Sendable {
     func fetchDaily(range: BackendDailyProgressRange) async throws -> BackendDailyProgress
 }
 
+protocol RunningWeeklyGoalWriting: Sendable {
+    func saveWeeklyGoal(version: Int64, distanceGoalMeters: Int64?, timeGoalSeconds: Int64?) async throws -> BackendWeeklyGoalStatus
+}
+
 enum ProgressGoalsFailure: Error, Equatable, Sendable {
     case accessTokenUnavailable
     case unauthenticated
     case serviceUnavailable(requestID: String?)
     case invalidDateRange
     case invalidResponse
+    case invalidWeeklyGoalDraft
+    case weeklyGoalWriteUnavailable
+    case weeklyGoalBaselineUnavailable
+    case weeklyGoalVersionConflict(requestID: String?)
+    case weeklyGoalValidationFailed(requestID: String?)
     case serverFailure(statusCode: Int, requestID: String?)
     case transport(URLError.Code)
     case cancelled
@@ -127,6 +136,14 @@ enum ProgressGoalsFailure: Error, Equatable, Sendable {
             return "러닝 진행 정보를 잠시 불러올 수 없어요. 다시 시도해 주세요."
         case .invalidDateRange:
             return "조회할 날짜 범위를 확인해 주세요."
+        case .invalidWeeklyGoalDraft, .weeklyGoalValidationFailed:
+            return "거리와 시간 목표의 범위와 단위를 확인해 주세요."
+        case .weeklyGoalWriteUnavailable:
+            return "주간 목표 저장 기능을 사용할 수 없어요."
+        case .weeklyGoalBaselineUnavailable:
+            return "주간 목표 정보를 불러온 뒤 저장해 주세요."
+        case .weeklyGoalVersionConflict:
+            return "다른 곳에서 목표가 변경됐어요. 다시 불러온 뒤 저장해 주세요."
         case .invalidResponse:
             return "러닝 진행 정보를 불러오지 못했어요. 다시 시도해 주세요."
         case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
@@ -137,6 +154,29 @@ enum ProgressGoalsFailure: Error, Equatable, Sendable {
             return "네트워크 연결을 확인한 뒤 다시 시도해 주세요."
         case .cancelled:
             return "요청이 취소됐어요."
+        }
+    }
+
+    var weeklyGoalWriteMessage: String {
+        switch self {
+        case .weeklyGoalVersionConflict:
+            return "다른 곳에서 목표가 변경됐어요. 다시 불러온 뒤 저장해 주세요."
+        case .weeklyGoalValidationFailed, .invalidWeeklyGoalDraft:
+            return "거리와 시간 목표의 범위와 단위를 확인해 주세요."
+        case .weeklyGoalWriteUnavailable:
+            return "주간 목표 저장 기능을 사용할 수 없어요."
+        case .weeklyGoalBaselineUnavailable:
+            return "주간 목표 정보를 불러온 뒤 저장해 주세요."
+        case .serviceUnavailable:
+            return "주간 목표를 저장하지 못했어요. 다시 시도해 주세요."
+        case .transport:
+            return "네트워크 연결을 확인한 뒤 다시 시도해 주세요."
+        case .accessTokenUnavailable, .unauthenticated:
+            return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
+        case .cancelled:
+            return "요청이 취소됐어요."
+        default:
+            return "주간 목표를 저장하지 못했어요. 다시 시도해 주세요."
         }
     }
 }
@@ -151,14 +191,14 @@ struct ProgressGoalsRetryPolicy: Sendable {
     }
 }
 
-final class ProgressGoalsClient: RunningProgressReading, Sendable {
-    private let apiClient: APIClient
+final class ProgressGoalsClient: RunningProgressReading, RunningWeeklyGoalWriting, Sendable {
+    private let apiClient: any APIResponseSending
     private let tokenProvider: any AccessTokenProviding
     private let retryPolicy: ProgressGoalsRetryPolicy
     private let sleep: @Sendable (UInt64) async throws -> Void
 
     init(
-        apiClient: APIClient,
+        apiClient: any APIResponseSending,
         tokenProvider: any AccessTokenProviding,
         retryPolicy: ProgressGoalsRetryPolicy = ProgressGoalsRetryPolicy(),
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
@@ -191,6 +231,34 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
         }
     }
 
+    func saveWeeklyGoal(version: Int64, distanceGoalMeters: Int64?, timeGoalSeconds: Int64?) async throws -> BackendWeeklyGoalStatus {
+        guard version >= 0,
+              Self.isValidGoal(distanceGoalMeters, step: 1_000, maximum: 500_000),
+              Self.isValidGoal(timeGoalSeconds, step: 600, maximum: 360_000) else {
+            throw ProgressGoalsFailure.invalidWeeklyGoalDraft
+        }
+
+        let body = try JSONEncoder().encode(WeeklyGoalUpdateRequest(
+            version: version,
+            distanceGoalMeters: distanceGoalMeters,
+            timeGoalSeconds: timeGoalSeconds
+        ))
+        let response = try await sendAuthorized(
+            path: "goals/weekly",
+            method: "PUT",
+            body: body,
+            additionalHeaders: ["Content-Type": "application/json"],
+            retriesEnabled: false
+        )
+        do {
+            return try WeeklyGoalResponse.decode(response.data)
+        } catch let failure as ProgressGoalsFailure {
+            throw failure
+        } catch {
+            throw ProgressGoalsFailure.invalidResponse
+        }
+    }
+
     func fetchDaily(range: BackendDailyProgressRange) async throws -> BackendDailyProgress {
         // Revalidate even ranges constructed through an internal fixture or future caller.
         let checkedRange = try BackendDailyProgressRange(fromDate: range.fromDate, toDate: range.toDate)
@@ -207,7 +275,14 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
         }
     }
 
-    private func sendAuthorized(path: String, queryItems: [URLQueryItem] = []) async throws -> APIClientResponse {
+    private func sendAuthorized(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil,
+        additionalHeaders: [String: String] = [:],
+        queryItems: [URLQueryItem] = [],
+        retriesEnabled: Bool = true
+    ) async throws -> APIClientResponse {
         let token: String
         do {
             guard let value = try await tokenProvider.accessToken(),
@@ -224,18 +299,19 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
             throw ProgressGoalsFailure.accessTokenUnavailable
         }
 
-        let headers = [
+        var headers = [
             "Authorization": "Bearer \(token)",
             "Accept": "application/json",
             "Cache-Control": "no-store"
         ]
+        additionalHeaders.forEach { headers[$0.key] = $0.value }
 
         for attempt in 1...retryPolicy.maximumAttempts {
             do {
-                let response = try await apiClient.sendResponse(path: path, headers: headers, queryItems: queryItems)
+                let response = try await apiClient.sendResponse(path: path, method: method, body: body, headers: headers, queryItems: queryItems)
                 guard (200..<300).contains(response.statusCode) else {
-                    let failure = mapFailure(response)
-                    if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                    let failure = mapFailure(response, weeklyGoalWrite: method == "PUT" && path == "goals/weekly")
+                    if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                         try await waitBeforeRetry()
                         continue
                     }
@@ -243,14 +319,14 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
                 }
                 return response
             } catch let failure as ProgressGoalsFailure {
-                if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                     try await waitBeforeRetry()
                     continue
                 }
                 throw failure
             } catch let error as APIClientError {
                 let failure = mapFailure(error)
-                if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
+                if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                     try await waitBeforeRetry()
                     continue
                 }
@@ -269,14 +345,21 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
         catch { throw ProgressGoalsFailure.cancelled }
     }
 
-    private func mapFailure(_ response: APIClientResponse) -> ProgressGoalsFailure {
+    private func mapFailure(_ response: APIClientResponse, weeklyGoalWrite: Bool = false) -> ProgressGoalsFailure {
         let problem = try? JSONDecoder().decode(ProgressProblemResponse.self, from: response.data)
         let requestID = problem?.requestId ?? response.requestID
         switch response.statusCode {
         case 401: return .unauthenticated
         case 503: return .serviceUnavailable(requestID: requestID)
+        case 409 where weeklyGoalWrite: return .weeklyGoalVersionConflict(requestID: requestID)
+        case 400 where weeklyGoalWrite: return .weeklyGoalValidationFailed(requestID: requestID)
         default: return .serverFailure(statusCode: response.statusCode, requestID: requestID)
         }
+    }
+
+    private static func isValidGoal(_ value: Int64?, step: Int64, maximum: Int64) -> Bool {
+        guard let value else { return true }
+        return value >= step && value <= maximum && value.isMultiple(of: step)
     }
 
     private func mapFailure(_ error: APIClientError) -> ProgressGoalsFailure {
@@ -290,6 +373,21 @@ final class ProgressGoalsClient: RunningProgressReading, Sendable {
 
 private struct ProgressProblemResponse: Decodable {
     let requestId: String?
+}
+
+private struct WeeklyGoalUpdateRequest: Encodable {
+    let version: Int64
+    let distanceGoalMeters: Int64?
+    let timeGoalSeconds: Int64?
+
+    private enum CodingKeys: String, CodingKey { case version, distanceGoalMeters, timeGoalSeconds }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(distanceGoalMeters, forKey: .distanceGoalMeters)
+        try container.encode(timeGoalSeconds, forKey: .timeGoalSeconds)
+    }
 }
 
 private extension ProgressGoalsFailure {
@@ -555,6 +653,13 @@ enum WeeklyGoalReadState: Equatable, Sendable {
     case idle
     case loading
     case loaded(BackendWeeklyGoalStatus)
+    case failed(ProgressGoalsFailure)
+}
+
+enum WeeklyGoalWriteState: Equatable, Sendable {
+    case idle
+    case saving
+    case saved
     case failed(ProgressGoalsFailure)
 }
 

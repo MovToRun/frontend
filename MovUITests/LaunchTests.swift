@@ -2786,6 +2786,68 @@ extension LaunchTests {
         UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
     }
 
+    func testWeeklyGoalWriteFixturesCoverBothSingleAxesUnsetAndQuerySync() {
+        let suite="mov.wireframe.test.weekly-goal-write-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-capture-viewport","-wire-progress-goals-fixture","-wire-weekly-goal-write-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        let edit=app.buttons["homeEditWeeklyGoal"]
+        XCTAssertTrue(edit.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(edit.isEnabled,"The injected writer enables the existing weekly-goal control")
+
+        edit.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.buttons["weeklyDistanceToggle"].value as? String,"선택됨")
+        XCTAssertEqual(app.buttons["weeklyTimeToggle"].value as? String,"선택됨")
+        app.buttons["weeklyTimeToggle"].tap()
+        app.buttons["saveWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-time"].exists,"The synced query reflects a distance-only save")
+
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.buttons["weeklyDistanceToggle"].value as? String,"선택됨")
+        XCTAssertEqual(app.buttons["weeklyTimeToggle"].value as? String,"선택 안 됨")
+        app.buttons["weeklyDistanceToggle"].tap()
+        app.buttons["weeklyTimeToggle"].tap()
+        app.buttons["saveWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.descendants(matching:.any)["homeRing-distance"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["homeRing-time"].exists,"The synced query reflects a time-only save")
+
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:8))
+        app.buttons["주간 목표 삭제"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H10"].waitForExistence(timeout:8))
+        app.buttons["주간 목표 삭제"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["아직 주간 목표가 없어요"].exists,"The synced query represents both axes as unset")
+    }
+
+    func testWeeklyGoalWriteFailureKeepsThePreviousRemoteGoalVisible() {
+        let suite="mov.wireframe.test.weekly-goal-write-failure-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-progress-goals-fixture","-wire-weekly-goal-write-fixture","-wire-weekly-goal-write-fail","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:8))
+        app.buttons["weeklyTimeToggle"].tap()
+        app.buttons["saveWeeklyGoal"].tap()
+        XCTAssertTrue(app.staticTexts["주간 목표를 저장하지 못했어요. 다시 시도해 주세요."].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].exists,"A failed PUT must keep the editor open")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:8))
+        app.buttons["homeEditWeeklyGoal"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H04"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.buttons["weeklyDistanceToggle"].value as? String,"선택됨")
+        XCTAssertEqual(app.buttons["weeklyTimeToggle"].value as? String,"선택됨","A failed PUT must not replace the previously loaded axes")
+    }
+
     func testInjectedProgressFailureDoesNotFallBackToLocalWeeklyOrDailyMetrics() {
         let overviewSuite="mov.wireframe.test.remote-progress-fail-\(UUID().uuidString)"
         app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",overviewSuite,
