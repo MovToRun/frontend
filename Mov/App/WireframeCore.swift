@@ -381,6 +381,7 @@ struct WireframeRemoteReadDependencies {
     let runRecordsLoader: RunRecordsLoader?
     let runningProgressLoader: RunningProgressLoader?
     let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
+    let sessionLogoutRequester: (any SessionLogoutRequesting)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
@@ -388,7 +389,8 @@ struct WireframeRemoteReadDependencies {
         pointsWalletLoader: PointsWalletLoader? = nil,
         runRecordsLoader: RunRecordsLoader? = nil,
         runningProgressLoader: RunningProgressLoader? = nil,
-        weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil
+        weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
+        sessionLogoutRequester: (any SessionLogoutRequesting)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.memberProfileUpdater = memberProfileUpdater
@@ -396,7 +398,15 @@ struct WireframeRemoteReadDependencies {
         self.runRecordsLoader = runRecordsLoader
         self.runningProgressLoader = runningProgressLoader
         self.weeklyGoalWriter = weeklyGoalWriter
+        self.sessionLogoutRequester = sessionLogoutRequester
     }
+}
+
+enum SessionLogoutState: Equatable {
+    case idle
+    case loggingOut
+    case loggedOut
+    case failed(SessionLogoutFailure)
 }
 
 @MainActor @Observable final class WireframeRemoteReadBridge {
@@ -419,6 +429,7 @@ struct WireframeRemoteReadDependencies {
     private let runRecordsLoader: RunRecordsLoader?
     private let runningProgressLoader: RunningProgressLoader?
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
+    private let sessionLogoutRequester: (any SessionLogoutRequesting)?
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var dailyGeneration: UInt64 = 0
     @ObservationIgnored private var dailyProgressTask: Task<Void, Never>?
@@ -429,6 +440,8 @@ struct WireframeRemoteReadDependencies {
     @ObservationIgnored private var manualRunsPreviousState: RunRecordsReadState?
     @ObservationIgnored private var weeklyGoalWriteOperationID: UUID?
     @ObservationIgnored private var weeklyGoalWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var sessionLogoutOperationID: UUID?
+    @ObservationIgnored private var sessionLogoutTask: Task<Void, Never>?
     @ObservationIgnored private var memberProfileWriteOperationID: UUID?
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
@@ -447,6 +460,7 @@ struct WireframeRemoteReadDependencies {
     private(set) var weeklyGoalWriteState: WeeklyGoalWriteState = .idle
     private(set) var weeklyGoalConflictRefreshState: WeeklyGoalConflictRefreshState = .idle
     private(set) var dailyProgressState: DailyProgressReadState = .idle
+    private(set) var sessionLogoutState: SessionLogoutState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
@@ -455,6 +469,7 @@ struct WireframeRemoteReadDependencies {
         runRecordsLoader = dependencies?.runRecordsLoader
         runningProgressLoader = dependencies?.runningProgressLoader
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
+        sessionLogoutRequester = dependencies?.sessionLogoutRequester
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
@@ -465,8 +480,78 @@ struct WireframeRemoteReadDependencies {
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
     var canWriteWeeklyGoal: Bool { runningProgressLoader != nil && weeklyGoalWriter != nil }
     var isSavingWeeklyGoal: Bool { weeklyGoalWriteState == .saving }
+    var hasSessionLogoutDependency: Bool { sessionLogoutRequester != nil }
+    var isLoggingOut: Bool { sessionLogoutState == .loggingOut }
     var needsWeeklyGoalConflictRefresh: Bool { weeklyGoalNeedsRefresh }
     var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency }
+
+    func requestSessionLogout(accountScopeID: String, screen: String) {
+        guard let requester = sessionLogoutRequester,
+              self.accountScopeID == accountScopeID,
+              activeScreen == screen,
+              sessionLogoutState != .loggedOut,
+              sessionLogoutOperationID == nil else { return }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        sessionLogoutOperationID = operationID
+        sessionLogoutState = .loggingOut
+        sessionLogoutTask = Task { [weak self] in
+            let result: Result<Void, SessionLogoutFailure>
+            do {
+                try await requester.logout()
+                result = .success(())
+            } catch let failure as SessionLogoutFailure {
+                result = .failure(failure)
+            } catch is CancellationError {
+                result = .failure(.cancelled)
+            } catch {
+                result = .failure(.invalidResponse)
+            }
+            guard let self else { return }
+            self.completeSessionLogout(
+                result,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen
+            )
+        }
+    }
+
+    private func completeSessionLogout(
+        _ result: Result<Void, SessionLogoutFailure>,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String
+    ) {
+        guard sessionLogoutOperationID == operationID,
+              generation == requestGeneration,
+              self.accountScopeID == accountScopeID,
+              activeScreen == screen else { return }
+        sessionLogoutTask = nil
+        sessionLogoutOperationID = nil
+        switch result {
+        case .success:
+            sessionLogoutState = .loggedOut
+        case .failure(.unauthenticated):
+            // The API contract treats 401 as an invalid session; the client must leave it.
+            sessionLogoutState = .loggedOut
+        case .failure(.cancelled):
+            sessionLogoutState = .idle
+        case .failure(let failure):
+            sessionLogoutState = .failed(failure)
+        }
+    }
+
+    private func cancelSessionLogout() {
+        let task = sessionLogoutTask
+        sessionLogoutTask = nil
+        sessionLogoutOperationID = nil
+        sessionLogoutState = .idle
+        task?.cancel()
+    }
 
     private func invalidateDailyProgressRead() {
         dailyGeneration &+= 1
@@ -476,6 +561,7 @@ struct WireframeRemoteReadDependencies {
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
+        cancelSessionLogout()
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
         cancelManualOperation()
@@ -502,6 +588,7 @@ struct WireframeRemoteReadDependencies {
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let nextScreen = screen ?? feature?.rawValue
+        if activeScreen != nextScreen { cancelSessionLogout() }
         if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
             weeklyGoalConflictRefreshState = .idle
         }
@@ -1493,6 +1580,23 @@ struct RootView:View {
         let runFixture = args.contains("-wire-run-records-fixture")
         let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
         let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
+        let logoutFixture = WReviewMode.tools && args.contains("-wire-auth-logout-fixture")
+            ? WireframeAuthLogoutFixture(
+                failureSequence: {
+                    if args.contains("-wire-auth-logout-fail-once-500") {
+                        return [.serverFailure(statusCode:500,requestID:"fixture-logout-500")]
+                    }
+                    if args.contains("-wire-auth-logout-response-lost-then-401") {
+                        return [.transport(.timedOut),.unauthenticated]
+                    }
+                    if args.contains("-wire-auth-logout-fail-once") {
+                        return [.serviceUnavailable(requestID:"fixture-logout-unavailable")]
+                    }
+                    return []
+                }(),
+                alwaysFails:args.contains("-wire-auth-logout-fail"),
+                delaysResponse:args.contains("-wire-auth-logout-delay")
+            ) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
@@ -1500,7 +1604,7 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || progressFixture || profileFixture != nil else { return nil }
+        guard runFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runLoader = runFixture ? RunRecordsLoader(client:WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail")
@@ -1518,7 +1622,8 @@ struct RootView:View {
             memberProfileUpdater:profileFixture,
             runRecordsLoader:runLoader,
             runningProgressLoader:progressLoader,
-            weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil
+            weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
+            sessionLogoutRequester:logoutFixture
         )
     }
 
@@ -1690,6 +1795,34 @@ private actor WireframeProgressGoalsFixture: RunningProgressReading, RunningWeek
 }
 
 /// An in-memory UI test seam. The normal app entry point never supplies this reader.
+private actor WireframeAuthLogoutFixture: SessionLogoutRequesting {
+    private let failureSequence: [SessionLogoutFailure]
+    private let alwaysFails: Bool
+    private let delaysResponse: Bool
+    private var attempts = 0
+
+    init(failureSequence: [SessionLogoutFailure], alwaysFails: Bool, delaysResponse: Bool) {
+        self.failureSequence = failureSequence
+        self.alwaysFails = alwaysFails
+        self.delaysResponse = delaysResponse
+    }
+
+    func logout() async throws {
+        if delaysResponse {
+            // Keep the response alive after request cancellation to exercise the bridge's scope guard.
+            await Task.detached { try? await Task.sleep(nanoseconds: 5_000_000_000) }.value
+        }
+        let attempt = attempts
+        attempts += 1
+        if failureSequence.indices.contains(attempt) {
+            throw failureSequence[attempt]
+        }
+        if alwaysFails {
+            throw SessionLogoutFailure.serviceUnavailable(requestID: "fixture-logout-unavailable")
+        }
+    }
+}
+
 private struct WireframeRunRecordsFixture:RunRecordsReading {
     let fails:Bool
 
@@ -1840,6 +1973,7 @@ struct WireframeRoot:View {
             .onChange(of:remoteReads.weeklyGoalState){_,state in handleRemoteWeeklyGoalStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalWriteState){_,state in handleRemoteWeeklyGoalWriteStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalConflictRefreshState){_,state in handleRemoteWeeklyGoalConflictRefreshStateChange(state)}
+            .onChange(of:remoteReads.sessionLogoutState){_,state in handleSessionLogoutStateChange(state)}
     }
     var rootTaskViews:some View {
         rootStyledLayers
@@ -2024,6 +2158,12 @@ struct WireframeRoot:View {
         case .idle,.required,.refreshing:
             break
         }
+    }
+    func handleSessionLogoutStateChange(_ state:SessionLogoutState){
+        guard ui.screen=="T10",remoteReads.accountScopeID==ui.remoteAccountScopeID else{return}
+        guard state == .loggedOut else{return}
+        guard store.session==nil else{go("T14");return}
+        ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
     }
     func discardCurrentCommunityDraft(){
         switch communityDiscardContext {
