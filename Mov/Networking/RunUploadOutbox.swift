@@ -27,8 +27,29 @@ enum RunUploadOutboxPersistenceFailure: Error, Equatable, Sendable {
 protocol RunUploadOutboxPersisting: Sendable {
     /// A missing file is an empty outbox. Existing unreadable or corrupt data must throw.
     func load() throws -> [RunUploadOutboxEntry]
-    /// Replace the complete outbox atomically or throw without changing the prior value.
-    func saveAtomically(_ entries: [RunUploadOutboxEntry]) throws
+    /// Read, transform, and atomically replace one current snapshot under a storage-wide lock.
+    func transact<Result>(
+        _ update: ([RunUploadOutboxEntry]) throws -> RunUploadOutboxMutation<Result>
+    ) throws -> Result
+}
+
+struct RunUploadOutboxMutation<Result> {
+    let entries: [RunUploadOutboxEntry]
+    let result: Result
+}
+
+private final class OutboxPathLockRegistry: @unchecked Sendable {
+    private let registryLock = NSLock()
+    private var locks: [String: NSRecursiveLock] = [:]
+
+    func lock(for path: String) -> NSRecursiveLock {
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if let existing = locks[path] { return existing }
+        let created = NSRecursiveLock()
+        locks[path] = created
+        return created
+    }
 }
 
 final class FileRunUploadOutboxPersistence: RunUploadOutboxPersisting, @unchecked Sendable {
@@ -37,17 +58,36 @@ final class FileRunUploadOutboxPersistence: RunUploadOutboxPersisting, @unchecke
         let entries: [RunUploadOutboxEntry]
     }
 
+    private static let pathLockRegistry = OutboxPathLockRegistry()
     private let fileURL: URL
-    private let lock = NSLock()
+    private let lock: NSRecursiveLock
 
     init(fileURL: URL) {
-        self.fileURL = fileURL
+        self.fileURL = fileURL.standardizedFileURL
+        self.lock = Self.pathLockRegistry.lock(for: self.fileURL.path)
     }
 
     func load() throws -> [RunUploadOutboxEntry] {
         lock.lock()
         defer { lock.unlock() }
+        return try loadUnlocked()
+    }
 
+    func transact<Result>(
+        _ update: ([RunUploadOutboxEntry]) throws -> RunUploadOutboxMutation<Result>
+    ) throws -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let current = try loadUnlocked()
+        let mutation = try update(current)
+        if mutation.entries != current {
+            try saveUnlocked(mutation.entries)
+        }
+        return mutation.result
+    }
+
+    private func loadUnlocked() throws -> [RunUploadOutboxEntry] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
         let data: Data
         do {
@@ -67,10 +107,7 @@ final class FileRunUploadOutboxPersistence: RunUploadOutboxPersisting, @unchecke
         }
     }
 
-    func saveAtomically(_ entries: [RunUploadOutboxEntry]) throws {
-        lock.lock()
-        defer { lock.unlock() }
-
+    private func saveUnlocked(_ entries: [RunUploadOutboxEntry]) throws {
         let data: Data
         do {
             let encoder = JSONEncoder()
@@ -118,7 +155,6 @@ actor RunUploadOutbox {
     private let persistence: any RunUploadOutboxPersisting
     private let sessionProvider: any RunUploadSessionProviding
     private let uploader: any RunUploading
-    private var entries: [RunUploadOutboxEntry]
     private var isDraining = false
 
     init(
@@ -129,7 +165,7 @@ actor RunUploadOutbox {
         self.persistence = persistence
         self.sessionProvider = sessionProvider
         self.uploader = uploader
-        self.entries = try persistence.load()
+        _ = try persistence.load()
     }
 
     /// Returns true when a new durable item was written, false for an identical duplicate.
@@ -137,23 +173,23 @@ actor RunUploadOutbox {
     func enqueue(_ payload: RunUploadPayload, ownerID: String) throws -> Bool {
         guard Self.isValidOwnerID(ownerID) else { throw RunUploadOutboxFailure.invalidOwnerID }
 
-        let envelope = RunUploadEnvelope(ownerID: ownerID, payload: payload)
-        if let existing = entries.first(where: {
-            $0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == payload.clientRunID
-        }) {
-            guard existing.envelope.payload == payload else {
-                throw RunUploadOutboxFailure.duplicateClientRunIDConflict
+        return try persistence.transact { current in
+            if let existing = current.first(where: {
+                $0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == payload.clientRunID
+            }) {
+                guard existing.envelope.payload == payload else {
+                    throw RunUploadOutboxFailure.duplicateClientRunIDConflict
+                }
+                return RunUploadOutboxMutation(entries: current, result: false)
             }
-            return false
-        }
 
-        let next = entries + [RunUploadOutboxEntry(envelope: envelope, state: .pending)]
-        try persistence.saveAtomically(next)
-        entries = next
-        return true
+            let envelope = RunUploadEnvelope(ownerID: ownerID, payload: payload)
+            let next = current + [RunUploadOutboxEntry(envelope: envelope, state: .pending)]
+            return RunUploadOutboxMutation(entries: next, result: true)
+        }
     }
 
-    func snapshot() -> [RunUploadOutboxEntry] { entries }
+    func snapshot() throws -> [RunUploadOutboxEntry] { try persistence.load() }
 
     /// Manual only: this actor has no timer, background task, or automatic retry trigger.
     func drain() async throws -> RunUploadDrainReport {
@@ -179,12 +215,13 @@ actor RunUploadOutbox {
             return Self.report(uploaded: 0, deleted: 0, terminal: 0, stop: .sessionUnavailable)
         }
 
-        let eligibleKeys = entries.compactMap { entry -> (String, UUID)? in
+        let initialEntries = try persistence.load()
+        let eligibleKeys = initialEntries.compactMap { entry -> (String, UUID)? in
             guard entry.state == .pending, entry.envelope.ownerID == initialSession.ownerID else { return nil }
             return (entry.envelope.ownerID, entry.envelope.payload.clientRunID)
         }
         if eligibleKeys.isEmpty {
-            let hasPendingForOtherOwner = entries.contains { $0.state == .pending }
+            let hasPendingForOtherOwner = initialEntries.contains { $0.state == .pending }
             let stop: RunUploadDrainStopReason = hasPendingForOtherOwner ? .ownerMismatch : .finished
             return Self.report(uploaded: 0, deleted: 0, terminal: 0, stop: stop)
         }
@@ -193,7 +230,8 @@ actor RunUploadOutbox {
             if Task.isCancelled {
                 return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
             }
-            guard let entry = entries.first(where: {
+            let latestEntries = try persistence.load()
+            guard let entry = latestEntries.first(where: {
                 $0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == clientRunID
             }), entry.state == .pending else { continue }
 
@@ -204,6 +242,9 @@ actor RunUploadOutbox {
                 return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
             } catch {
                 return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .sessionUnavailable)
+            }
+            if Task.isCancelled {
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
             }
             guard let session, Self.isValidSession(session) else {
                 return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .sessionUnavailable)
@@ -267,21 +308,23 @@ actor RunUploadOutbox {
     }
 
     private func remove(ownerID: String, clientRunID: UUID) throws {
-        let next = entries.filter {
-            !($0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == clientRunID)
+        try persistence.transact { current in
+            let next = current.filter {
+                !($0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == clientRunID)
+            }
+            return RunUploadOutboxMutation(entries: next, result: ())
         }
-        try persistence.saveAtomically(next)
-        entries = next
     }
 
     private func markTerminal(ownerID: String, clientRunID: UUID, code: String) throws {
-        let next = entries.map { entry -> RunUploadOutboxEntry in
-            guard entry.envelope.ownerID == ownerID,
-                  entry.envelope.payload.clientRunID == clientRunID else { return entry }
-            return RunUploadOutboxEntry(envelope: entry.envelope, state: .terminal(code: code))
+        try persistence.transact { current in
+            let next = current.map { entry -> RunUploadOutboxEntry in
+                guard entry.envelope.ownerID == ownerID,
+                      entry.envelope.payload.clientRunID == clientRunID else { return entry }
+                return RunUploadOutboxEntry(envelope: entry.envelope, state: .terminal(code: code))
+            }
+            return RunUploadOutboxMutation(entries: next, result: ())
         }
-        try persistence.saveAtomically(next)
-        entries = next
     }
 
     private static func isValidOwnerID(_ ownerID: String) -> Bool {

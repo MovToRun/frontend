@@ -12,13 +12,18 @@ private final class MemoryOutboxPersistence: RunUploadOutboxPersisting, @uncheck
         return stored
     }
 
-    func saveAtomically(_ entries: [RunUploadOutboxEntry]) throws {
+    func transact<Result>(
+        _ update: ([RunUploadOutboxEntry]) throws -> RunUploadOutboxMutation<Result>
+    ) throws -> Result {
         lock.lock(); defer { lock.unlock() }
+        let mutation = try update(stored)
+        guard mutation.entries != stored else { return mutation.result }
         if shouldFailNextSave {
             shouldFailNextSave = false
             throw RunUploadOutboxPersistenceFailure.writeFailed
         }
-        stored = entries
+        stored = mutation.entries
+        return mutation.result
     }
 
     func failNextSave() {
@@ -33,6 +38,37 @@ private actor MutableUploadSessionProvider: RunUploadSessionProviding {
     init(_ session: RunUploadSession?) { self.session = session }
     func currentSession() async throws -> RunUploadSession? { session }
     func set(_ session: RunUploadSession?) { self.session = session }
+}
+
+private actor CancellationIgnoringUploadSessionProvider: RunUploadSessionProviding {
+    private let session: RunUploadSession
+    private var callCount = 0
+    private var secondCallStarted: CheckedContinuation<Void, Never>?
+    private var secondCallResult: CheckedContinuation<RunUploadSession?, Never>?
+
+    init(session: RunUploadSession) { self.session = session }
+
+    func currentSession() async throws -> RunUploadSession? {
+        callCount += 1
+        guard callCount == 2 else { return session }
+        return await withCheckedContinuation { continuation in
+            secondCallResult = continuation
+            secondCallStarted?.resume()
+            secondCallStarted = nil
+        }
+    }
+
+    func waitForSecondCall() async {
+        guard callCount < 2 else { return }
+        await withCheckedContinuation { continuation in
+            secondCallStarted = continuation
+        }
+    }
+
+    func resumeSecondCall() {
+        secondCallResult?.resume(returning: session)
+        secondCallResult = nil
+    }
 }
 
 private actor RecordingRunUploader: RunUploading {
@@ -94,6 +130,24 @@ private actor CapturingUploadTransport: APIResponseSending {
 private struct LostResponseTransport: APIResponseSending {
     func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
         throw URLError(.timedOut)
+    }
+}
+
+private enum LocalEnqueueAttempt: Equatable, Sendable {
+    case inserted
+    case duplicate
+    case conflict
+}
+
+private func enqueueAttempt(
+    _ outbox: RunUploadOutbox,
+    payload: RunUploadPayload,
+    ownerID: String
+) async throws -> LocalEnqueueAttempt {
+    do {
+        return try await outbox.enqueue(payload, ownerID: ownerID) ? .inserted : .duplicate
+    } catch RunUploadOutboxFailure.duplicateClientRunIDConflict {
+        return .conflict
     }
 }
 
@@ -196,7 +250,7 @@ final class RunUploadOutboxTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? RunUploadOutboxPersistenceFailure, .writeFailed)
         }
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertTrue(entries.isEmpty)
         let report = try await outbox.drain()
         XCTAssertEqual(report.stopReason, .finished)
@@ -228,7 +282,7 @@ final class RunUploadOutboxTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? RunUploadOutboxFailure, .duplicateClientRunIDConflict)
         }
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertEqual(entries.count, 1)
     }
 
@@ -247,7 +301,7 @@ final class RunUploadOutboxTests: XCTestCase {
         let otherMemberReport = try await outbox.drain()
         XCTAssertEqual(otherMemberReport.stopReason, .ownerMismatch)
         let requests = await uploader.requests()
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertTrue(requests.isEmpty)
         XCTAssertEqual(entries.map(\.envelope.payload.clientRunID), [fixture.clientRunID])
     }
@@ -264,8 +318,30 @@ final class RunUploadOutboxTests: XCTestCase {
         let report = try await outbox.drain()
         XCTAssertEqual(report.stopReason, .accountChanged)
         let requests = await uploader.requests()
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertEqual(requests.map(\.1.ownerID), [userA.ownerID])
+        XCTAssertEqual(entries.map(\.envelope.payload.clientRunID), [fixture.clientRunID])
+    }
+
+    func testCancellationWhileSessionProviderIgnoresCancellationCannotStartUpload() async throws {
+        let persistence = MemoryOutboxPersistence()
+        let session = CancellationIgnoringUploadSessionProvider(session: userA)
+        let uploader = RecordingRunUploader()
+        let outbox = try makeOutbox(persistence, session: session, uploader: uploader)
+        let fixture = payload()
+        try await outbox.enqueue(fixture, ownerID: userA.ownerID)
+
+        let drainTask = Task { try await outbox.drain() }
+        await session.waitForSecondCall()
+        drainTask.cancel()
+        await session.resumeSecondCall()
+
+        let report = try await drainTask.value
+        XCTAssertEqual(report.stopReason, .cancelled)
+        XCTAssertEqual(report.uploadedCount, 0)
+        let requests = await uploader.requests()
+        let entries = try await outbox.snapshot()
+        XCTAssertTrue(requests.isEmpty)
         XCTAssertEqual(entries.map(\.envelope.payload.clientRunID), [fixture.clientRunID])
     }
 
@@ -302,7 +378,7 @@ final class RunUploadOutboxTests: XCTestCase {
 
         let firstReport = try await outbox.drain()
         XCTAssertEqual(firstReport.stopReason, .retryLater(clientRunID: fixture.clientRunID, code: "TRANSPORT"))
-        let afterLostResponse = await outbox.snapshot()
+        let afterLostResponse = try await outbox.snapshot()
         XCTAssertEqual(afterLostResponse.first?.state, .pending)
         let firstRequests = await uploader.requests()
         XCTAssertEqual(firstRequests.map(\.0), [fixture])
@@ -312,7 +388,7 @@ final class RunUploadOutboxTests: XCTestCase {
         let replayedRequests = await uploader.requests()
         XCTAssertEqual(replayedRequests.map(\.0), [fixture, fixture])
         XCTAssertEqual(replayedRequests.map(\.1), [userA, userA])
-        let afterReplay = await outbox.snapshot()
+        let afterReplay = try await outbox.snapshot()
         XCTAssertTrue(afterReplay.isEmpty)
     }
 
@@ -329,7 +405,7 @@ final class RunUploadOutboxTests: XCTestCase {
         let report = try await outbox.drain()
         XCTAssertEqual(report.deletedCount, 1)
         XCTAssertEqual(report.terminalCount, 1)
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries.first?.state, .terminal(code: "CLIENT_RUN_ID_CONFLICT"))
         let secondReport = try await outbox.drain()
@@ -347,7 +423,7 @@ final class RunUploadOutboxTests: XCTestCase {
         let first = try makeOutbox(store, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
         try await first.enqueue(fixture, ownerID: userA.ownerID)
         let restarted = try makeOutbox(store, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
-        let restartedEntries = await restarted.snapshot()
+        let restartedEntries = try await restarted.snapshot()
         XCTAssertEqual(restartedEntries.first?.envelope.payload, fixture)
 
         let corruptFile = directory.appendingPathComponent("corrupt.json")
@@ -360,6 +436,70 @@ final class RunUploadOutboxTests: XCTestCase {
             sessionProvider: MutableUploadSessionProvider(userA),
             uploader: RecordingRunUploader()
         ))
+    }
+
+    func testSeparateOutboxActorsSharePathTransactionsWithoutLostEntriesOrDuplicateIDOverwrite() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("shared-outbox.json")
+        let storeA = FileRunUploadOutboxPersistence(fileURL: fileURL)
+        let storeB = FileRunUploadOutboxPersistence(fileURL: fileURL)
+        let outboxA = try makeOutbox(storeA, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
+        let outboxB = try makeOutbox(storeB, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
+        let first = payload()
+        let second = payload()
+        let ownerID = userA.ownerID
+
+        async let firstInsert = enqueueAttempt(outboxA, payload: first, ownerID: ownerID)
+        async let secondInsert = enqueueAttempt(outboxB, payload: second, ownerID: ownerID)
+        let firstResult = try await firstInsert
+        let secondResult = try await secondInsert
+        XCTAssertEqual(firstResult, .inserted)
+        XCTAssertEqual(secondResult, .inserted)
+
+        let collisionID = UUID()
+        let collisionA = payload(collisionID)
+        let collisionB = RunUploadPayload(
+            clientRunID: collisionID,
+            startedAt: collisionA.startedAt,
+            endedAt: collisionA.endedAt,
+            movingSeconds: collisionA.movingSeconds,
+            distanceMeters: collisionA.distanceMeters + 1,
+            points: collisionA.points,
+            pauses: collisionA.pauses
+        )
+        async let collisionInsertA = enqueueAttempt(outboxA, payload: collisionA, ownerID: ownerID)
+        async let collisionInsertB = enqueueAttempt(outboxB, payload: collisionB, ownerID: ownerID)
+        let (collisionResultA, collisionResultB) = try await (collisionInsertA, collisionInsertB)
+        let collisionResults = [collisionResultA, collisionResultB]
+        XCTAssertEqual(collisionResults.filter { $0 == .inserted }.count, 1)
+        XCTAssertEqual(collisionResults.filter { $0 == .conflict }.count, 1)
+
+        let stored = try storeA.load()
+        XCTAssertEqual(stored.count, 3)
+        XCTAssertEqual(Set(stored.map(\.envelope.payload.clientRunID)), Set([first.clientRunID, second.clientRunID, collisionID]))
+        XCTAssertEqual(stored.first(where: { $0.envelope.payload.clientRunID == collisionID })?.envelope.payload, collisionA)
+    }
+
+    func testActualFileWriteFailureDoesNotCommitTheEnqueue() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lockedDirectory = directory.appendingPathComponent("read-only", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedDirectory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: lockedDirectory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: lockedDirectory.path) }
+        let outboxFile = lockedDirectory.appendingPathComponent("outbox.json")
+        let store = FileRunUploadOutboxPersistence(fileURL: outboxFile)
+        let outbox = try makeOutbox(store, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
+
+        do {
+            _ = try await outbox.enqueue(payload(), ownerID: userA.ownerID)
+            XCTFail("Expected the actual file write to fail")
+        } catch {
+            XCTAssertEqual(error as? RunUploadOutboxPersistenceFailure, .writeFailed)
+        }
+        XCTAssertTrue(try store.load().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outboxFile.path))
     }
 
     func testConcurrentDrainIsGuardedAndCancellationLeavesEntryPending() async throws {
@@ -385,7 +525,7 @@ final class RunUploadOutboxTests: XCTestCase {
         cancelled.cancel()
         let cancellationReport = try await cancelled.value
         XCTAssertEqual(cancellationReport.stopReason, .cancelled)
-        let entries = await outbox.snapshot()
+        let entries = try await outbox.snapshot()
         XCTAssertEqual(entries.filter { $0.state == .pending }.count, 1)
     }
 }
