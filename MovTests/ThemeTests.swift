@@ -1948,6 +1948,40 @@ extension ThemeTests {
         XCTAssertEqual(goal.distance.done,12_400)
     }
 
+    @MainActor func testH08ToH09SameRangeMovementCompletesInFlightRead() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let inFlightGate=WireframeRemoteReadGate()
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],
+            weeklyResults:[],
+            dailyResults:[.success(weekRows)],
+            dailyGates:[0:inFlightGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let initialRead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await inFlightGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H09")
+        guard case .loading(let loadingRange)=bridge.dailyProgressState else {XCTFail("H09 should keep the matching in-flight weekly read");return}
+        XCTAssertEqual(loadingRange,week)
+
+        await inFlightGate.release()
+        await initialRead.value
+        guard case .loaded(let current)=bridge.dailyProgressState else {XCTFail("The same-range H08 response must complete for the active H09 screen");return}
+        XCTAssertEqual(current.range,week)
+        XCTAssertEqual(current.distanceMeters,7_200)
+        let requestedRanges=await mock.observedDailyRanges()
+        XCTAssertEqual(requestedRanges,[week],"The H09 screen should reuse the single matching request")
+    }
+
     @MainActor func testH08ToH09RangeMovementRejectsLateOldRangeResponse() async throws {
         let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
         let month=try BackendDailyProgressRange(fromDate:"2026-09-01",toDate:"2026-09-30")

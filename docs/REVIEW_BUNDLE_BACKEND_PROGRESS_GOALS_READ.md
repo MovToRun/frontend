@@ -46,14 +46,21 @@ was created.
 
 ## Independent-state follow-up status
 
-- A non-building Swift parser check passed for the changed networking, bridge,
-  home view, and bridge-test sources.
-- The new SwiftPM and Xcode bridge/UI tests were not executed. The volume had
-  222 MiB free, and CoreSimulatorService was unavailable for listing the
-  designated iPhone 17 Pro. No simulator was created or reset, and no other
-  session cache or user data was removed.
-- The previous test counts above refer to the pre-follow-up PR head and do not
-  verify the independent-state changes.
+- A later static review identified a same-range H08-to-H09 race: the existing
+  H08 daily request could be ignored after H09 became active, leaving the
+  shared state loading. The bridge now accepts a response while the current
+  screen remains in H07–H09 and the request generation is current.
+- Final Xcode `build-for-testing` passed on the existing iPhone 17 Pro
+  (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`, iOS 26.3.1). The fixed app ID
+  `com.movtorun.mov` was installed and launched. No temporary bundle IDs were
+  used.
+- Focused result: **11 passed, 0 failed, 0 skipped**: eight bridge tests and
+  three UI tests covering endpoint independence, retries, cancellation,
+  account changes, H08-to-H09 same/different range movement, remote summaries,
+  no-fallback failures, and H08/H09 presentation. Result bundle:
+  `/tmp/mov-pr51-progress-goal-regressions.xcresult`.
+- The same-range race is covered with a gated in-memory reader; no live server or
+  credential was used. Full Review52 visual and motion QA remains open.
 
 ## Follow-up boundary
 

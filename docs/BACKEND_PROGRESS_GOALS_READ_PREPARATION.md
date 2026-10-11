@@ -73,20 +73,29 @@ pixel/motion comparison for this slice remains open.
 
 - Added bridge regressions for each endpoint failing while its peer succeeds,
   independent retry, cancellation followed by activation, account changes with
-  a late response, and H08-to-H09 daily-range movement.
-- Swift parser check passed for the changed networking, bridge, view, and test
-  sources using `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
-- Package and Xcode test suites were not run for this follow-up. The volume had
-  222 MiB free, the package build scratch directory was empty, and the selected
-  iPhone 17 Pro simulator could not be listed because CoreSimulatorService was
-  unavailable. No simulator was created or reset, and no other session cache
-  was removed.
+  a late response, and H08-to-H09 daily-range movement. A later static review
+  found that a pending H08 request could be discarded after H09 activation
+  when both screens used the same date range. `loadDailyProgress` now accepts
+  its result while the current screen remains in the progress-statistics group;
+  a gated same-range H08-to-H09 regression covers the previously missing case.
+- Final `build-for-testing` passed with Xcode 26.3 for the existing iPhone 17
+  Pro simulator (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`, iOS 26.3.1). The app
+  was installed and launched under the fixed ID `com.movtorun.mov`. XCTest used
+  the project-configured test IDs, with no temporary app or runner IDs.
+- Focused XCTest result: **11 passed, 0 failed, 0 skipped**. This includes
+  eight bridge tests for independent failures/retries, cancellation, account
+  switching, and both same-range and changed-range H08-to-H09 movement, plus
+  three UI tests for remote summary behavior, no-fallback failures, and H08/H09
+  presentation. Result bundle: `/tmp/mov-pr51-progress-goal-regressions.xcresult`.
+  All reads used in-memory fixtures; no API server or credentials were used.
+- An earlier parser-only check preceded this simulator run. The low-space
+  limitation recorded then applied to that earlier attempt; current available
+  disk was 55 GiB. No simulator was created, reset, or erased during this run.
 
 ## Follow-up
 
 The production session/composition owner must inject `ProgressGoalsClient`
 with the app's authorized `APIClient` and access-token provider before real
-backend reads are available. The independent-state retry, cancellation, account
-switch, and H08/H09 movement regressions are present but await execution in an
-environment with adequate build space and a working simulator service.
-Production session behavior is outside this boundary.
+backend reads are available. The focused mock-backed bridge and UI regressions
+pass, but production session behavior remains outside this boundary. Full
+Review52 pixel and motion QA remains open.

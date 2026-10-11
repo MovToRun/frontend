@@ -553,7 +553,9 @@ struct WireframeRemoteReadDependencies {
         dailyProgressState = .loading(range)
         await runningProgressLoader.loadDaily(range: range)
         let result = await runningProgressLoader.dailyState
-        guard requestGeneration == dailyGeneration, activeFeature == .progressGoals, activeScreen == screen else { return }
+        guard requestGeneration == dailyGeneration,
+              activeFeature == .progressGoals,
+              ["H07","H08","H09"].contains(activeScreen ?? "") else { return }
         if Task.isCancelled {
             dailyProgressState = .idle
         } else {
