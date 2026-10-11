@@ -37,6 +37,74 @@ enum WReviewClock {
 struct RunSegment: Codable, Equatable {
     var distance:Double;var seconds:Double;var type="include";var reason:String?
 }
+enum RunPointRewardStatus: String, Codable, Equatable {
+    case pending = "PENDING"
+    case settled = "SETTLED"
+    case unavailable = "UNAVAILABLE"
+}
+enum RunPointRewardValidationError: Error {
+    case unexpectedAmount
+    case missingSettledAmount
+    case negativeAmount
+}
+struct RunPointReward: Codable, Equatable {
+    let status: RunPointRewardStatus
+    let pointsAwarded: Int?
+
+    private enum CodingKeys: String, CodingKey { case status, pointsAwarded }
+
+    init(status: RunPointRewardStatus, pointsAwarded: Int?) throws {
+        try Self.validate(status: status, pointsAwarded: pointsAwarded)
+        self.status = status
+        self.pointsAwarded = pointsAwarded
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let status = try container.decode(RunPointRewardStatus.self, forKey: .status)
+        guard container.contains(.pointsAwarded) else {
+            throw DecodingError.keyNotFound(CodingKeys.pointsAwarded, .init(codingPath: decoder.codingPath, debugDescription: "pointReward.pointsAwarded is required and may be null"))
+        }
+        let pointsAwarded = try container.decodeIfPresent(Int.self, forKey: .pointsAwarded)
+        do { try Self.validate(status: status, pointsAwarded: pointsAwarded) }
+        catch {
+            throw DecodingError.dataCorruptedError(forKey: .pointsAwarded, in: container, debugDescription: "pointReward status and pointsAwarded do not match the backend contract")
+        }
+        self.status = status
+        self.pointsAwarded = pointsAwarded
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(status, forKey: .status)
+        try container.encode(pointsAwarded, forKey: .pointsAwarded)
+    }
+
+    private static func validate(status: RunPointRewardStatus, pointsAwarded: Int?) throws {
+        switch status {
+        case .pending, .unavailable:
+            guard pointsAwarded == nil else { throw RunPointRewardValidationError.unexpectedAmount }
+        case .settled:
+            guard let pointsAwarded else { throw RunPointRewardValidationError.missingSettledAmount }
+            guard pointsAwarded >= 0 else { throw RunPointRewardValidationError.negativeAmount }
+        }
+    }
+
+    var compactText: String {
+        switch status {
+        case .pending: "확인 중"
+        case .settled: "\(pointsAwarded!.formatted())"
+        case .unavailable: "확인 불가"
+        }
+    }
+    var accessibilityLabel: String {
+        switch status {
+        case .pending: "러닝 포인트 적립 확인 중"
+        case .settled: "러닝 포인트 \(pointsAwarded!.formatted()) 포인트 적립"
+        case .unavailable: "러닝 포인트 적립 상태 확인 불가"
+        }
+    }
+}
 struct RunRecord: Identifiable, Codable, Equatable {
     var id = UUID()
     var date: Date
@@ -47,6 +115,7 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var segments:[RunSegment]? = nil
     var weightKg:Double? = nil
     var isExample:Bool? = nil
+    var pointReward:RunPointReward? = nil
     var caloriesText:String {guard isValid else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
     var isValid: Bool { kilometers > 0 }
     var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }
