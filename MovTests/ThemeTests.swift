@@ -1948,7 +1948,17 @@ extension ThemeTests {
         XCTAssertEqual(goal.distance.done,12_400)
     }
 
-    @MainActor func testH08ToH09SameRangeMovementCompletesInFlightRead() async throws {
+    func testH08ToH09SameRangeKeepsSwiftUITaskIdentityStable() throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let h08=WireframeDailyProgressTaskIdentity.key(screen:"H08",accountScopeID:"account-a",range:week)
+        let h09=WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-a",range:week)
+        XCTAssertEqual(h08,h09,"A statistics screen change alone must not cancel the same-range SwiftUI task")
+        XCTAssertNotEqual(h09,WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-b",range:week))
+        let month=try BackendDailyProgressRange(fromDate:"2026-09-01",toDate:"2026-09-30")
+        XCTAssertNotEqual(h09,WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-a",range:month))
+    }
+
+    @MainActor func testH08ToH09SameRangeMovementSurvivesViewTaskCancellationBeforeH09Read() async throws {
         let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
         let inFlightGate=WireframeRemoteReadGate()
         let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
@@ -1967,6 +1977,10 @@ extension ThemeTests {
             try? await Task.sleep(nanoseconds:1_000_000)
         }
         XCTAssertTrue(requestIsWaiting)
+        initialRead.cancel()
+        XCTAssertTrue(initialRead.isCancelled)
+        let requestStillWaiting=await inFlightGate.isWaiting()
+        XCTAssertTrue(requestStillWaiting,"Cancelling the view task must not cancel the bridge-owned request")
 
         await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
         await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H09")
@@ -1980,6 +1994,41 @@ extension ThemeTests {
         XCTAssertEqual(current.distanceMeters,7_200)
         let requestedRanges=await mock.observedDailyRanges()
         XCTAssertEqual(requestedRanges,[week],"The H09 screen should reuse the single matching request")
+    }
+
+    @MainActor func testH08ToH09SameRangeMovementAfterCancelledTaskCompletesReusesLoadedRead() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let inFlightGate=WireframeRemoteReadGate()
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],
+            weeklyResults:[],
+            dailyResults:[.success(weekRows)],
+            dailyGates:[0:inFlightGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let initialRead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await inFlightGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        initialRead.cancel()
+        XCTAssertTrue(initialRead.isCancelled)
+
+        await inFlightGate.release()
+        await initialRead.value
+        guard case .loaded(let completed)=bridge.dailyProgressState else {XCTFail("The owned read should finish after its view task is cancelled");return}
+        XCTAssertEqual(completed.range,week)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H09")
+        guard case .loaded(let current)=bridge.dailyProgressState else {XCTFail("H09 should reuse the completed same-range response");return}
+        XCTAssertEqual(current.distanceMeters,7_200)
+        let requestedRanges=await mock.observedDailyRanges()
+        XCTAssertEqual(requestedRanges,[week],"H09 should not refetch a completed matching range")
     }
 
     @MainActor func testH08ToH09RangeMovementRejectsLateOldRangeResponse() async throws {
@@ -2016,6 +2065,61 @@ extension ThemeTests {
         XCTAssertEqual(stillMonthly.distanceMeters,23_000)
         let ranges=await mock.observedDailyRanges()
         XCTAssertEqual(ranges,[week,month])
+    }
+
+    @MainActor func testCancelledDailyReadCannotCrossAccountSwitch() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let accountAGate=WireframeRemoteReadGate()
+        let accountADays=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let accountBDays=[BackendDailyProgressDay(date:"2026-10-02",validDistanceMeters:14_000,validSeconds:7_200,runCount:2,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.success(accountADays),.success(accountBDays)],dailyGates:[0:accountAGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let accountARead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await accountAGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        accountARead.cancel()
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-b",screen:"H09")
+        guard case .loaded(let accountB)=bridge.dailyProgressState else {XCTFail("Expected account B daily progress");return}
+        XCTAssertEqual(accountB.distanceMeters,14_000)
+        await accountARead.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.loaded(accountB),"A cancelled account A response must not replace account B")
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,2)
+    }
+
+    @MainActor func testDailyProgressCanRetryAfterRemoteFailure() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.failure(.serviceUnavailable(requestID:"daily-outage")),.success(weekRows)]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")
+        guard case .failed(let failedRange,let failure)=bridge.dailyProgressState else {XCTFail("Expected an explicit remote failure");return}
+        XCTAssertEqual(failedRange,week)
+        XCTAssertTrue(failure.canManuallyRetry)
+
+        bridge.retryDailyProgress(range:week)
+        for _ in 0..<500 {
+            if case .loaded = bridge.dailyProgressState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let retried)=bridge.dailyProgressState else {XCTFail("Expected the explicit daily retry to load");return}
+        XCTAssertEqual(retried.distanceMeters,7_200)
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,2)
     }
 
     @MainActor func testRemoteDailyProgressUsesItsOwnRangeAndIsNotMixedAcrossAccounts() async throws {

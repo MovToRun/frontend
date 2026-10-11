@@ -62,6 +62,30 @@ was created.
 - The same-range race is covered with a gated in-memory reader; no live server or
   credential was used. Full Review52 visual and motion QA remains open.
 
+## SwiftUI task-cancellation follow-up
+
+- A second review found that `.task(id:)` used the individual H07/H08/H09 screen
+  as part of its identity. H08-to-H09 navigation therefore canceled the view
+  task while the bridge still reported the matching range as loading.
+- H07/H08/H09 now share a SwiftUI task identity for the same account and date
+  range. `WireframeRemoteReadBridge` owns the in-flight daily read independently
+  of the view task, so view cancellation does not cancel the request. Account,
+  feature, and date-range changes invalidate the owned request and keep late
+  results from replacing current state.
+- Added regressions for H08-to-H09 navigation when the canceled view task is
+  still waiting and when it has completed, plus task-key equality and account/
+  range separation. Added a pending-read account-switch case and daily-read
+  retry coverage. Existing range movement coverage still rejects stale
+  responses.
+- Follow-up verification on 2026-10-11: Swift parser accepted
+  `WireframeCore.swift` and `ThemeTests.swift`; the standalone Networking package
+  passed **50 tests, 0 failures**. The iOS bridge/UI tests were not executed in
+  this follow-up because simulator use had ended. The earlier 11/11 iPhone 17
+  Pro result above applies to the prior commit, before this cancellation fix.
+- No API server, token provider, credential, simulator data, or app installation
+  was changed in this follow-up. The same fixed-ID app remains at the prior
+  installed revision until a later simulator session can install the new build.
+
 ## Follow-up boundary
 
 The production session/composition owner still needs to inject the app's
