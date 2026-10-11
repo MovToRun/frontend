@@ -8,7 +8,7 @@ The frontend mapping was checked against `MovToRun/backend` at commit
 `RunDetailResponse`, and `PointRunRewardView`.
 
 `pointReward` is a nullable field on each run summary. Upload responses return a
-run summary directly, list responses wrap summaries in `results`, and detail
+run summary directly, list responses wrap summaries in `items`, and detail
 responses unwrap the summary onto the top-level object. The reward object has
 `status` and nullable `pointsAwarded` fields:
 
