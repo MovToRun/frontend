@@ -360,7 +360,7 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
         switch screen {
         case "M01", "M02", "T02": .profile
         case "POINTS", "B02": .points
-        case "L01", "L04": .runs
+        case "L01", "L04", "L07": .runs
         case "H00", "H04", "H07", "H08", "H09", "H10": .progressGoals
         default: nil
         }
@@ -380,6 +380,7 @@ struct WireframeRemoteReadDependencies {
     let pointsWalletLoader: PointsWalletLoader?
     let runRecordsLoader: RunRecordsLoader?
     let runRecordsUpdater: (any RunRecordsUpdating)?
+    let runRecordsDeleter: (any RunRecordsDeleting)?
     let runningProgressLoader: RunningProgressLoader?
     let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
@@ -390,6 +391,7 @@ struct WireframeRemoteReadDependencies {
         pointsWalletLoader: PointsWalletLoader? = nil,
         runRecordsLoader: RunRecordsLoader? = nil,
         runRecordsUpdater: (any RunRecordsUpdating)? = nil,
+        runRecordsDeleter: (any RunRecordsDeleting)? = nil,
         runningProgressLoader: RunningProgressLoader? = nil,
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
         sessionLogoutRequester: (any SessionLogoutRequesting)? = nil
@@ -399,6 +401,7 @@ struct WireframeRemoteReadDependencies {
         self.pointsWalletLoader = pointsWalletLoader
         self.runRecordsLoader = runRecordsLoader
         self.runRecordsUpdater = runRecordsUpdater
+        self.runRecordsDeleter = runRecordsDeleter
         self.runningProgressLoader = runningProgressLoader
         self.weeklyGoalWriter = weeklyGoalWriter
         self.sessionLogoutRequester = sessionLogoutRequester
@@ -410,6 +413,12 @@ enum WireframeRunRecordEditState: Equatable {
     case saving(runID: String, field: BackendRunEditField)
     case refreshingConflict(runID: String, field: BackendRunEditField)
     case failed(runID: String, field: BackendRunEditField, failure: RunRecordsFailure)
+}
+
+enum WireframeRunRecordDeleteState: Equatable {
+    case idle
+    case deleting(runID: String)
+    case failed(runID: String, failure: RunRecordsFailure)
 }
 
 enum SessionLogoutState: Equatable {
@@ -438,6 +447,7 @@ enum SessionLogoutState: Equatable {
     private let pointsWalletLoader: PointsWalletLoader?
     private let runRecordsLoader: RunRecordsLoader?
     private let runRecordsUpdater: (any RunRecordsUpdating)?
+    private let runRecordsDeleter: (any RunRecordsDeleting)?
     private let runningProgressLoader: RunningProgressLoader?
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     private let sessionLogoutRequester: (any SessionLogoutRequesting)?
@@ -457,6 +467,8 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var runRecordEditOperationID: UUID?
     @ObservationIgnored private var runRecordEditTask: Task<Bool, Never>?
+    @ObservationIgnored private var runRecordDeleteOperationID: UUID?
+    @ObservationIgnored private var runRecordDeleteTask: Task<Bool, Never>?
     @ObservationIgnored private var runRecordsNeedsRefresh = false
     @ObservationIgnored private var staleRunDetailIDs: Set<String> = []
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
@@ -470,6 +482,7 @@ enum SessionLogoutState: Equatable {
     private(set) var runRecordsState: RunRecordsReadState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
     private(set) var runRecordEditState: WireframeRunRecordEditState = .idle
+    private(set) var runRecordDeleteState: WireframeRunRecordDeleteState = .idle
     private(set) var activeRunID: String?
     private(set) var progressState: ProgressReadState = .idle
     private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
@@ -484,6 +497,7 @@ enum SessionLogoutState: Equatable {
         pointsWalletLoader = dependencies?.pointsWalletLoader
         runRecordsLoader = dependencies?.runRecordsLoader
         runRecordsUpdater = dependencies?.runRecordsUpdater
+        runRecordsDeleter = dependencies?.runRecordsDeleter
         runningProgressLoader = dependencies?.runningProgressLoader
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
         sessionLogoutRequester = dependencies?.sessionLogoutRequester
@@ -495,6 +509,7 @@ enum SessionLogoutState: Equatable {
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
     var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
     var hasRunRecordsUpdater: Bool { runRecordsLoader != nil && runRecordsUpdater != nil }
+    var hasRunRecordsDeleter: Bool { runRecordsLoader != nil && runRecordsDeleter != nil }
     var isSavingRunRecord: Bool {
         switch runRecordEditState {
         case .saving, .refreshingConflict: true
@@ -511,6 +526,23 @@ enum SessionLogoutState: Equatable {
     func runRecordEditFailure(runID: String, field: BackendRunEditField) -> RunRecordsFailure? {
         guard case .failed(let failedID, let failedField, let failure) = runRecordEditState,
               failedID == runID, failedField == field else { return nil }
+        return failure
+    }
+    var isDeletingRunRecord: Bool {
+        if case .deleting = runRecordDeleteState { return true }
+        return false
+    }
+    func canDeleteRunRecord(_ runID: String) -> Bool {
+        guard hasRunRecordsDeleter, activeFeature == .runs, activeScreen == "L07",
+              activeRunID == runID, case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID, !isDeletingRunRecord else { return false }
+        if case .failed(let failedID, let failure) = runRecordDeleteState, failedID == runID {
+            return failure.canManuallyRetry
+        }
+        return true
+    }
+    func runRecordDeleteFailure(runID: String) -> RunRecordsFailure? {
+        guard case .failed(let failedID, let failure) = runRecordDeleteState, failedID == runID else { return nil }
         return failure
     }
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
@@ -601,6 +633,7 @@ enum SessionLogoutState: Equatable {
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
         cancelRunRecordEdit()
+        cancelRunRecordDeletion(markStale: false)
         cancelManualOperation()
         generation &+= 1
         invalidateDailyProgressRead()
@@ -615,6 +648,7 @@ enum SessionLogoutState: Equatable {
         runRecordsNeedsRefresh = false
         staleRunDetailIDs.removeAll()
         runRecordEditState = .idle
+        runRecordDeleteState = .idle
         activeRunID = nil
         progressState = .idle
         weeklyGoalState = .idle
@@ -636,6 +670,14 @@ enum SessionLogoutState: Equatable {
         if runRecordEditState != .idle,
            (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
             runRecordEditState = .idle
+        }
+        if runRecordDeleteOperationID != nil,
+           (feature != .runs || activeScreen != nextScreen || activeRunID != runID || nextScreen != "L07") {
+            cancelRunRecordDeletion()
+        }
+        if runRecordDeleteState != .idle,
+           (feature != .runs || activeScreen != nextScreen || activeRunID != runID || nextScreen != "L07") {
+            runRecordDeleteState = .idle
         }
         if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
             weeklyGoalConflictRefreshState = .idle
@@ -661,6 +703,7 @@ enum SessionLogoutState: Equatable {
             pointsState = .idle
             runRecordsState = .idle
             runDetailState = .idle
+            runRecordDeleteState = .idle
             activeRunID = nil
             progressState = .idle
             weeklyGoalState = .idle
@@ -674,6 +717,7 @@ enum SessionLogoutState: Equatable {
             pointsState = .idle
             runRecordsState = .idle
             runDetailState = .idle
+            runRecordDeleteState = .idle
             activeRunID = nil
             progressState = .idle
             weeklyGoalState = .idle
@@ -1026,6 +1070,201 @@ enum SessionLogoutState: Equatable {
     private func cancelRunRecordEdit(operationID: UUID) {
         guard runRecordEditOperationID == operationID else { return }
         cancelRunRecordEdit()
+    }
+
+    func deleteRunRecord(id runID: String, accountScopeID: String, screen: String = "L07") async -> Bool {
+        guard let deleter = runRecordsDeleter,
+              let loader = runRecordsLoader,
+              canDeleteRunRecord(runID),
+              runRecordDeleteOperationID == nil,
+              self.accountScopeID == accountScopeID,
+              activeScreen == screen,
+              screen == "L07",
+              case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID else { return false }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        let version = detail.summary.version
+        runRecordDeleteOperationID = operationID
+        runRecordDeleteState = .deleting(runID: runID)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performRunRecordDeletion(
+                deleter: deleter,
+                loader: loader,
+                runID: runID,
+                version: version,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen
+            )
+        }
+        runRecordDeleteTask = task
+        let deleted = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelRunRecordDeletion(operationID: operationID) }
+        }
+        if runRecordDeleteOperationID == operationID {
+            runRecordDeleteTask = nil
+            runRecordDeleteOperationID = nil
+        }
+        return deleted
+    }
+
+    private func performRunRecordDeletion(
+        deleter: any RunRecordsDeleting,
+        loader: RunRecordsLoader,
+        runID: String,
+        version: Int64,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        do {
+            try await deleter.deleteRun(id: runID, version: version)
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: true)
+                return false
+            }
+
+            await loader.applyDeletedRun(id: runID)
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: true)
+                return false
+            }
+            runRecordsState = await loader.state
+            runDetailState = await loader.detailState
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            invalidateRunSummariesAfterDeletion()
+            runRecordDeleteState = .idle
+            return true
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: false)
+                return false
+            }
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            if failure == .cancelled || Task.isCancelled {
+                runRecordDeleteState = .idle
+            } else {
+                runRecordDeleteState = .failed(runID: runID, failure: failure)
+            }
+            return false
+        } catch {
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: false)
+                return false
+            }
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            runRecordDeleteState = .failed(runID: runID, failure: .invalidResponse)
+            return false
+        }
+    }
+
+    private func isCurrentRunRecordDeletion(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String,
+        runID: String
+    ) -> Bool {
+        guard runRecordDeleteOperationID == operationID,
+              generation == requestGeneration,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              screen == "L07",
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState else { return false }
+        return detail.summary.id == runID
+    }
+
+    private func reconcileStaleRunDeletion(
+        runID: String,
+        accountScopeID: String,
+        loader: RunRecordsLoader,
+        confirmed: Bool
+    ) async {
+        guard self.accountScopeID == accountScopeID else { return }
+        if confirmed { await loader.applyDeletedRun(id: runID) }
+        runRecordsState = await loader.state
+        runRecordsNeedsRefresh = true
+        staleRunDetailIDs.insert(runID)
+        invalidateRunSummariesAfterDeletion()
+        guard activeFeature == .runs, activeScreen == "L01", activeRunID == nil else { return }
+        let requestGeneration = generation
+        runRecordsState = .loading
+        Task { @MainActor [weak self] in
+            await loader.load()
+            let result = await loader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .runs,
+                  self.activeScreen == "L01",
+                  self.activeRunID == nil else { return }
+            self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
+        }
+    }
+
+    private func invalidateRunSummariesAfterDeletion() {
+        progressState = .idle
+        weeklyGoalState = .idle
+        dailyProgressState = .idle
+        invalidateDailyProgressRead()
+    }
+
+    func cancelRunRecordDeletion(markStale: Bool = true) {
+        guard runRecordDeleteOperationID != nil else { return }
+        let runID: String? = {
+            if case .deleting(let id) = runRecordDeleteState { return id }
+            return activeRunID
+        }()
+        runRecordDeleteTask?.cancel()
+        runRecordDeleteTask = nil
+        runRecordDeleteOperationID = nil
+        runRecordDeleteState = .idle
+        if markStale, let runID {
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+        }
+    }
+
+    private func cancelRunRecordDeletion(operationID: UUID) {
+        guard runRecordDeleteOperationID == operationID else { return }
+        cancelRunRecordDeletion()
     }
 
     private func finishWeeklyGoalRead(_ result: WeeklyGoalReadState) {
@@ -1826,7 +2065,7 @@ struct WCommunityVerificationState:Codable,Equatable {
         leaveAuth(for:"T05");forward=false;screen="T05";pending="T05";error=""
     }
     func go(_ next:String){guard next != screen else{return};
-        if screen == "L04", next != "L04" { remoteSelectedRunID = nil }
+        if ["L04","L07"].contains(screen), !["L04","L07"].contains(next) { remoteSelectedRunID = nil }
         if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12","A04"].contains(screen)){
             leaveAuth(for:next);path=[];screen=next;forward=true;rootIndex=2;error="";return
         };if next=="T05" && (Self.providerRoutes.contains(screen) || resetBack=="T05"){returnToProviders();return};if ["T17","A18"].contains(next){if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index+1))}else{path=["T01","T05"]};leaveAuth(for:next);forward=true;screen=next;error="";return};if screen=="A18" && next=="A01"{path=[];leaveAuth(for:next);screen=next;error="";return};leaveAuth(for:next);forward=true;let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][next] ?? roots.firstIndex(of:next){forward=index>rootIndex;previousRootIndex=rootIndex;rootIndex=index};path.append(screen);screen=next;error=""}
@@ -1835,7 +2074,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     func back(){
         if screen=="A15"{go("H00");return}
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
-        if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if screen == "L04", destination != "L04"{remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
+        if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if ["L04","L07"].contains(screen), !["L04","L07"].contains(destination){remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
 struct RootView:View {
     @Environment(\.dynamicTypeSize) var systemSize
@@ -1851,6 +2090,7 @@ struct RootView:View {
         let args = ProcessInfo.processInfo.arguments
         let runFixture = args.contains("-wire-run-records-fixture")
         let runEditFixture = args.contains("-wire-run-records-edit-fixture")
+        let runDeleteFixture = args.contains("-wire-run-records-delete-fixture")
         let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
         let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
         let logoutFixture = WReviewMode.tools && args.contains("-wire-auth-logout-fixture")
@@ -1877,13 +2117,15 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
-        let runClient = (runFixture || runEditFixture) ? WireframeRunRecordsFixture(
+        let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
             failsWrite:args.contains("-wire-run-records-write-fail"),
             conflictsFirstWrite:args.contains("-wire-run-records-write-conflict"),
-            missingWrite:args.contains("-wire-run-records-write-404")
+            missingWrite:args.contains("-wire-run-records-write-404"),
+            deletionFailure:args.contains("-wire-run-records-delete-404") ? .recordNotFound : args.contains("-wire-run-records-delete-fail") ? .serverFailure(statusCode:503,requestID:"fixture-run-delete-unavailable") : nil,
+            losesFirstDeleteResponse:args.contains("-wire-run-records-delete-response-lost")
         ):nil
         let runLoader = runClient.map { RunRecordsLoader(client:$0) }
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
@@ -1899,6 +2141,7 @@ struct RootView:View {
             memberProfileUpdater:profileFixture,
             runRecordsLoader:runLoader,
             runRecordsUpdater:runEditFixture ? runClient:nil,
+            runRecordsDeleter:runDeleteFixture ? runClient:nil,
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
             sessionLogoutRequester:logoutFixture
@@ -2101,17 +2344,19 @@ private actor WireframeAuthLogoutFixture: SessionLogoutRequesting {
     }
 }
 
-private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating {
+private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating,RunRecordsDeleting {
     let fails:Bool
     let failsWrite:Bool
     let missingWrite:Bool
+    private let deletionFailure:RunRecordsFailure?
+    private var losesFirstDeleteResponse:Bool
     private var conflictsFirstWrite:Bool
     private var recordMissing=false
     private var currentSummary:BackendRunSummary
 
-    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false){
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false){
         self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
-        self.missingWrite=missingWrite;self.currentSummary=Self.makeSummary()
+        self.missingWrite=missingWrite;self.deletionFailure=deletionFailure;self.losesFirstDeleteResponse=losesFirstDeleteResponse;self.currentSummary=Self.makeSummary()
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
@@ -2145,6 +2390,18 @@ private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating {
         if let value=patch.memo{memo=value.isEmpty ? nil:value}
         currentSummary=Self.updated(currentSummary,version:version+1,title:title,memo:memo)
         return currentSummary
+    }
+
+    func deleteRun(id:String,version:Int64) async throws {
+        guard id==currentSummary.id else{throw RunRecordsFailure.recordNotFound}
+        if let deletionFailure {throw deletionFailure}
+        if recordMissing {return}
+        guard currentSummary.version==version else{throw RunRecordsFailure.versionConflict}
+        recordMissing=true
+        if losesFirstDeleteResponse {
+            losesFirstDeleteResponse=false
+            throw RunRecordsFailure.transport(.networkConnectionLost)
+        }
     }
 
     private static func makeSummary()->BackendRunSummary {
@@ -2248,7 +2505,7 @@ struct WireframeRoot:View {
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var remoteReadFeature:WireframeRemoteReadFeature? {
-        if ui.screen == "L04", ui.remoteSelectedRunID == nil { return nil }
+        if ["L04","L07"].contains(ui.screen), ui.remoteSelectedRunID == nil { return nil }
         return WireframeRemoteReadFeature.forScreen(ui.screen)
     }
     var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)|\(ui.remoteSelectedRunID ?? "")" }
@@ -2495,9 +2752,9 @@ struct WireframeRoot:View {
         communityDiscardContext=nil
     }
     func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return};if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return};performNavigation(route)}
-    func performNavigation(_ route:String){if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
+    func performNavigation(_ route:String){if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return};performBack()}
-    func performBack(){if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
+    func performBack(){if ui.screen=="L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {

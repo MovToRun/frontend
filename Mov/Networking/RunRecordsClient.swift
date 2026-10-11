@@ -92,6 +92,7 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
     case versionConflict
     case versionConflictRefreshFailed
     case invalidEdit
+    case invalidDeletion
     case invalidPageSize
     case invalidResponse
     case paginationLoop
@@ -111,6 +112,8 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
             return "다른 곳에서 기록이 변경됐어요. 초안은 유지했어요. 최신 기록을 확인하지 못했어요. 잠시 후 다시 완료해 주세요."
         case .invalidEdit:
             return "제목은 40자, 메모는 300자 이내로 입력해 주세요."
+        case .invalidDeletion:
+            return "삭제할 러닝 기록을 확인해 주세요."
         case .invalidPageSize, .invalidResponse, .paginationLoop:
             return "러닝 기록을 불러오지 못했어요. 다시 시도해 주세요."
         case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
@@ -128,8 +131,31 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
         switch self {
         case .invalidResponse, .paginationLoop, .serverFailure, .transport:
             true
-        case .accessTokenUnavailable, .unauthenticated, .recordNotFound, .versionConflict, .versionConflictRefreshFailed, .invalidEdit, .invalidPageSize, .cancelled:
+        case .accessTokenUnavailable, .unauthenticated, .recordNotFound, .versionConflict, .versionConflictRefreshFailed, .invalidEdit, .invalidDeletion, .invalidPageSize, .cancelled:
             false
+        }
+    }
+
+    var deletionMessage: String {
+        switch self {
+        case .accessTokenUnavailable, .unauthenticated:
+            return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
+        case .recordNotFound:
+            return "기록을 찾을 수 없거나 접근할 수 없어요. 삭제 여부를 확인하지 못했어요."
+        case .versionConflict:
+            return "기록 정보가 바뀌었어요. 상세를 다시 확인한 뒤 삭제를 요청해 주세요."
+        case .invalidDeletion:
+            return "삭제할 러닝 기록을 확인해 주세요."
+        case .transport:
+            return "삭제 응답을 확인하지 못했어요. 같은 기록 삭제를 다시 확인할 수 있어요."
+        case .cancelled:
+            return "요청이 취소됐어요. 삭제 여부를 확인하지 못했어요."
+        case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
+            return "삭제 결과를 확인하지 못했어요. 같은 기록 삭제를 다시 확인할 수 있어요."
+        case .invalidResponse, .serverFailure:
+            return "삭제 결과를 확인하지 못했어요. 기록이 삭제된 것으로 처리하지 않았어요."
+        case .versionConflictRefreshFailed, .invalidEdit, .invalidPageSize, .paginationLoop:
+            return userMessage
         }
     }
 
@@ -147,7 +173,7 @@ enum RunRecordsFailure: Error, Equatable, Sendable {
             return "네트워크 연결을 확인한 뒤 다시 완료해 주세요."
         case .cancelled:
             return "요청이 취소됐어요."
-        case .invalidPageSize, .invalidResponse, .paginationLoop, .serverFailure:
+        case .invalidPageSize, .invalidResponse, .paginationLoop, .serverFailure, .invalidDeletion:
             return "저장 결과를 확인하지 못했어요. 다시 시도해 주세요."
         }
     }
@@ -202,7 +228,11 @@ protocol RunRecordsUpdating: Sendable {
     func updateRun(id: String, version: Int64, patch: BackendRunEditPatch) async throws -> BackendRunSummary
 }
 
-final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
+protocol RunRecordsDeleting: Sendable {
+    func deleteRun(id: String, version: Int64) async throws
+}
+
+final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, RunRecordsDeleting, Sendable {
     static let defaultPageSize = 20
     static let maximumPageSize = 50
 
@@ -285,6 +315,19 @@ final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
         }
     }
 
+    func deleteRun(id: String, version: Int64) async throws {
+        guard Self.isSafeRunID(id), version >= 0 else { throw RunRecordsFailure.invalidDeletion }
+        let response = try await sendAuthorized(
+            path: "runs/\(id)",
+            method: "DELETE",
+            queryItems: [URLQueryItem(name: "version", value: String(version))],
+            retriesEnabled: false
+        )
+        guard response.statusCode == 204, response.data.isEmpty else {
+            throw RunRecordsFailure.invalidResponse
+        }
+    }
+
     private func sendAuthorized(
         path: String,
         method: String = "GET",
@@ -320,7 +363,12 @@ final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
             do {
                 let response = try await apiClient.sendResponse(path: path, method: method, body: body, headers: headers, queryItems: queryItems)
                 guard (200..<300).contains(response.statusCode) else {
-                    let failure = mapFailure(response, isDetail: path != "runs", isEdit: method == "PATCH")
+                    let failure = mapFailure(
+                        response,
+                        isDetail: path != "runs",
+                        isEdit: method == "PATCH",
+                        isDeletion: method == "DELETE"
+                    )
                     if retriesEnabled, attempt < retryPolicy.maximumAttempts, failure.isRetryable {
                         try await waitBeforeRetry()
                         continue
@@ -355,7 +403,12 @@ final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
         catch { throw RunRecordsFailure.cancelled }
     }
 
-    private func mapFailure(_ response: APIClientResponse, isDetail: Bool, isEdit: Bool = false) -> RunRecordsFailure {
+    private func mapFailure(
+        _ response: APIClientResponse,
+        isDetail: Bool,
+        isEdit: Bool = false,
+        isDeletion: Bool = false
+    ) -> RunRecordsFailure {
         let problem = try? JSONDecoder().decode(RunProblemResponse.self, from: response.data)
         let requestID = problem?.requestId ?? response.requestID
         switch response.statusCode {
@@ -363,10 +416,12 @@ final class RunRecordsClient: RunRecordsReading, RunRecordsUpdating, Sendable {
             return .unauthenticated
         case 404 where isDetail:
             return .recordNotFound
-        case 409 where isEdit && problem?.code == "VERSION_CONFLICT":
+        case 409 where (isEdit || isDeletion) && problem?.code == "VERSION_CONFLICT":
             return .versionConflict
         case 400 where isEdit:
             return .invalidEdit
+        case 400 where isDeletion:
+            return .invalidDeletion
         default:
             return .serverFailure(statusCode: response.statusCode, requestID: requestID)
         }
@@ -849,6 +904,29 @@ actor RunRecordsLoader {
         }
     }
 
+    func applyDeletedRun(id: String) {
+        listGeneration &+= 1
+        switch state {
+        case .loaded(let snapshot):
+            state = .loaded(snapshot.removing(id))
+        case .loadingMore(let snapshot):
+            state = .loaded(snapshot.removing(id))
+        case .failedLoadingMore(let snapshot, let failure):
+            state = .failedLoadingMore(snapshot.removing(id), failure)
+        case .loading:
+            state = .idle
+        case .idle, .failed:
+            break
+        }
+        if case .loaded(let detail) = detailState, detail.summary.id == id {
+            detailGeneration &+= 1
+            detailState = .idle
+        } else if case .loading(let loadingID) = detailState, loadingID == id {
+            detailGeneration &+= 1
+            detailState = .idle
+        }
+    }
+
     func cancelAll() {
         listGeneration &+= 1
         detailGeneration &+= 1
@@ -864,5 +942,9 @@ private extension BackendRunSnapshot {
             items: items.map { $0.id == summary.id ? summary : $0 },
             nextCursor: nextCursor
         )
+    }
+
+    func removing(_ id: String) -> BackendRunSnapshot {
+        BackendRunSnapshot(items: items.filter { $0.id != id }, nextCursor: nextCursor)
     }
 }

@@ -16,6 +16,7 @@ extension WireframeRoot {
         }actions:{Button("확인했어요"){infoAction("consent-reviewed")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("consentReviewed")}
     }
     var info:WInfo {
+        if let remoteDeleteInfo = remoteRunRecordDeleteInfo { return remoteDeleteInfo }
         if reviewTools{return reviewInfo}
         switch ui.screen {
         case "A06":return .init(title:"동의 내용",heading:ui.consentTopic,text:"서비스 이용과 개인정보 처리 내용을 확인해 주세요.",notice:"운동 기록과 프로필은 이 기기에 저장돼요. 앱 삭제 시 복구가 어려울 수 있어요.",buttons:[("확인했어요","consent-reviewed",0)])
@@ -52,6 +53,31 @@ extension WireframeRoot {
         case "T17":var page=reviewInfo;page.notice="";return page
         default:return reviewInfo
         }
+    }
+    private var remoteRunRecordDeleteInfo:WInfo? {
+        guard ui.screen=="L07", let runID=ui.remoteSelectedRunID, remoteReads.hasRunRecordsDeleter else{return nil}
+        guard case .loaded(let detail)=remoteReads.runDetailState,detail.summary.id==runID else {
+            return .init(title:"기록 삭제",heading:"서버 기록을\n확인할 수 없어요",text:"기록 상세로 돌아가 다시 확인해 주세요.",buttons:[("기록 상세 다시 확인","L04",0),("기록 목록","L01",1)])
+        }
+        let summary=detail.summary
+        let failure=remoteReads.runRecordDeleteFailure(runID:runID)
+        let buttons:[(String,String,Int)]
+        if remoteReads.isDeletingRunRecord {
+            buttons=[("삭제 중…","delete-record",2),("기록 유지","L04",1)]
+        } else if let failure, !failure.canManuallyRetry {
+            buttons=[("기록 상세 다시 확인","L04",0),("기록 목록","L01",1)]
+        } else if failure != nil {
+            buttons=[("같은 기록 삭제 다시 확인","delete-record",2),("기록 유지","L04",1)]
+        } else {
+            buttons=[("이 기록 삭제","delete-record",2),("기록 유지","L04",1)]
+        }
+        return .init(
+            title:"기록 삭제",
+            heading:"이 서버 러닝 기록을\n삭제할까요?",
+            text:"\(summary.runDate.replacingOccurrences(of:"-",with:".")) · \(MovNumber.display(Double(summary.distanceMeters)/1000)) km\n서버 기록과 경로 정보가 삭제돼요. 주간·월간 합계에서도 빠져요.",
+            notice:"이미 적립한 포인트는 회수하지 않아요. 같은 기록을 다시 동기화해도 삭제 이력으로 복구되지 않아요.",
+            buttons:buttons
+        )
     }
     var reviewInfo:WInfo {
         switch ui.screen {
@@ -103,12 +129,15 @@ extension WireframeRoot {
         if ui.screen=="P04"{VStack(spacing:0){ForEach(["1. 기기 설정에서 이 앱 열기","2. 위치 접근 허용","3. 정확한 위치 켜기"],id:\.self){WRow(title:$0)}}}
         if ui.screen=="T03"{VStack(spacing:0){WRow(title:"거리",value:"km");WRow(title:"페이스",value:"분/km");WRow(title:"추정 칼로리",value:"kcal");WRow(title:"체중",value:"kg")}}
         if !data.notice.isEmpty{if ui.screen=="L07"{WRecordDeletionParagraph(text:data.notice).offset(y:-3).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4)}else if ui.screen.hasPrefix("A") || ["T06","T07","T08","T10","T13","T15","T16","T17"].contains(ui.screen){WAuthNotice(text:data.notice,danger:ui.screen=="T13",sourceWrapping:["A04","T10","T17"].contains(ui.screen))}else{WNotice(text:data.notice,danger:["P05","R11","T13"].contains(ui.screen))}}
+        if ui.screen=="L07",let runID=ui.remoteSelectedRunID,let failure=remoteReads.runRecordDeleteFailure(runID:runID){
+            WNotice(text:failure.deletionMessage,danger:true).accessibilityIdentifier("remoteRunDeleteFailure")
+        }
         if ui.screen=="T10",case .failed(let failure)=remoteReads.sessionLogoutState{WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("authLogoutFailure")}
         if ui.screen=="H10",!ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
         if ui.screen=="H10"{weeklyGoalConflictRecovery}
         if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
-    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
+    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else if ui.screen=="L07" && item.1=="L04"{Button(item.0){back()}.buttonStyle(WButtonStyle(kind:item.2))}else if ui.screen=="L07",let runID=ui.remoteSelectedRunID,item.1=="delete-record"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isDeletingRunRecord || !remoteReads.canDeleteRunRecord(runID)).accessibilityIdentifier("confirmDeleteRecord")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":go(ui.resetBack)
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
@@ -126,7 +155,14 @@ extension WireframeRoot {
         }
     case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
-    case "delete-record":shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
+    case "delete-record":
+        if let runID=ui.remoteSelectedRunID {
+            guard remoteReads.hasRunRecordsDeleter,remoteReads.canDeleteRunRecord(runID) else{return}
+            let scopeID=ui.remoteAccountScopeID
+            Task { await deleteRemoteRunRecord(id:runID,accountScopeID:scopeID) }
+            return
+        }
+        shareWorkspace.removeArtifacts(for:current.id);store.delete(current.id);ui.selected=nil;go("L01")
     case "clear-device":guard store.session==nil else{go("T14");return};store.records=[];store.persist();shareWorkspace.clear();go("L02")
     case "logout":
         guard store.session==nil else{go("T14");return}
@@ -145,6 +181,12 @@ extension WireframeRoot {
     case "delete-account-error":ui.deleteConsent=false;go("T11")
     default:go(action)
     }}
+    @MainActor private func deleteRemoteRunRecord(id runID:String,accountScopeID:String) async {
+        let deleted=await remoteReads.deleteRunRecord(id:runID,accountScopeID:accountScopeID,screen:"L07")
+        guard deleted,ui.remoteAccountScopeID==accountScopeID,ui.screen=="L07",ui.remoteSelectedRunID==runID else{return}
+        ui.remoteSelectedRunID=nil
+        go("L01")
+    }
 }
 
 extension WireframeRoot {

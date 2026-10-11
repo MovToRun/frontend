@@ -87,7 +87,8 @@ the draft against the refreshed version. A PATCH `404` retains the draft in the
 current detail and marks the cached list stale; the list reloads on return or
 retry, and a failed reload remains a retryable read failure. A detail-read
 `404` also marks the list stale. Read-only compositions keep the existing
-read-only detail. Record deletion is not included.
+read-only detail. Deletion transport and confirmation are prepared separately
+in [`BACKEND_RUN_RECORD_DELETE_PREPARATION.md`](BACKEND_RUN_RECORD_DELETE_PREPARATION.md).
 A request failure remains an error with a retry action where supported; it
 never becomes an empty successful list. The default app entry still injects no
 remote loader. A caller must provide both the configured transport and an
@@ -135,4 +136,4 @@ session refresh, live server write, or persistent remote cache was added.
 The future authenticated session/composition owner must supply the production
 host and token provider and decide how server records coexist with local records
 in the product flow. This preparation adds no live credential or production
-composition. Server record deletion remains outside this slice.
+composition.
