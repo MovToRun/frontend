@@ -497,6 +497,37 @@ final class RunRecordsReadTests: XCTestCase {
         XCTAssertEqual(state, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
     }
 
+    func testCancelledFullRefreshStopsBeforeNextCursorWhenReaderIgnoresCancellation() async {
+        let old = Self.makeSummary(id: "old-before-ignored-cancel")
+        let gate = RunReadGate()
+        let reader = FullListRefreshReader(
+            pages: [
+                .success(BackendRunPage(items: [old], nextCursor: nil)),
+                .success(BackendRunPage(items: [Self.makeSummary(id: "uncommitted-first-page")], nextCursor: "opaque-next")),
+                .success(BackendRunPage(items: [Self.makeSummary(id: "must-not-be-requested")], nextCursor: nil))
+            ],
+            gates: [2: gate]
+        )
+        let loader = RunRecordsLoader(client: reader, pageSize: 1)
+        await loader.load()
+
+        let refresh = Task { try await loader.fetchCompleteList() }
+        await gate.waitUntilEntered()
+        refresh.cancel()
+        await gate.release()
+
+        do {
+            _ = try await refresh.value
+            XCTFail("A reader that returns after cancellation cannot continue to the next cursor")
+        } catch {
+            XCTAssertEqual(error as? RunRecordsFailure, .cancelled)
+        }
+        let cursors = await reader.passedCursors
+        XCTAssertEqual(cursors, [nil, nil], "Cancellation must be checked before requesting the next page")
+        let state = await loader.state
+        XCTAssertEqual(state, .loaded(BackendRunSnapshot(items: [old], nextCursor: nil)))
+    }
+
     func testCompleteRefreshSupersedesAnInFlightNextPageWithoutAppendingItLater() async throws {
         let old = Self.makeSummary(id: "old-first-page")
         let stalePage = Self.makeSummary(id: "stale-next-page")

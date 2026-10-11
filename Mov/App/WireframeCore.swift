@@ -476,6 +476,7 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var runRecordDeleteOperationID: UUID?
     @ObservationIgnored private var runRecordDeleteTask: Task<Bool, Never>?
     @ObservationIgnored private var runRecordsRefreshOperationID: UUID?
+    @ObservationIgnored private var runRecordsRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var runRecordsNeedsRefresh = false
     @ObservationIgnored private var staleRunDetailIDs: Set<String> = []
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
@@ -637,6 +638,7 @@ enum SessionLogoutState: Equatable {
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
+        cancelRunRecordsRefresh(markNeedsRefresh: false)
         cancelSessionLogout()
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
@@ -654,7 +656,6 @@ enum SessionLogoutState: Equatable {
         runRecordsState = .idle
         runDetailState = .idle
         runRecordsNeedsRefresh = false
-        runRecordsRefreshOperationID = nil
         runRecordsRefreshState = .idle
         staleRunDetailIDs.removeAll()
         runRecordEditState = .idle
@@ -675,8 +676,7 @@ enum SessionLogoutState: Equatable {
         if activeFeature == .runs, activeScreen == "L01",
            (feature != .runs || nextScreen != "L01" || runID != nil) {
             runRecordsNeedsRefresh = true
-            runRecordsRefreshOperationID = nil
-            runRecordsRefreshState = .idle
+            cancelRunRecordsRefresh()
         }
         if activeScreen != nextScreen { cancelSessionLogout() }
         if runRecordEditOperationID != nil,
@@ -855,21 +855,52 @@ enum SessionLogoutState: Equatable {
     }
 
     func refreshRunRecords() async {
+        guard let operation = beginRunRecordsRefresh() else { return }
+        await withTaskCancellationHandler {
+            await operation.task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelRunRecordsRefresh(operationID: operation.operationID)
+            }
+        }
+    }
+
+    private func beginRunRecordsRefresh() -> (operationID: UUID, task: Task<Void, Never>)? {
         guard let loader = runRecordsLoader,
               runRecordsRefreshOperationID == nil,
               activeFeature == .runs,
               activeScreen == "L01",
               activeRunID == nil,
-              let accountScopeID else { return }
+              let accountScopeID else { return nil }
 
         let operationID = UUID()
         let requestGeneration = generation
         runRecordsRefreshOperationID = operationID
         runRecordsNeedsRefresh = true
         runRecordsRefreshState = .refreshing
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRunRecordsRefresh(
+                using: loader,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            )
+        }
+        runRecordsRefreshTask = task
+        return (operationID, task)
+    }
+
+    private func performRunRecordsRefresh(
+        using loader: RunRecordsLoader,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String
+    ) async {
         var restartAfterStaleCompletion = false
         defer {
             if runRecordsRefreshOperationID == operationID {
+                runRecordsRefreshTask = nil
                 runRecordsRefreshOperationID = nil
                 if restartAfterStaleCompletion,
                    runRecordsNeedsRefresh,
@@ -877,7 +908,7 @@ enum SessionLogoutState: Equatable {
                    activeFeature == .runs,
                    activeScreen == "L01",
                    activeRunID == nil {
-                    Task { @MainActor [weak self] in await self?.refreshRunRecords() }
+                    _ = beginRunRecordsRefresh()
                 }
             }
         }
@@ -890,9 +921,6 @@ enum SessionLogoutState: Equatable {
                 accountScopeID: accountScopeID
             ) else {
                 await loader.discardCompleteList(candidate)
-                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
-                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
-                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
                 return
             }
             guard await loader.applyCompleteList(candidate) else {
@@ -910,12 +938,7 @@ enum SessionLogoutState: Equatable {
                 operationID: operationID,
                 generation: requestGeneration,
                 accountScopeID: accountScopeID
-            ) else {
-                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
-                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
-                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
-                return
-            }
+            ) else { return }
             runRecordsState = await loader.state
             if failure == .cancelled || Task.isCancelled {
                 runRecordsRefreshState = .idle
@@ -928,16 +951,22 @@ enum SessionLogoutState: Equatable {
                 operationID: operationID,
                 generation: requestGeneration,
                 accountScopeID: accountScopeID
-            ) else {
-                if self.accountScopeID == accountScopeID { runRecordsNeedsRefresh = true }
-                restartAfterStaleCompletion = self.accountScopeID == accountScopeID
-                    && activeFeature == .runs && activeScreen == "L01" && activeRunID == nil
-                return
-            }
+            ) else { return }
             runRecordsState = await loader.state
-            runRecordsRefreshState = .failed(.invalidResponse)
+            runRecordsRefreshState = Task.isCancelled ? .idle : .failed(.invalidResponse)
             runRecordsNeedsRefresh = true
         }
+    }
+
+    private func cancelRunRecordsRefresh(operationID: UUID? = nil, markNeedsRefresh: Bool = true) {
+        guard let currentOperationID = runRecordsRefreshOperationID,
+              operationID == nil || operationID == currentOperationID else { return }
+        let task = runRecordsRefreshTask
+        runRecordsRefreshTask = nil
+        runRecordsRefreshOperationID = nil
+        if markNeedsRefresh { runRecordsNeedsRefresh = true }
+        if runRecordsRefreshState == .refreshing { runRecordsRefreshState = .idle }
+        task?.cancel()
     }
 
     private func isCurrentRunRecordsRefresh(
@@ -1637,7 +1666,7 @@ enum SessionLogoutState: Equatable {
               runRecordsRefreshOperationID == nil,
               let runRecordsLoader else { return }
         if runRecordsNeedsRefresh {
-            Task { @MainActor [weak self] in await self?.refreshRunRecords() }
+            _ = beginRunRecordsRefresh()
             return
         }
         switch runRecordsState {

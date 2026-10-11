@@ -124,7 +124,7 @@ extension WireframeRoot {
                     WNotice(text:"새로고침을 완료하지 못했어요. 기존 목록은 유지했어요. \(failure.userMessage)",danger:true)
                         .accessibilityIdentifier("remoteRunsRefreshFailure")
                     if failure.canManuallyRetry {
-                        Button("목록 다시 새로고침"){Task{await remoteReads.refreshRunRecords()}}
+                        Button("목록 다시 새로고침"){remoteReads.retryRunRecords()}
                             .buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRefreshRetry")
                     }
                 }

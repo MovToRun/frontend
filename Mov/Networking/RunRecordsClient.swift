@@ -992,6 +992,9 @@ actor RunRecordsLoader {
                 guard nextCursor != cursor, !requestedCursors.contains(nextCursor) else {
                     throw RunRecordsFailure.paginationLoop
                 }
+                guard fullRefreshOperationID == operationID,
+                      requestGeneration == listGeneration,
+                      !Task.isCancelled else { throw RunRecordsFailure.cancelled }
                 cursor = nextCursor
             }
         } catch let failure as RunRecordsFailure {

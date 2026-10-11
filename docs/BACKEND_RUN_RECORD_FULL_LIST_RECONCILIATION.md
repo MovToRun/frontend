@@ -27,6 +27,11 @@ interpret `410` as a local-record deletion command.
   snapshot changes only after a terminal page succeeds. An error, cancellation,
   repeated cursor, duplicate run ID, oversized page, or the defensive 1,000-page
   ceiling keeps the previous visible list intact and allows another read.
+- The bridge owns the refresh task and cancels it when the list screen or account
+  changes; cancellation of the pull-to-refresh caller is forwarded as well. The
+  loader checks cancellation after each page response and before requesting the
+  next cursor. Operation IDs prevent a late task from clearing a replacement
+  refresh's state.
 - The backend does not promise snapshot isolation across pages. This client does
   not claim that a scan is a point-in-time server snapshot.
 - A completed scan marks a cached detail missing from the result as
@@ -42,11 +47,12 @@ different-device deletion. Tests use injected fake transports and isolated
 UserDefaults suites; they do not call a server, use a production token, or delete
 real user data.
 
-- SwiftPM Networking suite: 78/78 passed.
+- SwiftPM package suite: 79/79 passed (including 25 `RunRecordsReadTests`).
 - Xcode `build-for-testing`: succeeded for scheme `Mov` and the existing iPhone
   17 Pro simulator `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`.
-- Focused Xcode bridge and UI regressions: 13/13 passed on iOS 26.3.1 with
-  parallel testing disabled. Result bundle:
-  `/tmp/task15-run-refresh-tests-final.xcresult`.
+- Focused Xcode bridge and UI regressions: 11/11 passed on iOS 26.3.1 with
+  parallel testing disabled, including parent cancellation, explicit retry
+  cancellation, and stale-task/new-operation isolation. Result bundle:
+  `/tmp/task15-run-refresh-cancel-tests.xcresult`.
 - Simulator device state was not reset. UI fixtures used unique UserDefaults
   suites and synthetic remote records.
