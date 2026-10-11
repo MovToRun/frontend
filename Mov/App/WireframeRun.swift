@@ -76,13 +76,66 @@ extension WireframeRoot {
         }
     }
     var records:some View {VStack(spacing:0){WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("H01")}else{back()}});recordsContent}}
-    @ViewBuilder private var recordsContent:some View {ScrollView{VStack(alignment:.leading,spacing:16){if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
+    @ViewBuilder private var recordsContent:some View {ScrollView{VStack(alignment:.leading,spacing:16){
+        if remoteReads.hasRunRecordsDependency { remoteRunRecordsPanel }
+        if ui.screen=="L03"{WNotice(text:"일부 기록을 불러오지 못했어요. 마지막으로 확인한 기록은 그대로 보여드려요.",danger:true);Button("다시 불러오기"){go("L01")}}
         if ui.screen == "L03" && store.records.isEmpty {
             VStack(alignment:.leading,spacing:12){Text("기록을 확인할 수 없어요").font(W.font(20,.semibold));WText(text:"조회에 실패해 기록이 0건이라고 단정하지 않아요. 다시 불러오거나 나중에 다시 확인해 주세요.")}.padding(.vertical,28).accessibilityIdentifier("recordLookupFailure")
         } else if ui.screen=="L02" || (store.records.isEmpty && ui.screen != "L03") {
-            VStack(spacing:0){Text("아직 러닝 기록이 없어요").font(W.font(23,.semibold)).padding(.top,13).padding(.bottom,31);WText(text:"첫 러닝을 시작해 보세요").padding(.bottom,20);button("러닝 시작","H02")}.padding(.vertical,65)
+            VStack(spacing:0){Text(remoteReads.hasRunRecordsDependency ? "기기에 저장된 기록이 없어요":"아직 러닝 기록이 없어요").font(W.font(23,.semibold)).padding(.top,13).padding(.bottom,31);WText(text:"첫 러닝을 시작해 보세요").padding(.bottom,20);button("러닝 시작","H02")}.padding(.vertical,65)
         } else {WText(text:"기기에 저장된 기록",small:true);ForEach(store.records){r in recordRow(r)}}
     }.padding(24)}}
+    @ViewBuilder private var remoteRunRecordsPanel:some View {
+        VStack(alignment:.leading,spacing:10){
+            Text("서버 러닝 기록 · 읽기 전용").font(W.font(13,.semibold))
+            switch remoteReads.runRecordsState {
+            case .idle:
+                WText(text:"조회 준비 중이에요.",small:true)
+            case .loading:
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"서버 기록을 불러오는 중이에요.",small:true)}.frame(maxWidth:.infinity,minHeight:48,alignment:.leading)
+            case .loaded(let snapshot):
+                remoteRunRows(snapshot.items)
+                if snapshot.items.isEmpty { WText(text:"서버에 러닝 기록이 없어요.",small:true).padding(.vertical,8) }
+                if snapshot.nextCursor != nil { Button("다음 기록 불러오기"){remoteReads.loadNextRunRecordsPage()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsLoadMore") }
+            case .loadingMore(let snapshot):
+                remoteRunRows(snapshot.items)
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"다음 기록을 불러오는 중이에요.",small:true)}
+            case .failed(let failure):
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteRunsReadFailure")
+                if failure.canManuallyRetry { Button("다시 시도"){remoteReads.retryRunRecords()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRetry") }
+            case .failedLoadingMore(let snapshot,let failure):
+                remoteRunRows(snapshot.items)
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteRunsReadFailure")
+                if failure.canManuallyRetry { Button("다시 시도"){remoteReads.retryRunRecords()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRetry") }
+            }
+            WText(text:"서버 응답과 기기 저장 기록은 따로 표시해요. 이 화면에서는 기록을 수정하거나 업로드하지 않아요.",small:true)
+        }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunRecordsPanel")
+    }
+    @ViewBuilder private func remoteRunRows(_ items:[BackendRunSummary])->some View {
+        ForEach(items){summary in
+            Button{ui.openRemoteRecord(id:summary.id)}label:{
+                HStack(alignment:.top,spacing:12){
+                    Image(systemName:"figure.run.circle.fill").font(.system(size:25)).foregroundStyle(W.lime).frame(width:38,height:42)
+                    VStack(alignment:.leading,spacing:5){
+                        Text(summary.title).font(W.font(14,.semibold)).fixedSize(horizontal:false,vertical:true)
+                        Text("\(summary.runDate.replacingOccurrences(of:"-",with:".")) · \(kSTTime(summary.startedAt)) KST").font(W.font(11)).foregroundStyle(W.muted)
+                        Text("원본 \(MovNumber.display(Double(summary.distanceMeters)/1000)) km · 유효 \(summary.validDistanceMeters.map{MovNumber.display(Double($0)/1000)+" km"} ?? "확인 중")")
+                            .font(W.font(12,.medium)).accessibilityIdentifier("remoteRunDistances-\(summary.id)")
+                        HStack(spacing:7){
+                            Text("이동 \(RunRecord.clock(Double(summary.movingSeconds))) · 유효 \(summary.validSeconds.map{RunRecord.clock(Double($0))} ?? "확인 중")").font(W.font(11)).foregroundStyle(W.muted)
+                            if let reward=remotePointReward(summary.pointReward){WRunPointRewardIndicator(reward:reward,identifier:"remoteRunReward-\(summary.id)")}
+                        }
+                    }
+                    Spacer(minLength:2);Image(systemName:"chevron.right").font(W.font(12)).foregroundStyle(W.muted).padding(.top,5)
+                }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,10).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("remoteRun-\(summary.id)").overlay(alignment:.bottom){W.line.frame(height:1)}
+        }
+    }
+    private func kSTTime(_ date:Date)->String {let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.timeZone=TimeZone(identifier:"Asia/Seoul");formatter.dateFormat="HH:mm";return formatter.string(from:date)}
+    private func remotePointReward(_ reward:BackendRunPointReward?)->RunPointReward? {
+        guard let reward,let status=RunPointRewardStatus(rawValue:reward.status.rawValue) else{return nil}
+        return try? RunPointReward(status:status,pointsAwarded:reward.pointsAwarded.flatMap{Int(exactly:$0)})
+    }
     @ViewBuilder func recordRow(_ r:RunRecord,home:Bool=false)->some View {
         let validSeconds=r.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? r.seconds
         let pace=r.kilometers>0 && r.pace.count==4 ? "0"+r.pace:r.pace
@@ -122,7 +175,50 @@ extension WireframeRoot {
         let suffix=WReviewMode.tools ? " · \(record.isExample == true ? "가상 예시":"데모 기록")":""
         return formatter.string(from:record.date)+suffix
     }
-    var recordDetail:some View {
+    @ViewBuilder var recordDetail:some View {
+        if ui.remoteSelectedRunID != nil { remoteRecordDetail }
+        else { localRecordDetail }
+    }
+    private var remoteRecordDetail:some View {
+        VStack(spacing:0){
+            WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("L01")}else{back()}})
+            ScrollView{VStack(alignment:.leading,spacing:18){
+                switch remoteReads.runDetailState {
+                case .idle:
+                    HStack(spacing:9){ProgressView().controlSize(.small);WText(text:"서버 기록을 불러오는 중이에요.",small:true)}.frame(maxWidth:.infinity,minHeight:120,alignment:.center)
+                case .loading:
+                    HStack(spacing:9){ProgressView().controlSize(.small);WText(text:"서버 기록을 불러오는 중이에요.",small:true)}.frame(maxWidth:.infinity,minHeight:120,alignment:.center)
+                case .loaded(let detail) where detail.summary.id == ui.remoteSelectedRunID:
+                    let summary=detail.summary
+                    WText(text:"\(summary.runDate.replacingOccurrences(of:"-",with:".")) · \(kSTTime(summary.startedAt)) KST 시작",small:true).accessibilityIdentifier("remoteRunStartedAt")
+                    Text(summary.title).font(W.font(23,.semibold)).fixedSize(horizontal:false,vertical:true)
+                    VStack(alignment:.leading,spacing:10){
+                        remoteRunMetric("원본 거리","\(MovNumber.display(Double(summary.distanceMeters)/1000)) km")
+                        remoteRunMetric("유효 거리",summary.validDistanceMeters.map{"\(MovNumber.display(Double($0)/1000)) km"} ?? "확인 중")
+                        remoteRunMetric("원본 이동 시간",RunRecord.clock(Double(summary.movingSeconds)))
+                        remoteRunMetric("유효 러닝 시간",summary.validSeconds.map{RunRecord.clock(Double($0))} ?? "확인 중")
+                        remoteRunMetric("판정",summary.verdictReason.map{"\(summary.verdict) · \($0)"} ?? summary.verdict)
+                    }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunSummaryMetrics")
+                    if let reward=remotePointReward(summary.pointReward){WRunPointRewardRow(reward:reward,identifier:"remoteRunReward-detail")}
+                    if let memo=summary.memo,!memo.isEmpty{WText(text:memo,small:true)}
+                    WRow(title:"경로 점",value:"\(detail.points.count)개",plain:true)
+                    WRow(title:"일시정지 구간",value:"\(detail.pauses.count)개",plain:true)
+                    if let judgement=detail.judgement {
+                        VStack(alignment:.leading,spacing:8){Text("서버 판정 근거 · \(judgement.algorithmVersion)").font(W.font(13,.semibold));if judgement.exclusions.isEmpty{WText(text:"제외 구간이 없어요.",small:true)}else{ForEach(Array(judgement.exclusions.enumerated()),id:\.offset){_,item in WText(text:"\(item.reason) · \(MovNumber.display(Double(item.distanceMeters)/1000)) km · \(RunRecord.clock(Double(item.seconds)))",small:true)}}}
+                            .frame(maxWidth:.infinity,alignment:.leading).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteRunJudgement")
+                    }
+                    WNotice(text:"이 정보는 서버가 저장한 기록의 읽기 전용 상세예요. 경로 좌표는 화면에 표시하지 않아요.")
+                case .loaded:
+                    WNotice(text:"선택한 기록이 바뀌었어요. 목록으로 돌아가 다시 선택해 주세요.",danger:true)
+                case .failed(_,let failure):
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteRunDetailFailure")
+                    if failure.canManuallyRetry { Button("다시 시도"){remoteReads.retryRunDetail()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunDetailRetry") }
+                }
+            }.padding(24)}
+        }
+    }
+    private func remoteRunMetric(_ title:String,_ value:String)->some View {HStack{Text(title).font(W.font(13));Spacer();Text(value).font(W.font(14,.semibold)).monospacedDigit()}}
+    private var localRecordDetail:some View {
         VStack(spacing:0){
             WHeader(title:"러닝 기록",back:{if ui.path.isEmpty{go("L01")}else{back()}})
             ScrollViewReader{proxy in
