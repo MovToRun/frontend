@@ -275,6 +275,227 @@ enum WRootTab: Int, CaseIterable {
     var assetName: String? { [nil, "run", nil, "community", "profile"][rawValue] }
 }
 
+enum WireframeRemoteReadFeature: String, Equatable, Sendable {
+    case profile
+    case points
+
+    static func forScreen(_ screen: String) -> WireframeRemoteReadFeature? {
+        switch screen {
+        case "M01": .profile
+        case "POINTS", "B02": .points
+        default: nil
+        }
+    }
+}
+
+struct WireframeRemoteReadDependencies {
+    let memberProfileLoader: MemberProfileLoader?
+    let pointsWalletLoader: PointsWalletLoader?
+
+    init(
+        memberProfileLoader: MemberProfileLoader? = nil,
+        pointsWalletLoader: PointsWalletLoader? = nil
+    ) {
+        self.memberProfileLoader = memberProfileLoader
+        self.pointsWalletLoader = pointsWalletLoader
+    }
+}
+
+@MainActor @Observable final class WireframeRemoteReadBridge {
+    private enum ManualOperationKind {
+        case profileRetry
+        case pointsRetry
+        case pointsPage
+    }
+
+    private let memberProfileLoader: MemberProfileLoader?
+    private let pointsWalletLoader: PointsWalletLoader?
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var manualOperationID: UUID?
+    @ObservationIgnored private var manualOperationTask: Task<Void, Never>?
+    @ObservationIgnored private var manualOperationKind: ManualOperationKind?
+    @ObservationIgnored private var manualPointsPreviousState: PointsWalletReadState?
+    private(set) var accountScopeID: String?
+    private(set) var activeFeature: WireframeRemoteReadFeature?
+    private(set) var memberProfileState: MemberProfileLoadState = .idle
+    private(set) var pointsState: PointsWalletReadState = .idle
+
+    init(dependencies: WireframeRemoteReadDependencies? = nil) {
+        memberProfileLoader = dependencies?.memberProfileLoader
+        pointsWalletLoader = dependencies?.pointsWalletLoader
+    }
+
+    var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
+    var hasPointsDependency: Bool { pointsWalletLoader != nil }
+    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency }
+
+    func accountDidChange(to nextScopeID: String) {
+        guard accountScopeID != nextScopeID else { return }
+        cancelManualOperation()
+        generation &+= 1
+        accountScopeID = nextScopeID
+        activeFeature = nil
+        memberProfileState = .idle
+        pointsState = .idle
+    }
+
+    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String) async {
+        if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        let sameFeature = activeFeature == feature && feature != nil
+        cancelManualOperation(restorePreviousState: sameFeature)
+        generation &+= 1
+        let requestGeneration = generation
+        activeFeature = feature
+
+        guard let feature else {
+            memberProfileState = .idle
+            pointsState = .idle
+            return
+        }
+
+        if !sameFeature {
+            memberProfileState = .idle
+            pointsState = .idle
+        } else {
+            if memberProfileState == .loading { memberProfileState = .idle }
+            switch pointsState {
+            case .loading, .loadingMore:
+                pointsState = .idle
+            default:
+                break
+            }
+        }
+
+        switch feature {
+        case .profile:
+            guard let memberProfileLoader else { memberProfileState = .idle; return }
+            guard memberProfileState == .idle else { return }
+            memberProfileState = .loading
+            await memberProfileLoader.load()
+            let result = await memberProfileLoader.state
+            guard requestGeneration == generation else { return }
+            if Task.isCancelled {
+                memberProfileState = .idle
+                activeFeature = nil
+            } else {
+                memberProfileState = result
+            }
+        case .points:
+            guard let pointsWalletLoader else { pointsState = .idle; return }
+            guard pointsState == .idle else { return }
+            pointsState = .loading
+            await pointsWalletLoader.load()
+            let result = await pointsWalletLoader.state
+            guard requestGeneration == generation else { return }
+            if Task.isCancelled {
+                pointsState = .idle
+                activeFeature = nil
+            } else {
+                pointsState = result
+            }
+        }
+    }
+
+    func retryMemberProfile() {
+        guard activeFeature == .profile,
+              manualOperationTask == nil,
+              case .failed = memberProfileState,
+              let memberProfileLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .profileRetry
+        memberProfileState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            await memberProfileLoader.retry()
+            let result = await memberProfileLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.memberProfileState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryPoints() {
+        guard activeFeature == .points,
+              manualOperationTask == nil,
+              let pointsWalletLoader else { return }
+        let requestGeneration = generation
+        switch pointsState {
+        case .failed(let failure) where failure.canManuallyRetry:
+            pointsState = .loading
+        case .failedLoadingMore(let snapshot, let failure) where failure.canManuallyRetry:
+            pointsState = .loadingMore(snapshot)
+        default:
+            return
+        }
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsRetry
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.retry()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func loadNextPointsPage() {
+        guard activeFeature == .points,
+              manualOperationTask == nil,
+              case .loaded(let snapshot) = pointsState,
+              snapshot.nextCursor != nil,
+              let pointsWalletLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsPage
+        manualPointsPreviousState = pointsState
+        pointsState = .loadingMore(snapshot)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.loadNextPage()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualPointsPreviousState = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    private func cancelManualOperation(restorePreviousState: Bool = false) {
+        let task = manualOperationTask
+        manualOperationTask = nil
+        manualOperationID = nil
+        if restorePreviousState {
+            switch manualOperationKind {
+            case .profileRetry:
+                memberProfileState = .idle
+            case .pointsRetry:
+                pointsState = .idle
+            case .pointsPage:
+                if let previous = manualPointsPreviousState { pointsState = previous }
+            case nil:
+                break
+            }
+        }
+        manualOperationKind = nil
+        manualPointsPreviousState = nil
+        task?.cancel()
+    }
+}
+
 enum WCommunityVerificationStatus:String,Codable,CaseIterable {case none,pending,approved,rejected}
 enum WCommunityVerificationSubmissionResult:Equatable {case submitted,invalidActivity,alreadyPending,alreadyApproved}
 
@@ -301,6 +522,7 @@ struct WCommunityVerificationState:Codable,Equatable {
 @MainActor @Observable final class WireState {
     private let defaults:UserDefaults
     var profile:WLocalProfile
+    var remoteAccountScopeID=UUID().uuidString
     var screen="H00"
     var rootIndex=2;var previousRootIndex=2;var forward=true
     var calendarMonth=Date();var calendarDay:Date?
@@ -417,6 +639,8 @@ struct WCommunityVerificationState:Codable,Equatable {
         if videoDraft,let fixture=try? communityAttachmentStore.makeReviewVideoFixture(){communityDraftAttachments=[.video(fixture)];communityDraftTitle="영상 첨부 예시";communityDraftBody=""}
     }
     func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
+    func setLoggedIn(_ loggedIn:Bool){if profile.logged != loggedIn{profile.logged=loggedIn;remoteAccountScopeID=UUID().uuidString}}
+    func resetRemoteAccountScope(){remoteAccountScopeID=UUID().uuidString}
     func submitCommunityVerification()->Bool{
         switch communityVerification.submit(communityVerification.note){
         case .submitted:communityVerificationError="";saveCommunityVerification();communityNotificationCenter.append(WCommunityNotification(id:UUID().uuidString,title:"인증 신청이 접수됐어요",text:"커뮤니티 계정 인증 상태를 확인해 보세요.",target:.verification));return true
@@ -443,7 +667,7 @@ struct WCommunityVerificationState:Codable,Equatable {
         let target=accounts[next] ?? Account(profile:fallback,records:[],goal:RunGoal(),weekly:WeeklyGoal())
         guard let encoded=try? JSONEncoder().encode(accounts)else{return}
         defaults.set(encoded,forKey:"mov.local.accounts");defaults.set(next,forKey:"mov.local.owner")
-        profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;store.persist();save();clearShare();go("H00")
+        profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;remoteAccountScopeID=UUID().uuidString;store.persist();save();clearShare();go("H00")
     }
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
     static let passwordResetScreens:Set<String>=["A10","A11","A12","A13","A24","A25","A26","A27","A28"]
@@ -474,13 +698,37 @@ struct WCommunityVerificationState:Codable,Equatable {
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
-struct RootView:View {@Environment(\.dynamicTypeSize) var systemSize;var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")};var body:some View {Group{if captureViewport{ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot().frame(width:390,height:766).clipped().offset(y:24)}.frame(width:390,height:790,alignment:.top).clipped().ignoresSafeArea()}else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review"){WireframeRoot().frame(width:320,height:568).clipped()}else if ProcessInfo.processInfo.arguments.contains("-wire-review-size"){WireframeRoot().frame(width:388,height:764).clipped()}else{WireframeRoot()}}.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)}}
+struct RootView:View {
+    @Environment(\.dynamicTypeSize) var systemSize
+    let remoteReadDependencies: WireframeRemoteReadDependencies?
+    var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")}
+
+    init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil) {
+        self.remoteReadDependencies = remoteReadDependencies
+    }
+
+    var body: some View {
+        Group {
+            if captureViewport {
+                ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:390,height:766).clipped().offset(y:24)}
+                    .frame(width:390,height:790,alignment:.top).clipped().ignoresSafeArea()
+            } else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review") {
+                WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:320,height:568).clipped()
+            } else if ProcessInfo.processInfo.arguments.contains("-wire-review-size") {
+                WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:388,height:764).clipped()
+            } else {
+                WireframeRoot(remoteReadDependencies:remoteReadDependencies)
+            }
+        }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)
+    }
+}
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
-    init(){
+    @State var remoteReads:WireframeRemoteReadBridge
+    init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil){
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults
@@ -516,7 +764,7 @@ struct WireframeRoot:View {
             }
         }
         let state=WireState();if resetFixture{state.profile=WLocalProfile();state.profile.logged=true;state.save()}
-        _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel)
+        _ui=State(initialValue:state);_store=State(initialValue:model);_pointsStore=State(initialValue:pointModel);_remoteReads=State(initialValue:WireframeRemoteReadBridge(dependencies:remoteReadDependencies))
     }
     @State var ui=WireState()
     @State var selectedPointCategory:WPointCategory = .image
@@ -546,6 +794,8 @@ struct WireframeRoot:View {
     @Environment(\.scenePhase) var scenePhase
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
     var roots:[String]{WRootTab.allCases.map(\.route)}
+    var remoteReadFeature:WireframeRemoteReadFeature? { WireframeRemoteReadFeature.forScreen(ui.screen) }
+    var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)" }
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
@@ -588,6 +838,7 @@ struct WireframeRoot:View {
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
             if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
+            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID)}
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
@@ -624,6 +875,7 @@ struct WireframeRoot:View {
                     if ui.screen=="S05"{var record=current;record.kilometers=0;record.seconds=312;record.segments=[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")];store.records=[record];ui.selected=record.id}
                 }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
             }.onChange(of:scenePhase){_,phase in if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false};if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}}
+            .onChange(of:ui.remoteAccountScopeID){_,scopeID in remoteReads.accountDidChange(to:scopeID)}
             .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}

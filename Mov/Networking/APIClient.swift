@@ -689,7 +689,7 @@ final class PointsWalletClient: PointsWalletReading, Sendable {
     }
 }
 
-private extension PointsReadFailure {
+extension PointsReadFailure {
     var canManuallyRetry: Bool {
         switch self {
         case .pointsUnavailable, .invalidResponse, .paginationLoop:

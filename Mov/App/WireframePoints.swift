@@ -186,6 +186,84 @@ extension WireframeRoot {
         go("SHOP")
     }
 
+    @ViewBuilder private var remotePointsBalancePanel:some View {
+        if remoteReads.hasPointsDependency {
+            VStack(alignment:.leading,spacing:9){
+                Text("원격 포인트 조회").font(W.font(13,.semibold))
+                switch remoteReads.pointsState {
+                case .idle:
+                    WText(text:"조회 준비 중이에요.",small:true)
+                case .loading:
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"포인트를 불러오는 중이에요.",small:true)}
+                case .loaded(let snapshot), .loadingMore(let snapshot):
+                    HStack(alignment:.firstTextBaseline,spacing:5){Text(snapshot.balance.balancePoints.formatted()).font(W.font(27,.semibold)).monospacedDigit().accessibilityIdentifier("remotePointBalance");Text("포인트").font(W.font(12)).foregroundStyle(W.muted)}
+                    if case .loadingMore = remoteReads.pointsState { HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"다음 내역을 불러오는 중이에요.",small:true)} }
+                case .failed(let failure):
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remotePointsReadFailure")
+                    if failure.canManuallyRetry { remotePointsRetryButton }
+                case .failedLoadingMore(_,let failure):
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remotePointsReadFailure")
+                    if failure.canManuallyRetry { remotePointsRetryButton }
+                }
+                WText(text:"읽기 전용 조회예요. 아래 잔액과 상점은 이 기기의 예시 데이터예요.",small:true)
+            }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remotePointsBalancePanel")
+        }
+    }
+
+    @ViewBuilder private var remotePointsLedgerPanel:some View {
+        if remoteReads.hasPointsDependency {
+            VStack(alignment:.leading,spacing:10){
+                Text("원격 포인트 내역").font(W.font(13,.semibold))
+                switch remoteReads.pointsState {
+                case .idle:
+                    WText(text:"조회 준비 중이에요.",small:true)
+                case .loading:
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"포인트 내역을 불러오는 중이에요.",small:true)}.frame(maxWidth:.infinity,minHeight:54,alignment:.leading)
+                case .loaded(let snapshot):
+                    remotePointsLedgerRows(snapshot.entries)
+                    if snapshot.entries.isEmpty { WText(text:"원격 포인트 내역이 없어요.",small:true).accessibilityIdentifier("remotePointsEmpty") }
+                    if snapshot.nextCursor != nil { remotePointsLoadMoreButton }
+                case .loadingMore(let snapshot):
+                    remotePointsLedgerRows(snapshot.entries)
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"다음 내역을 불러오는 중이에요.",small:true)}
+                case .failed(let failure):
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remotePointsReadFailure")
+                    if failure.canManuallyRetry { remotePointsRetryButton }
+                case .failedLoadingMore(let snapshot,let failure):
+                    remotePointsLedgerRows(snapshot.entries)
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remotePointsReadFailure")
+                    if failure.canManuallyRetry { remotePointsRetryButton }
+                }
+                WText(text:"읽기 전용 조회예요. 아래 내역은 이 기기에 저장된 예시 데이터예요.",small:true)
+            }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remotePointsLedgerPanel")
+        }
+    }
+
+    private func remotePointsLedgerRows(_ entries:[PointsLedgerEntry])->some View {
+        ScrollView {
+            VStack(spacing:0){
+                ForEach(entries){entry in
+                    HStack(spacing:12){
+                        VStack(alignment:.leading,spacing:4){
+                            Text(entry.direction == .credit ? "포인트 적립":"포인트 사용").font(W.font(13,.medium))
+                            Text(entry.createdAt.formatted(date:.abbreviated,time:.omitted)).font(W.font(11)).foregroundStyle(W.muted)
+                        }
+                        Spacer()
+                        Text(entry.deltaPoints.formatted()).font(W.font(16,.semibold)).monospacedDigit()
+                    }.frame(minHeight:56).overlay(alignment:.bottom){W.line.frame(height:1)}.accessibilityElement(children:.combine).accessibilityIdentifier("remotePointEntry-\(entry.entryID)")
+                }
+            }
+        }.frame(maxHeight:220)
+    }
+
+    private var remotePointsRetryButton:some View {
+        Button("다시 시도"){remoteReads.retryPoints()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsRetry")
+    }
+
+    private var remotePointsLoadMoreButton:some View {
+        Button("더 불러오기"){remoteReads.loadNextPointsPage()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsLoadMore")
+    }
+
     var points: some View {
         VStack(spacing: 0) {
             WHeader(title: "내 포인트", trailing: AnyView(
@@ -195,6 +273,8 @@ extension WireframeRoot {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     if pointsStore.dataUnavailable { pointDataUnavailableNotice }
+                    if remoteReads.hasPointsDependency { remotePointsBalancePanel }
+                    if remoteReads.hasPointsDependency { WText(text:"이 기기에 저장된 예시 잔액",small:true) }
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 7) { WPointsMark(size: 18); Text("보유 포인트").font(W.font(15, .medium)).foregroundStyle(W.muted) }
@@ -332,6 +412,7 @@ extension WireframeRoot {
     private func pointHistory(empty: Bool) -> some View {
         VStack(spacing: 0) {
             WHeader(title: "포인트 내역", back: back)
+            if remoteReads.hasPointsDependency { remotePointsLedgerPanel }
             if pointsStore.dataUnavailable {
                 ScrollView { VStack(spacing: 14) { pointDataUnavailableNotice }.padding(.horizontal, 24).accessibilityIdentifier("unavailablePointHistoryScreen") }
             } else if empty || pointsStore.entries.isEmpty {
