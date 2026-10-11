@@ -50,6 +50,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     private enum Outcome: Sendable {
         case response(Int, Data, [String: String])
         case failure(URLError.Code)
+        case pending
     }
 
     private final class Store: @unchecked Sendable {
@@ -57,6 +58,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         private let lock = NSLock()
         private var outcomes: [Outcome] = []
         private var requests: [URLRequest] = []
+        private var pendingProtocols: [MockURLProtocol] = []
 
         func configure(_ outcomes: [Outcome]) {
             lock.lock(); defer { lock.unlock() }
@@ -75,6 +77,27 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
             lock.lock(); defer { lock.unlock() }
             return requests
         }
+
+        func addPending(_ protocolInstance: MockURLProtocol) {
+            lock.lock(); defer { lock.unlock() }
+            pendingProtocols.append(protocolInstance)
+        }
+
+        func removePending(_ protocolInstance: MockURLProtocol) {
+            lock.lock(); defer { lock.unlock() }
+            pendingProtocols.removeAll { $0 === protocolInstance }
+        }
+
+        func takePending() -> MockURLProtocol? {
+            lock.lock(); defer { lock.unlock() }
+            guard !pendingProtocols.isEmpty else { return nil }
+            return pendingProtocols.removeFirst()
+        }
+
+        func pendingCount() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return pendingProtocols.count
+        }
     }
 
     static func respond(statusCode: Int, data: Data = Data(), headers: [String: String] = [:]) {
@@ -83,6 +106,16 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     static func respondSequence(_ responses: [(Int, Data)]) {
         Store.shared.configure(responses.map { .response($0.0, $0.1, [:]) })
     }
+    static func holdFirstThenRespondSequence(_ responses: [(Int, Data)]) {
+        Store.shared.configure([.pending] + responses.map { .response($0.0, $0.1, [:]) })
+    }
+    static func suspendNext() { Store.shared.configure([.pending]) }
+    @discardableResult
+    static func resumeNextPending(statusCode: Int, data: Data = Data(), headers: [String: String] = [:]) -> Bool {
+        guard let protocolInstance = Store.shared.takePending() else { return false }
+        protocolInstance.deliver(statusCode: statusCode, data: data, headers: headers)
+        return true
+    }
     static func fail(with error: URLError.Code) { Store.shared.configure([.failure(error)]) }
     static func failThenRespond(with error: URLError.Code, statusCode: Int, data: Data) {
         Store.shared.configure([.failure(error), .response(statusCode, data, [:])])
@@ -90,6 +123,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     static func cancel() { Store.shared.configure([.failure(.cancelled)]) }
     static func reset() { Store.shared.configure([]) }
     static var requests: [URLRequest] { Store.shared.recordedRequests() }
+    static var pendingCount: Int { Store.shared.pendingCount() }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -97,19 +131,27 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         switch Store.shared.take(for: request) {
         case let .response(statusCode, data, headers):
-            guard let url = request.url,
-                  let response = HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: headers) else {
-                client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
-            }
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
+            deliver(statusCode: statusCode, data: data, headers: headers)
         case let .failure(code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
+        case .pending:
+            Store.shared.addPending(self)
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        Store.shared.removePending(self)
+    }
+
+    private func deliver(statusCode: Int, data: Data, headers: [String: String]) {
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: headers) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
 }
 
 final class APIClientTests: XCTestCase {

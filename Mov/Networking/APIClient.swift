@@ -501,13 +501,17 @@ enum PointsReadFailure: Error, Equatable, Sendable {
     var userMessage: String {
         switch self {
         case .accessTokenUnavailable, .unauthenticated:
-            return "로그인 상태를 확인한 뒤 포인트를 다시 불러와 주세요."
+            return "로그인 상태를 확인해 주세요."
         case .pointsUnavailable:
             return "포인트 정보를 잠시 불러올 수 없어요. 다시 시도해 주세요."
-        case .invalidPageSize, .invalidResponse, .paginationLoop:
+        case .invalidPageSize:
+            return "포인트 내역 요청의 페이지 크기를 확인해 주세요."
+        case .invalidResponse, .paginationLoop:
             return "포인트 내역을 불러오지 못했어요. 다시 시도해 주세요."
-        case .serverFailure:
+        case .serverFailure(let statusCode, _) where (500...599).contains(statusCode):
             return "포인트 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요."
+        case .serverFailure:
+            return "포인트 정보를 불러오지 못했어요."
         case .transport:
             return "네트워크 연결을 확인한 뒤 다시 시도해 주세요."
         case .cancelled:
@@ -686,6 +690,19 @@ final class PointsWalletClient: PointsWalletReading, Sendable {
 }
 
 private extension PointsReadFailure {
+    var canManuallyRetry: Bool {
+        switch self {
+        case .pointsUnavailable, .invalidResponse, .paginationLoop:
+            return true
+        case .serverFailure(let statusCode, _):
+            return (500...599).contains(statusCode)
+        case .transport:
+            return true
+        case .accessTokenUnavailable, .unauthenticated, .invalidPageSize, .cancelled:
+            return false
+        }
+    }
+
     var isRetryable: Bool {
         switch self {
         case .pointsUnavailable:
@@ -814,11 +831,11 @@ actor PointsWalletLoader {
 
     func retry() async {
         switch state {
-        case .failed(let failure) where failure.isRetryable:
+        case .failed(let failure) where failure.canManuallyRetry:
             await load()
         case .failedLoadingMore(_, .invalidResponse), .failedLoadingMore(_, .paginationLoop):
             await load()
-        case .failedLoadingMore(_, let failure) where failure.isRetryable:
+        case .failedLoadingMore(_, let failure) where failure.canManuallyRetry:
             await loadNextPage()
         default:
             return

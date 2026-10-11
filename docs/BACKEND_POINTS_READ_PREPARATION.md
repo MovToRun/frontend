@@ -11,12 +11,13 @@ was also checked against `PointWalletController` and `PointWalletApiTests`.
 - `GET /api/v1/points/me` requires bearer authentication and returns
   `{ "balancePoints": <integer> }`. A successful `0` is valid when no wallet
   row exists.
-- `GET /api/v1/points/me/entries?cursor=&size=20` returns `{ "entries": [...],
+- `GET /api/v1/points/me/entries?size=20` returns `{ "entries": [...],
   "nextCursor": null }`. Entries are in descending `id` order and expose only
   `entryId`, `direction`, `deltaPoints`, `balanceAfterPoints`, `reasonCode`, and
   `createdAt`. Direction values are `CREDIT` and `DEBIT`.
 - Cursor values are opaque and URL-safe. Page size defaults to 20 and must be
-  between 1 and 50. Both endpoints return `Cache-Control: no-store`.
+  between 1 and 50. Omit `cursor` on the first page; include it only when the
+  server returned a next cursor. Both endpoints return `Cache-Control: no-store`.
 - `401 UNAUTHENTICATED` means the request failed authentication. A closed
   feature gate or unavailable wallet/ledger store returns `503 POINT_UNAVAILABLE`.
 
@@ -41,7 +42,16 @@ responses, and `503 POINT_UNAVAILABLE` remain typed failures with no zero-value
 fallback. `401` is not retried here; the future session coordinator owns the
 single refresh attempt. `503 POINT_UNAVAILABLE` and selected transient transport
 failures receive at most one automatic retry. Raw problem titles and backend
-exception details are not surfaced to the UI.
+exception details are not surfaced to the UI. The loader's explicit retry action
+also retries malformed responses, cursor-loop recovery, and server failures
+with 5xx status codes, and allows a user-initiated retry for any transport
+failure. Its user-facing copy offers retry only for failures that the action can
+retry; 4xx responses, invalid page sizes, and auth-state failures do not suggest
+the loader retry action. This does not expand the automatic retry policy.
+
+Restricting authorization-bearing requests across redirects remains a transport
+hardening follow-up. No cross-host redirect was demonstrated or is claimed as a
+confirmed vulnerability in this change.
 
 The existing SwiftUI points screens and `WPointsStore` are unchanged. Their
 UserDefaults-backed entries and sample fixture remain local and visually
@@ -51,10 +61,11 @@ server host, or live request is included.
 
 ## Verification boundaries
 
-`MovNetworkingTests` passed 29/29 tests with `MockURLProtocol` fixtures,
-including zero-vs-auth-failure, point-service unavailability, DTO/date mapping,
-query encoding, page-size bounds, cursor progression/loop handling, page retry,
-and preservation of the prior remote page after a temporary error. The network
+`MovNetworkingTests` passed 35/35 with `MockURLProtocol` fixtures, including
+zero-vs-auth-failure, point-service unavailability, DTO/date mapping, query
+encoding, page-size bounds, cursor progression/loop handling, manual-retry copy
+consistency, concurrent load ordering, actual task cancellation, and
+preservation of the prior remote page after a temporary error. The network
 source passed an iOS Simulator SDK 26.2 cross-target typecheck under Xcode 26.3.
 No live backend request or full app/UI test was run. Pixel/motion QA and wiring
 the remote loader to an authenticated UI flow remain unverified.

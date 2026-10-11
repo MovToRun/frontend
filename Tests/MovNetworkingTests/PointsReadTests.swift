@@ -40,6 +40,14 @@ private func pointsPageBody(entryID: String, nextCursor: String?) -> Data {
     """.utf8)
 }
 
+private func waitForPendingURLProtocol() async -> Bool {
+    for _ in 0..<500 {
+        if MockURLProtocol.pendingCount > 0 { return true }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return false
+}
+
 final class PointsReadTests: XCTestCase {
     func testZeroBalanceIsAValidSuccessfulResponse() async throws {
         MockURLProtocol.respond(statusCode: 200, data: pointsBalanceBody(0))
@@ -77,6 +85,67 @@ final class PointsReadTests: XCTestCase {
             XCTAssertFalse(String(describing: failure).contains("private ledger detail"))
             XCTAssertFalse(failure.userMessage.contains("private ledger detail"))
         }
+        XCTAssertEqual(MockURLProtocol.requests.count, 2)
+    }
+
+    func testActualTaskCancellationDoesNotTriggerAutomaticRetry() async throws {
+        MockURLProtocol.suspendNext()
+        let client = try makePointsClient(
+            retryPolicy: PointsReadRetryPolicy(maximumAttempts: 2, delayNanoseconds: 0)
+        )
+        let requestTask = Task { () -> PointsReadFailure? in
+            do {
+                _ = try await client.fetchBalance()
+                return nil
+            } catch let failure as PointsReadFailure {
+                return failure
+            } catch {
+                return nil
+            }
+        }
+
+        let didSuspend = await waitForPendingURLProtocol()
+        XCTAssertTrue(didSuspend, "Expected URLProtocol to suspend the request")
+        requestTask.cancel()
+
+        let failure = await requestTask.value
+        XCTAssertEqual(failure, .cancelled)
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+        XCTAssertEqual(MockURLProtocol.pendingCount, 0)
+    }
+
+    func testManualRetryCanRetryNonTransientTransportFailureWithoutAutomaticRetry() async throws {
+        MockURLProtocol.failThenRespond(
+            with: .badServerResponse,
+            statusCode: 200,
+            data: pointsBalanceBody(20)
+        )
+        let loader = PointsWalletLoader(
+            client: try makePointsClient(
+                retryPolicy: PointsReadRetryPolicy(maximumAttempts: 2, delayNanoseconds: 0)
+            )
+        )
+
+        await loader.load()
+        guard case .failed(let failure) = await loader.state else {
+            XCTFail("Expected a transport failure")
+            return
+        }
+        XCTAssertEqual(failure, .transport(.badServerResponse))
+        XCTAssertTrue(failure.userMessage.contains("다시 시도"))
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+
+        MockURLProtocol.respondSequence([
+            (200, pointsBalanceBody(20)),
+            (200, pointsPageBody(entryID: "22", nextCursor: nil))
+        ])
+        await loader.retry()
+
+        guard case .loaded(let snapshot) = await loader.state else {
+            XCTFail("Expected an explicit retry to recover from the transport failure")
+            return
+        }
+        XCTAssertEqual(snapshot.entries.map(\.entryID), ["22"])
         XCTAssertEqual(MockURLProtocol.requests.count, 2)
     }
 
@@ -216,5 +285,117 @@ final class PointsReadTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.entries.map(\.entryID), ["22"])
         XCTAssertEqual(MockURLProtocol.requests.count, 3)
+    }
+
+    func testConcurrentLoadKeepsNewerResultWhenOlderRequestCompletesLast() async throws {
+        MockURLProtocol.holdFirstThenRespondSequence([
+            (200, pointsBalanceBody(99)),
+            (200, pointsPageBody(entryID: "new", nextCursor: nil))
+        ])
+        let loader = PointsWalletLoader(client: try makePointsClient(), pageSize: 1)
+        let olderLoad = Task { await loader.load() }
+
+        let didSuspend = await waitForPendingURLProtocol()
+        XCTAssertTrue(didSuspend, "Expected the older load to remain pending")
+        guard didSuspend else {
+            await olderLoad.value
+            return
+        }
+        let newerLoad = Task { await loader.load() }
+        await newerLoad.value
+
+        guard case .loaded(let newerSnapshot) = await loader.state else {
+            XCTFail("Expected the newer load to publish its result")
+            _ = MockURLProtocol.resumeNextPending(statusCode: 200, data: pointsBalanceBody(1))
+            await olderLoad.value
+            return
+        }
+        XCTAssertEqual(newerSnapshot.balance.balancePoints, 99)
+        XCTAssertEqual(newerSnapshot.entries.map(\.entryID), ["new"])
+        XCTAssertEqual(MockURLProtocol.requests.count, 3)
+
+        XCTAssertTrue(MockURLProtocol.resumeNextPending(statusCode: 200, data: pointsBalanceBody(1)))
+        await olderLoad.value
+
+        guard case .loaded(let finalSnapshot) = await loader.state else {
+            XCTFail("Expected the stale request to leave the newer state intact")
+            return
+        }
+        XCTAssertEqual(finalSnapshot.balance.balancePoints, 99)
+        XCTAssertEqual(finalSnapshot.entries.map(\.entryID), ["new"])
+        XCTAssertEqual(MockURLProtocol.requests.count, 3)
+    }
+
+    func testExplicitRetryRecoversFromInvalidResponse() async throws {
+        MockURLProtocol.respondSequence([
+            (200, Data("{\"balance\":20}".utf8)),
+            (200, pointsBalanceBody(20)),
+            (200, pointsPageBody(entryID: "22", nextCursor: nil))
+        ])
+        let loader = PointsWalletLoader(client: try makePointsClient())
+
+        await loader.load()
+        guard case .failed(.invalidResponse) = await loader.state else {
+            XCTFail("Expected a malformed first response to fail")
+            return
+        }
+        XCTAssertTrue(PointsReadFailure.invalidResponse.userMessage.contains("다시 시도"))
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+
+        await loader.retry()
+
+        guard case .loaded(let snapshot) = await loader.state else {
+            XCTFail("Expected explicit retry to recover from the malformed response")
+            return
+        }
+        XCTAssertEqual(snapshot.balance.balancePoints, 20)
+        XCTAssertEqual(snapshot.entries.map(\.entryID), ["22"])
+        XCTAssertEqual(MockURLProtocol.requests.count, 3)
+    }
+
+    func testExplicitRetryRecoversFromServerFailureSuggestedByCopy() async throws {
+        MockURLProtocol.respondSequence([
+            (500, Data("{\"code\":\"INTERNAL_ERROR\"}".utf8)),
+            (200, pointsBalanceBody(20)),
+            (200, pointsPageBody(entryID: "22", nextCursor: nil))
+        ])
+        let loader = PointsWalletLoader(client: try makePointsClient())
+
+        await loader.load()
+        guard case .failed(let failure) = await loader.state else {
+            XCTFail("Expected the server failure to be exposed")
+            return
+        }
+        XCTAssertEqual(failure, .serverFailure(statusCode: 500, requestID: nil))
+        XCTAssertTrue(failure.userMessage.contains("다시 시도"))
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+
+        await loader.retry()
+
+        guard case .loaded(let snapshot) = await loader.state else {
+            XCTFail("Expected explicit retry to recover from the server failure")
+            return
+        }
+        XCTAssertEqual(snapshot.balance.balancePoints, 20)
+        XCTAssertEqual(snapshot.entries.map(\.entryID), ["22"])
+        XCTAssertEqual(MockURLProtocol.requests.count, 3)
+    }
+
+    func testClientErrorCopyDoesNotSuggestRetryAndRetrySendsNoRequest() async throws {
+        MockURLProtocol.respond(statusCode: 400, data: Data("{\"code\":\"BAD_REQUEST\"}".utf8))
+        let loader = PointsWalletLoader(client: try makePointsClient())
+
+        await loader.load()
+        guard case .failed(let failure) = await loader.state else {
+            XCTFail("Expected the client error to be exposed")
+            return
+        }
+        XCTAssertEqual(failure, .serverFailure(statusCode: 400, requestID: nil))
+        XCTAssertFalse(failure.userMessage.contains("다시 시도"))
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+
+        await loader.retry()
+
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
     }
 }
