@@ -393,6 +393,36 @@ import UIKit
         }
     }
 
+    func testInjectedRunRecordReadRendersContractAndKeepsLocalHistoryOnFailure() {
+        let suite="run-read-fixture-\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        let remotePanel=app.descendants(matching:.any)["remoteRunRecordsPanel"]
+        XCTAssertTrue(remotePanel.waitForExistence(timeout:10),app.debugDescription)
+        let remoteRow=app.buttons["remoteRun-fixture-run-104"]
+        XCTAssertTrue(remoteRow.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(app.staticTexts["remoteRunDistances-fixture-run-104"].label,"원본 6.4 km · 유효 6.1 km")
+        XCTAssertEqual(app.descendants(matching:.any)["remoteRunReward-fixture-run-104"].label,"러닝 포인트 0 포인트 적립")
+        XCTAssertTrue(app.staticTexts["기기에 저장된 기록"].exists,"Remote rows stay separate from the local record collection")
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"The local sample record must remain present")
+
+        remoteRow.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["remoteRunSummaryMetrics"].exists,app.debugDescription)
+        XCTAssertEqual(app.descendants(matching:.any)["remoteRunReward-detailValue"].label,"러닝 포인트 0 포인트 적립")
+        XCTAssertTrue(app.staticTexts["경로 점"].exists)
+        app.terminate()
+
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-run-records-fixture","-wire-run-records-fail","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["remoteRunsReadFailure"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"A server failure must not erase the local history or become an empty list")
+        XCTAssertFalse(app.descendants(matching:.any)["recordLookupFailure"].exists)
+        app.terminate()
+    }
+
     func testReview52BrandMarksRenderFromLocalAsset() {
         for screen in ["H00","H01"] {
             app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-reset","-appearance","light"]

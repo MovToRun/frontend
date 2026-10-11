@@ -1661,6 +1661,33 @@ private actor WireframeRemoteReadMock: MemberProfileFetching, PointsWalletReadin
     func observedCancelledEntryCalls()->Int{cancelledEntryCalls}
 }
 
+private actor WireframeRunRecordsReadMock: RunRecordsReading {
+    private var pages:[BackendRunPage]
+    private let details:[String:BackendRunDetail]
+    private let firstPageGate:WireframeRemoteReadGate?
+    private var pageCalls=0
+    private var cancelledPageCalls=0
+
+    init(pages:[BackendRunPage],details:[String:BackendRunDetail]=[:],firstPageGate:WireframeRemoteReadGate?=nil){
+        self.pages=pages;self.details=details;self.firstPageGate=firstPageGate
+    }
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        pageCalls+=1
+        if cursor == nil,let firstPageGate {
+            do{try await firstPageGate.wait()}
+            catch{cancelledPageCalls+=1;throw RunRecordsFailure.cancelled}
+        }
+        guard !pages.isEmpty else{throw RunRecordsFailure.invalidResponse}
+        return pages.removeFirst()
+    }
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard let detail=details[id] else{throw RunRecordsFailure.recordNotFound}
+        return detail
+    }
+    func observedPageCalls()->Int{pageCalls}
+    func observedCancelledPageCalls()->Int{cancelledPageCalls}
+}
+
 extension ThemeTests {
     @MainActor func testRemoteReadDependencyInjectionKeepsDefaultLocalModeAndScreenScopes() async {
         let localBridge=WireframeRemoteReadBridge()
@@ -1668,11 +1695,70 @@ extension ThemeTests {
         XCTAssertEqual(WireframeRemoteReadFeature.forScreen("M01"),.profile)
         XCTAssertEqual(WireframeRemoteReadFeature.forScreen("POINTS"),.points)
         XCTAssertEqual(WireframeRemoteReadFeature.forScreen("B02"),.points)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("L01"),.runs)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("L04"),.runs)
         XCTAssertNil(WireframeRemoteReadFeature.forScreen("SHOP"))
 
         await localBridge.activate(feature:.profile,accountScopeID:"local")
         XCTAssertEqual(localBridge.memberProfileState,.idle)
         XCTAssertEqual(localBridge.pointsState,.idle)
+        XCTAssertEqual(localBridge.runRecordsState,.idle)
+    }
+
+    @MainActor func testRemoteRunListAndDetailUseInjectedReadOnlyStateWithoutReplacingLocalRecords() async {
+        let summary=BackendRunSummary(
+            id:"run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"서버 밤 러닝",memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),updatedAt:Date(timeIntervalSince1970:1_791_215_462),
+            pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+        )
+        let detail=BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+        let mock=WireframeRunRecordsReadMock(pages:[BackendRunPage(items:[summary],nextCursor:"opaque-run-cursor")],details:[summary.id:detail])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:mock,pageSize:1)))
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Expected an explicit loaded server page");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[summary.id])
+        XCTAssertEqual(snapshot.nextCursor,"opaque-run-cursor")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id)
+        XCTAssertEqual(bridge.runDetailState,.loaded(detail))
+        XCTAssertEqual(bridge.runRecordsState,.loaded(snapshot),"Opening detail must keep the separate list snapshot")
+
+        let state=WireState()
+        state.screen="L01"
+        state.openRemoteRecord(id:summary.id)
+        XCTAssertEqual(state.screen,"L04")
+        XCTAssertEqual(state.remoteSelectedRunID,summary.id)
+        state.back()
+        XCTAssertEqual(state.screen,"L01")
+        XCTAssertNil(state.remoteSelectedRunID)
+
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.runRecordsState,.idle)
+        XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testLeavingRunListCancelsTheReadAndIgnoresItsLateResponse() async {
+        let gate=WireframeRemoteReadGate()
+        let mock=WireframeRunRecordsReadMock(pages:[BackendRunPage(items:[],nextCursor:nil)],firstPageGate:gate)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:mock)))
+        let request=Task{@MainActor in await bridge.activate(feature:.runs,accountScopeID:"account-a")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            let waiting=await gate.isWaiting()
+            if waiting {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        request.cancel()
+        await bridge.activate(feature:nil,accountScopeID:"account-a")
+        await request.value
+        XCTAssertEqual(bridge.runRecordsState,.idle)
+        XCTAssertEqual(bridge.runDetailState,.idle)
+        let cancelledCalls=await mock.observedCancelledPageCalls()
+        XCTAssertEqual(cancelledCalls,1)
     }
 
     @MainActor func testRemotePointsBridgeDistinguishesZeroAndPaginatesPages() async {

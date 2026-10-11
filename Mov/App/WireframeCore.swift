@@ -278,11 +278,13 @@ enum WRootTab: Int, CaseIterable {
 enum WireframeRemoteReadFeature: String, Equatable, Sendable {
     case profile
     case points
+    case runs
 
     static func forScreen(_ screen: String) -> WireframeRemoteReadFeature? {
         switch screen {
         case "M01": .profile
         case "POINTS", "B02": .points
+        case "L01", "L04": .runs
         default: nil
         }
     }
@@ -291,13 +293,16 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
 struct WireframeRemoteReadDependencies {
     let memberProfileLoader: MemberProfileLoader?
     let pointsWalletLoader: PointsWalletLoader?
+    let runRecordsLoader: RunRecordsLoader?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
-        pointsWalletLoader: PointsWalletLoader? = nil
+        pointsWalletLoader: PointsWalletLoader? = nil,
+        runRecordsLoader: RunRecordsLoader? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.pointsWalletLoader = pointsWalletLoader
+        self.runRecordsLoader = runRecordsLoader
     }
 }
 
@@ -306,28 +311,38 @@ struct WireframeRemoteReadDependencies {
         case profileRetry
         case pointsRetry
         case pointsPage
+        case runsRetry
+        case runsPage
+        case runDetailRetry
     }
 
     private let memberProfileLoader: MemberProfileLoader?
     private let pointsWalletLoader: PointsWalletLoader?
+    private let runRecordsLoader: RunRecordsLoader?
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var manualOperationID: UUID?
     @ObservationIgnored private var manualOperationTask: Task<Void, Never>?
     @ObservationIgnored private var manualOperationKind: ManualOperationKind?
     @ObservationIgnored private var manualPointsPreviousState: PointsWalletReadState?
+    @ObservationIgnored private var manualRunsPreviousState: RunRecordsReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
     private(set) var memberProfileState: MemberProfileLoadState = .idle
     private(set) var pointsState: PointsWalletReadState = .idle
+    private(set) var runRecordsState: RunRecordsReadState = .idle
+    private(set) var runDetailState: RunDetailReadState = .idle
+    private(set) var activeRunID: String?
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
         pointsWalletLoader = dependencies?.pointsWalletLoader
+        runRecordsLoader = dependencies?.runRecordsLoader
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
-    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency }
+    var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
+    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency }
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
@@ -337,9 +352,12 @@ struct WireframeRemoteReadDependencies {
         activeFeature = nil
         memberProfileState = .idle
         pointsState = .idle
+        runRecordsState = .idle
+        runDetailState = .idle
+        activeRunID = nil
     }
 
-    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String) async {
+    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let sameFeature = activeFeature == feature && feature != nil
         cancelManualOperation(restorePreviousState: sameFeature)
@@ -350,12 +368,18 @@ struct WireframeRemoteReadDependencies {
         guard let feature else {
             memberProfileState = .idle
             pointsState = .idle
+            runRecordsState = .idle
+            runDetailState = .idle
+            activeRunID = nil
             return
         }
 
         if !sameFeature {
             memberProfileState = .idle
             pointsState = .idle
+            runRecordsState = .idle
+            runDetailState = .idle
+            activeRunID = nil
         } else {
             if memberProfileState == .loading { memberProfileState = .idle }
             switch pointsState {
@@ -364,7 +388,9 @@ struct WireframeRemoteReadDependencies {
             default:
                 break
             }
+            if activeRunID != runID { runDetailState = .idle }
         }
+        activeRunID = feature == .runs ? runID : nil
 
         switch feature {
         case .profile:
@@ -392,6 +418,34 @@ struct WireframeRemoteReadDependencies {
                 activeFeature = nil
             } else {
                 pointsState = result
+            }
+        case .runs:
+            guard let runRecordsLoader else { runRecordsState = .idle; runDetailState = .idle; return }
+            if let runID {
+                if case .loaded(let detail) = runDetailState, detail.summary.id == runID { return }
+                if case .failed(let failedID, _) = runDetailState, failedID == runID { return }
+                runDetailState = .loading(runID: runID)
+                await runRecordsLoader.loadDetail(runID: runID)
+                let result = await runRecordsLoader.detailState
+                guard requestGeneration == generation else { return }
+                if Task.isCancelled {
+                    runDetailState = .idle
+                    activeFeature = nil
+                } else {
+                    runDetailState = result
+                }
+            } else {
+                guard runRecordsState == .idle else { return }
+                runRecordsState = .loading
+                await runRecordsLoader.load()
+                let result = await runRecordsLoader.state
+                guard requestGeneration == generation else { return }
+                if Task.isCancelled {
+                    runRecordsState = .idle
+                    activeFeature = nil
+                } else {
+                    runRecordsState = result
+                }
             }
         }
     }
@@ -474,6 +528,76 @@ struct WireframeRemoteReadDependencies {
         }
     }
 
+    func retryRunRecords() {
+        guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              let runRecordsLoader else { return }
+        switch runRecordsState {
+        case .failed(let failure) where failure.canManuallyRetry:
+            runRecordsState = .loading
+        case .failedLoadingMore(let snapshot, let failure) where failure.canManuallyRetry:
+            manualRunsPreviousState = .failedLoadingMore(snapshot, failure)
+            runRecordsState = .loadingMore(snapshot)
+        default:
+            return
+        }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runsRetry
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.retry()
+            let result = await runRecordsLoader.state
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualRunsPreviousState = nil
+            self.runRecordsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func loadNextRunRecordsPage() {
+        guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              case .loaded(let snapshot) = runRecordsState, snapshot.nextCursor != nil,
+              let runRecordsLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runsPage
+        manualRunsPreviousState = runRecordsState
+        runRecordsState = .loadingMore(snapshot)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.loadNextPage()
+            let result = await runRecordsLoader.state
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualRunsPreviousState = nil
+            self.runRecordsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryRunDetail() {
+        guard activeFeature == .runs, let runID = activeRunID, manualOperationTask == nil,
+              case .failed(let failedID, let failure) = runDetailState, failedID == runID,
+              failure.canManuallyRetry, let runRecordsLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runDetailRetry
+        runDetailState = .loading(runID: runID)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.retryDetail(runID: runID)
+            let result = await runRecordsLoader.detailState
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.runDetailState = Task.isCancelled ? .idle : result
+        }
+    }
+
     private func cancelManualOperation(restorePreviousState: Bool = false) {
         let task = manualOperationTask
         manualOperationTask = nil
@@ -486,12 +610,20 @@ struct WireframeRemoteReadDependencies {
                 pointsState = .idle
             case .pointsPage:
                 if let previous = manualPointsPreviousState { pointsState = previous }
+            case .runsRetry:
+                if let previous = manualRunsPreviousState { runRecordsState = previous }
+                else { runRecordsState = .idle }
+            case .runsPage:
+                if let previous = manualRunsPreviousState { runRecordsState = previous }
+            case .runDetailRetry:
+                runDetailState = .idle
             case nil:
                 break
             }
         }
         manualOperationKind = nil
         manualPointsPreviousState = nil
+        manualRunsPreviousState = nil
         task?.cancel()
     }
 }
@@ -528,6 +660,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var calendarMonth=Date();var calendarDay:Date?
     var path:[String]=[]
     var selected:UUID?
+    var remoteSelectedRunID:String?
     var communityPosts=WCommunityFixtures.posts
     var communityAttachmentStore=WCommunityAttachmentStore()
     var communityDraftAttachments:[WCommunityAttachment]=[]
@@ -689,14 +822,16 @@ struct WCommunityVerificationState:Codable,Equatable {
         leaveAuth(for:"T05");forward=false;screen="T05";pending="T05";error=""
     }
     func go(_ next:String){guard next != screen else{return};
+        if screen == "L04", next != "L04" { remoteSelectedRunID = nil }
         if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12","A04"].contains(screen)){
             leaveAuth(for:next);path=[];screen=next;forward=true;rootIndex=2;error="";return
         };if next=="T05" && (Self.providerRoutes.contains(screen) || resetBack=="T05"){returnToProviders();return};if ["T17","A18"].contains(next){if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index+1))}else{path=["T01","T05"]};leaveAuth(for:next);forward=true;screen=next;error="";return};if screen=="A18" && next=="A01"{path=[];leaveAuth(for:next);screen=next;error="";return};leaveAuth(for:next);forward=true;let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][next] ?? roots.firstIndex(of:next){forward=index>rootIndex;previousRootIndex=rootIndex;rootIndex=index};path.append(screen);screen=next;error=""}
-    func openRecord(_ record:RunRecord){selected=record.id;forward=true;path.append(screen);screen="L04";error=""}
+    func openRecord(_ record:RunRecord){remoteSelectedRunID=nil;selected=record.id;forward=true;path.append(screen);screen="L04";error=""}
+    func openRemoteRecord(id:String){remoteSelectedRunID=id;selected=nil;forward=true;path.append(screen);screen="L04";error=""}
     func back(){
         if screen=="A15"{go("H00");return}
         if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
-        if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
+        if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if screen == "L04", destination != "L04"{remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
 struct RootView:View {
     @Environment(\.dynamicTypeSize) var systemSize
@@ -707,21 +842,58 @@ struct RootView:View {
         self.remoteReadDependencies = remoteReadDependencies
     }
 
+    private var resolvedRemoteReadDependencies:WireframeRemoteReadDependencies? {
+        if let remoteReadDependencies { return remoteReadDependencies }
+        guard ProcessInfo.processInfo.arguments.contains("-wire-run-records-fixture") else { return nil }
+        return WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:WireframeRunRecordsFixture(
+            fails:ProcessInfo.processInfo.arguments.contains("-wire-run-records-fail")
+        )))
+    }
+
     var body: some View {
         Group {
             if captureViewport {
-                ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:390,height:766).clipped().offset(y:24)}
+                ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:390,height:766).clipped().offset(y:24)}
                     .frame(width:390,height:790,alignment:.top).clipped().ignoresSafeArea()
             } else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review") {
-                WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:320,height:568).clipped()
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:320,height:568).clipped()
             } else if ProcessInfo.processInfo.arguments.contains("-wire-review-size") {
-                WireframeRoot(remoteReadDependencies:remoteReadDependencies).frame(width:388,height:764).clipped()
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:388,height:764).clipped()
             } else {
-                WireframeRoot(remoteReadDependencies:remoteReadDependencies)
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies)
             }
         }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)
     }
 }
+
+/// An in-memory UI test seam. The normal app entry point never supplies this reader.
+private struct WireframeRunRecordsFixture:RunRecordsReading {
+    let fails:Bool
+
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        if fails { throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-unavailable") }
+        guard cursor == nil else { return BackendRunPage(items:[],nextCursor:nil) }
+        return BackendRunPage(items:[summary],nextCursor:nil)
+    }
+
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard id == summary.id else { throw RunRecordsFailure.recordNotFound }
+        return BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+    }
+
+    private var summary:BackendRunSummary {
+        let formatter=ISO8601DateFormatter()
+        return BackendRunSummary(
+            id:"fixture-run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:2,
+            startedAt:formatter.date(from:"2026-10-05T23:50:00+09:00")!,endedAt:formatter.date(from:"2026-10-06T00:30:00+09:00"),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"서버 밤 러닝",memo:"fixture only",createdAt:formatter.date(from:"2026-10-06T00:31:02+09:00")!,
+            updatedAt:formatter.date(from:"2026-10-06T00:31:02+09:00")!,pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+        )
+    }
+}
+
 struct WireframeRoot:View {
     @MainActor private static var didPrepareFixture=false
     @State var store:RunStore
@@ -794,8 +966,11 @@ struct WireframeRoot:View {
     @Environment(\.scenePhase) var scenePhase
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
     var roots:[String]{WRootTab.allCases.map(\.route)}
-    var remoteReadFeature:WireframeRemoteReadFeature? { WireframeRemoteReadFeature.forScreen(ui.screen) }
-    var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)" }
+    var remoteReadFeature:WireframeRemoteReadFeature? {
+        if ui.screen == "L04", ui.remoteSelectedRunID == nil { return nil }
+        return WireframeRemoteReadFeature.forScreen(ui.screen)
+    }
+    var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)|\(ui.remoteSelectedRunID ?? "")" }
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
@@ -838,7 +1013,7 @@ struct WireframeRoot:View {
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
             if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
-            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID)}
+            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID)}
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
