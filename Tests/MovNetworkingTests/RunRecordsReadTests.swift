@@ -12,9 +12,13 @@ private actor RunRecordsRecordingTransport: APIResponseSending {
     }
 
     private var responses: [APIClientResponse]
+    private var failures: [APIClientError]
     private var requests: [Request] = []
 
-    init(responses: [APIClientResponse]) { self.responses = responses }
+    init(responses: [APIClientResponse], failures: [APIClientError] = []) {
+        self.responses = responses
+        self.failures = failures
+    }
 
     func sendResponse(
         path: String,
@@ -24,6 +28,7 @@ private actor RunRecordsRecordingTransport: APIResponseSending {
         queryItems: [URLQueryItem]
     ) async throws -> APIClientResponse {
         requests.append(Request(path: path, method: method, body: body, headers: headers, queryItems: queryItems))
+        if !failures.isEmpty { throw failures.removeFirst() }
         guard !responses.isEmpty else { throw APIClientError.unexpectedResponse }
         return responses.removeFirst()
     }
@@ -255,6 +260,73 @@ final class RunRecordsReadTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? RunRecordsFailure, .recordNotFound)
         }
+    }
+
+    func testDeleteUsesVersionQueryAndRequiresExactEmpty204() async throws {
+        let transport=RunRecordsRecordingTransport(responses:[APIClientResponse(statusCode:204,data:Data(),requestID:nil)])
+        try await makeClient(transport:transport).deleteRun(id:"104",version:7)
+        let recorded=await transport.recordedRequests()
+        let request=try XCTUnwrap(recorded.first)
+        XCTAssertEqual(request.path,"runs/104")
+        XCTAssertEqual(request.method,"DELETE")
+        XCTAssertEqual(request.queryItems,[URLQueryItem(name:"version",value:"7")])
+        XCTAssertNil(request.body)
+        XCTAssertEqual(request.headers["Authorization"],"Bearer run-test-token")
+        XCTAssertEqual(request.headers["Accept"],"application/json")
+        XCTAssertEqual(request.headers["Cache-Control"],"no-store")
+        XCTAssertNil(request.headers["Content-Type"])
+
+        for response in [
+            APIClientResponse(statusCode:200,data:Data(),requestID:nil),
+            APIClientResponse(statusCode:204,data:Data("unexpected".utf8),requestID:nil)
+        ] {
+            let invalid=RunRecordsRecordingTransport(responses:[response])
+            do { try await makeClient(transport:invalid).deleteRun(id:"104",version:7); XCTFail("Only an empty 204 confirms deletion") }
+            catch { XCTAssertEqual(error as? RunRecordsFailure,.invalidResponse) }
+        }
+    }
+
+    func testDeleteTreats404AsAmbiguousAndMapsVersionConflictOnlyByCode() async throws {
+        let missing=RunRecordsRecordingTransport(responses:[APIClientResponse(statusCode:404,data:Data(#"{"code":"NOT_FOUND"}"#.utf8),requestID:nil)])
+        do { try await makeClient(transport:missing).deleteRun(id:"104",version:3); XCTFail("A hidden-owner 404 must never mean deletion succeeded") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.recordNotFound) }
+
+        let conflict=RunRecordsRecordingTransport(responses:[APIClientResponse(statusCode:409,data:Data(#"{"code":"VERSION_CONFLICT"}"#.utf8),requestID:nil)])
+        do { try await makeClient(transport:conflict).deleteRun(id:"104",version:3); XCTFail("Expected a version conflict") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.versionConflict) }
+
+        let otherConflict=RunRecordsRecordingTransport(responses:[APIClientResponse(statusCode:409,data:Data(#"{"code":"CONFLICT"}"#.utf8),requestID:nil)])
+        do { try await makeClient(transport:otherConflict).deleteRun(id:"104",version:3); XCTFail("Unknown 409 codes must stay failures") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.serverFailure(statusCode:409,requestID:nil)) }
+    }
+
+    func testDeleteDoesNotAutoRetryLostResponseAndManualRetryUsesSameIdAndVersion() async throws {
+        let transport=RunRecordsRecordingTransport(
+            responses:[APIClientResponse(statusCode:204,data:Data(),requestID:nil)],
+            failures:[.transport(.networkConnectionLost)]
+        )
+        let client=try makeClient(attempts:2,transport:transport)
+        do { try await client.deleteRun(id:"104",version:9); XCTFail("The first response was lost") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.transport(.networkConnectionLost)) }
+        let afterLostResponse=await transport.recordedRequests()
+        XCTAssertEqual(afterLostResponse.count,1,"DELETE must not retry automatically after an uncertain transport failure")
+
+        try await client.deleteRun(id:"104",version:9)
+        let requests=await transport.recordedRequests()
+        XCTAssertEqual(requests.count,2)
+        XCTAssertEqual(requests.map(\.path),["runs/104","runs/104"])
+        XCTAssertEqual(requests.map(\.queryItems),[[URLQueryItem(name:"version",value:"9")],[URLQueryItem(name:"version",value:"9")]])
+    }
+
+    func testDeleteRejectsUnsafeIDAndNegativeVersionWithoutSendingRequest() async throws {
+        let transport=RunRecordsRecordingTransport(responses:[])
+        let client=try makeClient(transport:transport)
+        do { try await client.deleteRun(id:"../other",version:1); XCTFail("Expected an unsafe ID to be rejected") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.invalidDeletion) }
+        do { try await client.deleteRun(id:"104",version:-1); XCTFail("Expected a negative version to be rejected") }
+        catch { XCTAssertEqual(error as? RunRecordsFailure,.invalidDeletion) }
+        let requests=await transport.recordedRequests()
+        XCTAssertTrue(requests.isEmpty)
     }
 
     func testMalformedWrapperAndPointRewardAreRejected() async throws {

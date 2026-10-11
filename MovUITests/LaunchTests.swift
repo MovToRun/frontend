@@ -74,6 +74,63 @@ import UIKit
         XCTAssertTrue(app.staticTexts["memberProfileWeightFailure"].waitForExistence(timeout:5))
         XCTAssertEqual(app.textFields["profileWeightInput"].value as? String,"300.001","Invalid source input must remain visible and must not be truncated")
     }
+    private func openRemoteRunDeleteFixture(extraArguments:[String]=[])->String {
+        let suite="mov.wireframe.test.run-delete.\(UUID().uuidString)"
+        app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-delete-fixture","-appearance","light"]+extraArguments
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
+        XCTAssertTrue(app.buttons["remoteRun-fixture-run-104"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"The fixture only adds a server row; the isolated local sample remains present")
+        return suite
+    }
+    private func openRemoteDeleteConfirmation() {
+        tap("remoteRun-fixture-run-104")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8))
+        let delete=app.buttons["deleteRecord"]
+        if !delete.isHittable { scrollCurrentScreen() }
+        tap("deleteRecord")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L07"].waitForExistence(timeout:8))
+    }
+    func testRemoteRunDeleteConfirmsOn204AndPreservesTheLocalSample(){
+        let suite=openRemoteRunDeleteFixture()
+        openRemoteDeleteConfirmation()
+        tap("confirmDeleteRecord")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertFalse(app.buttons["remoteRun-fixture-run-104"].exists,"A confirmed 204 removes the remote row")
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists,"A remote delete must not touch local sample records")
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+    func testRemoteRunDeleteLostResponseKeepsConfirmationAndAllowsManualIdempotentRetry(){
+        let suite=openRemoteRunDeleteFixture(extraArguments:["-wire-run-records-delete-response-lost"])
+        openRemoteDeleteConfirmation()
+        tap("confirmDeleteRecord")
+        XCTAssertTrue(app.staticTexts["remoteRunDeleteFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L07"].exists,"An uncertain response must not navigate away as if deletion were confirmed")
+        XCTAssertTrue(app.buttons["confirmDeleteRecord"].isEnabled,app.debugDescription+"\nRetry is an explicit user action on the same record")
+        tap("confirmDeleteRecord")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertFalse(app.buttons["remoteRun-fixture-run-104"].exists,"The idempotent retry succeeds and removes the remote row")
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists)
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
+    func testRemoteRunDelete404RemainsUnknownAndKeepsTheRecord(){
+        let suite=openRemoteRunDeleteFixture(extraArguments:["-wire-run-records-delete-404"])
+        openRemoteDeleteConfirmation()
+        tap("confirmDeleteRecord")
+        XCTAssertTrue(app.staticTexts["remoteRunDeleteFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["기록을 찾을 수 없거나 접근할 수 없어요. 삭제 여부를 확인하지 못했어요."].exists)
+        XCTAssertFalse(app.buttons["confirmDeleteRecord"].exists,"An ambiguous ownership-hiding 404 is not treated as success or a retryable delete")
+        tap("기록 상세 다시 확인")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:8))
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:8))
+        XCTAssertTrue(app.buttons["remoteRun-fixture-run-104"].exists,"The server record remains visible after an ambiguous 404")
+        XCTAssertTrue(app.staticTexts["가볍게 달린 아침"].exists)
+        app.terminate()
+        UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite)
+    }
     func containsBrandGreen(in image:UIImage, rect:CGRect)->Bool {
         guard let source=image.cgImage else{return false}
         let scale=image.scale

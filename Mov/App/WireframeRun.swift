@@ -228,6 +228,12 @@ extension WireframeRoot {
                             .frame(maxWidth:.infinity,alignment:.leading).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteRunJudgement")
                     }
                     WNotice(text:remoteReads.hasRunRecordsUpdater ? "거리·시간·경로와 판정 값은 수정할 수 없어요. 경로 좌표는 화면에 표시하지 않아요.":"이 정보는 서버가 저장한 기록의 읽기 전용 상세예요. 경로 좌표는 화면에 표시하지 않아요.")
+                    if remoteReads.hasRunRecordsDeleter {
+                        Button("이 러닝 기록 삭제"){go("L07")}
+                            .foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).font(W.font(13))
+                            .frame(maxWidth:.infinity,minHeight:44,alignment:.leading)
+                            .accessibilityIdentifier("deleteRecord")
+                    }
                 case .loaded:
                     WNotice(text:"선택한 기록이 바뀌었어요. 목록으로 돌아가 다시 선택해 주세요.",danger:true)
                 case .failed(_,let failure):

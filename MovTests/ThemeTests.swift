@@ -1893,7 +1893,7 @@ private actor WireframeRunRecordsReadMock: RunRecordsReading {
     func observedCancelledPageCalls()->Int{cancelledPageCalls}
 }
 
-private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating {
+private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating, RunRecordsDeleting {
     private var details: [String:BackendRunDetail]
     private var listPages: [BackendRunPage]
     private var listFetchGates: [Int:WireframeRemoteReadGate]
@@ -1908,6 +1908,14 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
     private var pendingWrite:CheckedContinuation<BackendRunSummary,Error>?
     private var pendingRunID:String?
     private var pendingPatch:BackendRunEditPatch?
+    private var holdsFirstDelete:Bool
+    private var deleteFailure:RunRecordsFailure?
+    private var conflictsFirstDelete:Bool
+    private var losesFirstDeleteResponse:Bool
+    private var deleteCalls=0
+    private var pendingDelete:CheckedContinuation<Void,Error>?
+    private var pendingDeleteRunID:String?
+    private var tombstonedRunIDs:Set<String>=[]
 
     init(
         details:[BackendRunDetail],
@@ -1918,7 +1926,11 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         conflictMemo:String?=nil,
         listPages:[BackendRunPage]=[],
         listFetchGates:[Int:WireframeRemoteReadGate]=[:],
-        failNextListFetches:Int=0
+        failNextListFetches:Int=0,
+        holdsFirstDelete:Bool=false,
+        deleteFailure:RunRecordsFailure?=nil,
+        conflictsFirstDelete:Bool=false,
+        losesFirstDeleteResponse:Bool=false
     ){
         self.details=Dictionary(uniqueKeysWithValues:details.map{($0.summary.id,$0)})
         self.listPages=listPages
@@ -1929,6 +1941,10 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         self.conflictsFirstWrite=conflictsFirstWrite
         self.conflictTitle=conflictTitle
         self.conflictMemo=conflictMemo
+        self.holdsFirstDelete=holdsFirstDelete
+        self.deleteFailure=deleteFailure
+        self.conflictsFirstDelete=conflictsFirstDelete
+        self.losesFirstDeleteResponse=losesFirstDeleteResponse
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
@@ -1984,8 +2000,37 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         return summary
     }
 
+    func deleteRun(id:String,version:Int64) async throws {
+        deleteCalls+=1
+        guard let current=details[id] else {
+            if tombstonedRunIDs.contains(id){return}
+            throw RunRecordsFailure.recordNotFound
+        }
+        if holdsFirstDelete {
+            holdsFirstDelete=false
+            try await withCheckedThrowingContinuation { continuation in
+                pendingDelete=continuation;pendingDeleteRunID=id
+            }
+            return
+        }
+        if let deleteFailure {throw deleteFailure}
+        if conflictsFirstDelete {
+            conflictsFirstDelete=false
+            details[id]=Self.detail(current,summary:Self.updated(current.summary,version:current.summary.version+1,title:current.summary.title,memo:current.summary.memo))
+            throw RunRecordsFailure.versionConflict
+        }
+        guard current.summary.version==version else{throw RunRecordsFailure.versionConflict}
+        details[id]=nil;tombstonedRunIDs.insert(id)
+        if losesFirstDeleteResponse {
+            losesFirstDeleteResponse=false
+            throw RunRecordsFailure.transport(.networkConnectionLost)
+        }
+    }
+
     func hasPendingWrite()->Bool{pendingWrite != nil}
     func writeCount()->Int{writeCalls}
+    func deleteCount()->Int{deleteCalls}
+    func hasPendingDelete()->Bool{pendingDelete != nil}
     func listFetchCount()->Int{listFetchCalls}
     func failNextListFetch(){failNextListFetches=1}
     func set(_ detail:BackendRunDetail){details[detail.summary.id]=detail}
@@ -1996,6 +2041,13 @@ private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating
         details[id]=Self.detail(current,summary:summary)
         self.pendingWrite=nil;pendingRunID=nil;pendingPatch=nil
         pendingWrite.resume(returning:summary)
+    }
+
+    func completePendingDelete() {
+        guard let pendingDelete,let id=pendingDeleteRunID else{return}
+        details[id]=nil;tombstonedRunIDs.insert(id)
+        self.pendingDelete=nil;pendingDeleteRunID=nil
+        pendingDelete.resume()
     }
 
     private static func apply(_ patch:BackendRunEditPatch,to current:BackendRunSummary,version:Int64)->BackendRunSummary {
@@ -2957,6 +3009,136 @@ extension ThemeTests {
         bridge.accountDidChange(to:"account-b")
         XCTAssertEqual(bridge.runRecordsState,.idle)
         XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testRunDeleteIsOptionalAndOnlyConfirmedSuccessRemovesTheSelectedRun() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"delete-a",title:"기록 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"delete-b",title:"기록 B",memo:nil)
+        let readOnlyFake=WireframeRunRecordsEditFake(details:[runA,runB])
+        let readOnly=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:readOnlyFake)
+        ))
+        await readOnly.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await readOnly.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L07")
+        XCTAssertFalse(readOnly.hasRunRecordsDeleter)
+        XCTAssertFalse(readOnly.canDeleteRunRecord(runA.summary.id))
+        let readOnlyDelete=await readOnly.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")
+        let readOnlyDeleteCount=await readOnlyFake.deleteCount()
+        XCTAssertFalse(readOnlyDelete)
+        XCTAssertEqual(readOnlyDeleteCount,0)
+
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB])
+        let loader=RunRecordsLoader(client:fake)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:loader,runRecordsDeleter:fake))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L07")
+        XCTAssertTrue(bridge.canDeleteRunRecord(runA.summary.id))
+        let didDelete=await bridge.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")
+        XCTAssertTrue(didDelete)
+        guard case .loaded(let remaining)=bridge.runRecordsState else{XCTFail("Expected the remaining list cache");return}
+        XCTAssertEqual(remaining.items.map(\.id),[runB.summary.id])
+        XCTAssertEqual(bridge.runDetailState,.idle,"The deleted record's detail cache is cleared")
+        XCTAssertEqual(bridge.pointsState,.idle,"Deletion never subtracts or mutates the points wallet")
+        XCTAssertEqual(bridge.progressState,.idle,"Run summaries are marked for a fresh read")
+    }
+
+    @MainActor func testRunDelete404KeepsRecordVisibleAndDoesNotClaimSuccess() async {
+        let detail=makeRunEditNormalizationConflictDetail(id:"delete-missing",title:"보존된 기록",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[detail],deleteFailure:.recordNotFound)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsDeleter:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L07")
+
+        let didDelete=await bridge.deleteRunRecord(id:detail.summary.id,accountScopeID:"account-a")
+        XCTAssertFalse(didDelete)
+        XCTAssertEqual(bridge.runRecordDeleteFailure(runID:detail.summary.id),.recordNotFound)
+        XCTAssertFalse(bridge.canDeleteRunRecord(detail.summary.id),"An ambiguous 404 cannot be retried as though deletion were confirmed")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Expected the original list snapshot");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[detail.summary.id])
+        guard case .loaded(let retained)=bridge.runDetailState else{XCTFail("Expected the original detail");return}
+        XCTAssertEqual(retained.summary.id,detail.summary.id)
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        guard case .loaded(let refreshed)=bridge.runRecordsState else{XCTFail("Expected a refreshed list");return}
+        XCTAssertEqual(refreshed.items.map(\.id),[detail.summary.id],"The 404 remains an unknown/inaccessible result, not a local deletion")
+    }
+
+    @MainActor func testRunDeleteVersionConflictDoesNotRetryAndDetailMustBeRefetched() async {
+        let detail=makeRunEditNormalizationConflictDetail(id:"delete-conflict",title:"충돌",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[detail],conflictsFirstDelete:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsDeleter:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L07")
+        let didDelete=await bridge.deleteRunRecord(id:detail.summary.id,accountScopeID:"account-a")
+        XCTAssertFalse(didDelete)
+        XCTAssertEqual(bridge.runRecordDeleteFailure(runID:detail.summary.id),.versionConflict)
+        let deleteCount=await fake.deleteCount()
+        XCTAssertEqual(deleteCount,1,"A version conflict is not automatically retried")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L04")
+        guard case .loaded(let refreshed)=bridge.runDetailState else{XCTFail("Expected the latest version to be read");return}
+        XCTAssertEqual(refreshed.summary.version,2)
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:detail.summary.id,screen:"L07")
+        XCTAssertTrue(bridge.canDeleteRunRecord(detail.summary.id))
+    }
+
+    @MainActor func testRunDeletePreventsDuplicateTapAndReconcilesLateSuccessWithoutReplacingOtherDetail() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"delete-late-a",title:"기록 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"delete-late-b",title:"기록 B",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],holdsFirstDelete:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsDeleter:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L07")
+        let deletion=Task{@MainActor in await bridge.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")}
+        let pending=await waitUntil{await fake.hasPendingDelete()}
+        XCTAssertTrue(pending)
+        XCTAssertTrue(bridge.isDeletingRunRecord)
+        let duplicate=await bridge.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")
+        let deleteCount=await fake.deleteCount()
+        XCTAssertFalse(duplicate)
+        XCTAssertEqual(deleteCount,1)
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runB.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB))
+        await fake.completePendingDelete()
+        let deletionResult=await deletion.value
+        XCTAssertFalse(deletionResult,"Navigation invalidates the active confirmation flow")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB),"A late A response must not replace the selected B detail")
+        guard case .loaded(let remaining)=bridge.runRecordsState else{XCTFail("Expected the cached list to reconcile confirmed A deletion");return}
+        XCTAssertEqual(remaining.items.map(\.id),[runB.summary.id])
+    }
+
+    @MainActor func testRunDeleteResponseAfterAccountSwitchCannotMutateNewAccountState() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"delete-account-a",title:"회원 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"delete-account-b",title:"회원 B",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],holdsFirstDelete:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runRecordsLoader:RunRecordsLoader(client:fake),runRecordsDeleter:fake
+        ))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L07")
+        let deletion=Task{@MainActor in await bridge.deleteRunRecord(id:runA.summary.id,accountScopeID:"account-a")}
+        let pending=await waitUntil{await fake.hasPendingDelete()}
+        XCTAssertTrue(pending)
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.runs,accountScopeID:"account-b",runID:runB.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB))
+        XCTAssertEqual(bridge.runRecordsState,.idle)
+        await fake.completePendingDelete()
+        let deletionResult=await deletion.value
+        XCTAssertFalse(deletionResult)
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runB),"A's late delete response must not cross the account boundary")
+        XCTAssertEqual(bridge.runRecordsState,.idle,"The stale response cannot mutate the current account's empty list cache")
     }
 
     @MainActor func testRunRecordEditPatchesOneFieldAndUpdatesDetailAndList() async {
