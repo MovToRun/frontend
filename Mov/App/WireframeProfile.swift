@@ -23,7 +23,7 @@ extension WireframeRoot {
                 WText(text:"읽기 전용 조회예요. 기기에 저장된 러닝 카드는 변경하지 않았어요.",small:true)
             case .failed(let failure):
                 WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("remoteProfileReadFailure")
-                Button("다시 시도"){Task{await remoteReads.retryMemberProfile()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteProfileRetry")
+                Button("다시 시도"){remoteReads.retryMemberProfile()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteProfileRetry")
             }
         }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("remoteMemberProfileReadPanel")
     }

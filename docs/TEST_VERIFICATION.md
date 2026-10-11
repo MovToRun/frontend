@@ -20,6 +20,28 @@
   or full-app regression suite was run. Functional verification does not
   establish full source/app pixel or motion parity; that QA remains open.
 
+### PR #48 independent review follow-up
+
+- The independent review found two lifecycle races: a duplicate points retry
+  could invalidate the first retry's bridge generation, and button-created
+  retry/page tasks were not cancelled with their screen/account scope.
+- The bridge now gives manual operations one task owner per active screen
+  scope. Duplicate retry/page taps are ignored while an operation is active;
+  screen changes and account changes cancel the tracked request before state
+  is cleared. A cancelled retry returns to idle so a later screen activation
+  starts a fresh load; a cancelled page operation restores its prior snapshot.
+  Retry and paging buttons call the bridge directly instead of creating
+  detached tasks.
+- Two mock-backed regressions cover duplicate retry completion and actual
+  cancellation of profile retry, points retry, and points paging on account
+  or screen exit. The points history transition cancels the in-flight page
+  request while preserving the already loaded first page. The focused bridge
+  set now passes 7/7 on the existing iPhone 17 Pro using the unique-bundle
+  temporary source copy. The follow-up `.xcresult` is at
+  `/tmp/mov-wireframe-read-injection-followup-tests-final.xcresult`.
+- Initial app reads remain owned by SwiftUI `.task(id:)`; the follow-up did not
+  change layouts, local stores, server configuration, or simulator setup.
+
 ## Community discovery and HOT feed (C29, C41)
 
 - Branch: `feature/community-feed-discovery`, based on merged PR #36 main SHA `3d52e241e3010cfadc4c461707c8b416ed9ea730`.

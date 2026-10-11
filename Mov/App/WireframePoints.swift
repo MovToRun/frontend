@@ -257,11 +257,11 @@ extension WireframeRoot {
     }
 
     private var remotePointsRetryButton:some View {
-        Button("다시 시도"){Task{await remoteReads.retryPoints()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsRetry")
+        Button("다시 시도"){remoteReads.retryPoints()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsRetry")
     }
 
     private var remotePointsLoadMoreButton:some View {
-        Button("더 불러오기"){Task{await remoteReads.loadNextPointsPage()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsLoadMore")
+        Button("더 불러오기"){remoteReads.loadNextPointsPage()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remotePointsLoadMore")
     }
 
     var points: some View {

@@ -20,11 +20,14 @@ separately from the local fixture rows.
 ## Lifecycle and account scope
 
 The bridge mirrors the existing actors; it does not add a second persistent
-store or transport. A screen-keyed SwiftUI task starts a read on entry and is
-cancelled when leaving that read scope. A generation check ignores stale
-completions. Leaving the screen clears its mirrored state. Login/logout and
-local account switching rotate an in-memory account scope and clear both
-mirrored reads before the next load.
+store or transport. A screen-keyed SwiftUI task owns the initial read. The
+bridge owns one manual retry/page task at a time; another tap while that task
+is active is ignored without changing the screen generation. Screen entry,
+exit, and account changes cancel the bridge-owned task, while the screen task
+cancels its own initial read. A generation check ignores stale completions.
+Leaving the screen clears its mirrored state. Login/logout and local account
+switching rotate an in-memory account scope and clear both mirrored reads
+before the next load.
 
 No loader is constructed by the production app entry point in this change. A
 future session/composition owner must explicitly provide the appropriate
@@ -35,7 +38,8 @@ change authentication/session policy.
 ## Verification boundary
 
 The bridge tests use scripted in-memory protocol mocks for default-local mode,
-valid zero balance and page continuation, failure/retry, account-scope reset,
-and cancellation. The existing `MovNetworkingTests` use mock URL responses.
-These checks do not contact a backend. Functional tests do not establish
-wireframe pixel or motion parity; that comparison remains open.
+valid zero balance and page continuation, failure/retry, duplicate retry taps,
+account-scope reset, screen exit, and cancellation of initial/retry/page
+requests. The existing `MovNetworkingTests` use mock URL responses. These
+checks do not contact a backend. Functional tests do not establish wireframe
+pixel or motion parity; that comparison remains open.

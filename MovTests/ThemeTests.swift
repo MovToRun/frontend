@@ -1502,35 +1502,85 @@ extension ThemeTests {
     }
 }
 
+private actor WireframeRemoteReadGate {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var entered = false
+    private var released = false
+
+    func wait() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else if released {
+                    continuation.resume()
+                } else {
+                    entered = true
+                    self.continuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter() }
+        }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func isWaiting() -> Bool { entered && continuation != nil }
+
+    private func cancelWaiter() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
 private actor WireframeRemoteReadMock: MemberProfileFetching, PointsWalletReading {
     private var profileResults:[Result<MemberProfile,MemberProfileFailure>]
     private var balanceResults:[Result<PointsBalance,PointsReadFailure>]
     private var pageResults:[Result<PointsLedgerPage,PointsReadFailure>]
     private let heldProfileCalls:Set<Int>
     private let heldBalanceCalls:Set<Int>
+    private let profileGates:[Int:WireframeRemoteReadGate]
+    private let balanceGates:[Int:WireframeRemoteReadGate]
+    private let entryGates:[String:WireframeRemoteReadGate]
     private var profileCallCount=0
     private var balanceCallCount=0
     private var entryCursors:[String?]=[]
     private var cancelledProfileCalls=0
     private var cancelledBalanceCalls=0
+    private var cancelledEntryCalls=0
 
     init(
         profileResults:[Result<MemberProfile,MemberProfileFailure>]=[],
         balanceResults:[Result<PointsBalance,PointsReadFailure>]=[],
         pageResults:[Result<PointsLedgerPage,PointsReadFailure>]=[],
         heldProfileCalls:Set<Int>=[],
-        heldBalanceCalls:Set<Int>=[]
+        heldBalanceCalls:Set<Int>=[],
+        profileGates:[Int:WireframeRemoteReadGate]=[:],
+        balanceGates:[Int:WireframeRemoteReadGate]=[:],
+        entryGates:[String:WireframeRemoteReadGate]=[:]
     ) {
         self.profileResults=profileResults
         self.balanceResults=balanceResults
         self.pageResults=pageResults
         self.heldProfileCalls=heldProfileCalls
         self.heldBalanceCalls=heldBalanceCalls
+        self.profileGates=profileGates
+        self.balanceGates=balanceGates
+        self.entryGates=entryGates
     }
 
     func fetchProfile() async throws -> MemberProfile {
         let call=profileCallCount;profileCallCount+=1
         let result=profileResults.isEmpty ? .failure(.invalidResponse):profileResults.removeFirst()
+        if let gate=profileGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledProfileCalls+=1;throw MemberProfileFailure.cancelled }
+        }
         if heldProfileCalls.contains(call) {
             do { try await Task.sleep(nanoseconds:60_000_000_000) }
             catch { cancelledProfileCalls+=1;throw MemberProfileFailure.cancelled }
@@ -1541,6 +1591,10 @@ private actor WireframeRemoteReadMock: MemberProfileFetching, PointsWalletReadin
     func fetchBalance() async throws -> PointsBalance {
         let call=balanceCallCount;balanceCallCount+=1
         let result=balanceResults.isEmpty ? .failure(.invalidResponse):balanceResults.removeFirst()
+        if let gate=balanceGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledBalanceCalls+=1;throw PointsReadFailure.cancelled }
+        }
         if heldBalanceCalls.contains(call) {
             do { try await Task.sleep(nanoseconds:60_000_000_000) }
             catch { cancelledBalanceCalls+=1;throw PointsReadFailure.cancelled }
@@ -1551,12 +1605,20 @@ private actor WireframeRemoteReadMock: MemberProfileFetching, PointsWalletReadin
     func fetchEntries(cursor:String?,size:Int) async throws -> PointsLedgerPage {
         entryCursors.append(cursor)
         guard !pageResults.isEmpty else { throw PointsReadFailure.invalidResponse }
-        return try pageResults.removeFirst().get()
+        let result=pageResults.removeFirst()
+        if let gate=entryGates[cursor ?? ""] {
+            do { try await gate.wait() }
+            catch { cancelledEntryCalls+=1;throw PointsReadFailure.cancelled }
+        }
+        return try result.get()
     }
 
     func observedEntryCursors()->[String?]{entryCursors}
+    func observedProfileCallCount()->Int{profileCallCount}
+    func observedBalanceCallCount()->Int{balanceCallCount}
     func observedCancelledProfileCalls()->Int{cancelledProfileCalls}
     func observedCancelledBalanceCalls()->Int{cancelledBalanceCalls}
+    func observedCancelledEntryCalls()->Int{cancelledEntryCalls}
 }
 
 extension ThemeTests {
@@ -1592,7 +1654,11 @@ extension ThemeTests {
         XCTAssertEqual(firstSnapshot.entries.map(\.entryID),["entry-1"])
         XCTAssertEqual(firstSnapshot.nextCursor,"opaque-cursor")
 
-        await bridge.loadNextPointsPage()
+        bridge.loadNextPointsPage()
+        for _ in 0..<200 {
+            if case .loaded = bridge.pointsState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
         guard case .loaded(let finalSnapshot)=bridge.pointsState else {XCTFail("Expected the next remote page");return}
         XCTAssertEqual(finalSnapshot.entries.map(\.entryID),["entry-1","entry-2"])
         XCTAssertNil(finalSnapshot.nextCursor)
@@ -1613,7 +1679,11 @@ extension ThemeTests {
 
         await bridge.activate(feature:.points,accountScopeID:"account-a")
         XCTAssertEqual(bridge.pointsState,.failed(.pointsUnavailable(requestID:"fixture-unavailable")))
-        await bridge.retryPoints()
+        bridge.retryPoints()
+        for _ in 0..<200 {
+            if case .loaded = bridge.pointsState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
         guard case .loaded(let snapshot)=bridge.pointsState else {XCTFail("Expected retry to load the remote balance");return}
         XCTAssertEqual(snapshot.balance.balancePoints,25)
         XCTAssertTrue(snapshot.entries.isEmpty)
@@ -1655,5 +1725,132 @@ extension ThemeTests {
         XCTAssertEqual(pointsBridge.pointsState,.idle)
         let pointsCancellations=await pointsMock.observedCancelledBalanceCalls()
         XCTAssertEqual(pointsCancellations,1)
+    }
+
+    @MainActor func testDuplicatePointsRetryDoesNotInvalidateTheActiveCompletion() async {
+        let retryGate=WireframeRemoteReadGate()
+        let mock=WireframeRemoteReadMock(
+            balanceResults:[
+                .failure(.pointsUnavailable(requestID:"first-read")),
+                .success(PointsBalance(balancePoints:19))
+            ],
+            pageResults:[.success(PointsLedgerPage(entries:[],nextCursor:nil))],
+            balanceGates:[1:retryGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(pointsWalletLoader:PointsWalletLoader(client:mock)))
+
+        await bridge.activate(feature:.points,accountScopeID:"account-a")
+        XCTAssertEqual(bridge.pointsState,.failed(.pointsUnavailable(requestID:"first-read")))
+        bridge.retryPoints()
+
+        var retryIsBlocked=false
+        for _ in 0..<500 {
+            let calls=await mock.observedBalanceCallCount()
+            let waiting=await retryGate.isWaiting()
+            if calls == 2 && waiting {retryIsBlocked=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(retryIsBlocked)
+        bridge.retryPoints()
+        let callsAfterDuplicate=await mock.observedBalanceCallCount()
+        XCTAssertEqual(callsAfterDuplicate,2,"A duplicate retry must not issue a second loader request")
+        await retryGate.release()
+
+        for _ in 0..<500 {
+            if case .loaded = bridge.pointsState {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let snapshot)=bridge.pointsState else {XCTFail("The first retry completion must not be invalidated");return}
+        XCTAssertEqual(snapshot.balance.balancePoints,19)
+    }
+
+    @MainActor func testManualRetriesAndPaginationCancelAtScreenAndAccountBoundaries() async {
+        let profileGate=WireframeRemoteReadGate()
+        let profileMock=WireframeRemoteReadMock(
+            profileResults:[.failure(.invalidResponse),.success(MemberProfile(nickname:"late profile"))],
+            profileGates:[1:profileGate]
+        )
+        let profileBridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(memberProfileLoader:MemberProfileLoader(fetcher:profileMock)))
+        await profileBridge.activate(feature:.profile,accountScopeID:"account-a")
+        profileBridge.retryMemberProfile()
+        var profileRetryIsBlocked=false
+        for _ in 0..<500 {
+            let calls=await profileMock.observedProfileCallCount()
+            let waiting=await profileGate.isWaiting()
+            if calls == 2 && waiting {profileRetryIsBlocked=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(profileRetryIsBlocked)
+        profileBridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(profileBridge.memberProfileState,.idle)
+        for _ in 0..<500 {
+            if await profileMock.observedCancelledProfileCalls() == 1 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let cancelledProfileRetries=await profileMock.observedCancelledProfileCalls()
+        XCTAssertEqual(cancelledProfileRetries,1,"Account changes must cancel the retry request")
+        XCTAssertEqual(profileBridge.memberProfileState,.idle)
+
+        let pointsRetryGate=WireframeRemoteReadGate()
+        let pointsRetryMock=WireframeRemoteReadMock(
+            balanceResults:[.failure(.pointsUnavailable(requestID:"initial")),.success(PointsBalance(balancePoints:40))],
+            pageResults:[.success(PointsLedgerPage(entries:[],nextCursor:nil))],
+            balanceGates:[1:pointsRetryGate]
+        )
+        let pointsRetryBridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(pointsWalletLoader:PointsWalletLoader(client:pointsRetryMock)))
+        await pointsRetryBridge.activate(feature:.points,accountScopeID:"account-a")
+        pointsRetryBridge.retryPoints()
+        var pointsRetryIsBlocked=false
+        for _ in 0..<500 {
+            let calls=await pointsRetryMock.observedBalanceCallCount()
+            let waiting=await pointsRetryGate.isWaiting()
+            if calls == 2 && waiting {pointsRetryIsBlocked=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(pointsRetryIsBlocked)
+        await pointsRetryBridge.activate(feature:nil,accountScopeID:"account-a")
+        XCTAssertEqual(pointsRetryBridge.pointsState,.idle)
+        for _ in 0..<500 {
+            if await pointsRetryMock.observedCancelledBalanceCalls() == 1 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let cancelledPointRetries=await pointsRetryMock.observedCancelledBalanceCalls()
+        XCTAssertEqual(cancelledPointRetries,1,"Leaving the points screen must cancel its retry request")
+        XCTAssertEqual(pointsRetryBridge.pointsState,.idle)
+
+        let pageGate=WireframeRemoteReadGate()
+        let first=PointsLedgerEntry(entryID:"first",direction:.credit,deltaPoints:5,balanceAfterPoints:5,reasonCode:"RUN_REWARD",createdAt:Date(timeIntervalSince1970:1_800_000_000))
+        let next=PointsLedgerEntry(entryID:"next",direction:.credit,deltaPoints:7,balanceAfterPoints:12,reasonCode:"RUN_REWARD",createdAt:Date(timeIntervalSince1970:1_800_000_100))
+        let pageMock=WireframeRemoteReadMock(
+            balanceResults:[.success(PointsBalance(balancePoints:12))],
+            pageResults:[
+                .success(PointsLedgerPage(entries:[first],nextCursor:"next-cursor")),
+                .success(PointsLedgerPage(entries:[next],nextCursor:nil))
+            ],
+            entryGates:["next-cursor":pageGate]
+        )
+        let pageBridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(pointsWalletLoader:PointsWalletLoader(client:pageMock,pageSize:1)))
+        await pageBridge.activate(feature:.points,accountScopeID:"account-a")
+        pageBridge.loadNextPointsPage()
+        var pageIsBlocked=false
+        for _ in 0..<500 {
+            let cursors=await pageMock.observedEntryCursors()
+            let waiting=await pageGate.isWaiting()
+            if cursors.count == 2 && waiting {pageIsBlocked=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(pageIsBlocked)
+        await pageBridge.activate(feature:.points,accountScopeID:"account-a")
+        guard case .loaded(let preservedSnapshot)=pageBridge.pointsState else {XCTFail("Leaving B01 for B02 should retain the loaded first page");return}
+        XCTAssertEqual(preservedSnapshot.entries.map(\.entryID),["first"])
+        XCTAssertEqual(preservedSnapshot.nextCursor,"next-cursor")
+        for _ in 0..<500 {
+            if await pageMock.observedCancelledEntryCalls() == 1 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let cancelledPageCalls=await pageMock.observedCancelledEntryCalls()
+        XCTAssertEqual(cancelledPageCalls,1,"Changing screens must cancel the page request")
+        let pointBalanceCalls=await pageMock.observedBalanceCallCount()
+        XCTAssertEqual(pointBalanceCalls,1,"Moving between points screens must not refetch the balance")
     }
 }

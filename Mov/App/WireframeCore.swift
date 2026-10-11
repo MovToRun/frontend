@@ -302,9 +302,19 @@ struct WireframeRemoteReadDependencies {
 }
 
 @MainActor @Observable final class WireframeRemoteReadBridge {
+    private enum ManualOperationKind {
+        case profileRetry
+        case pointsRetry
+        case pointsPage
+    }
+
     private let memberProfileLoader: MemberProfileLoader?
     private let pointsWalletLoader: PointsWalletLoader?
-    private var generation: UInt64 = 0
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var manualOperationID: UUID?
+    @ObservationIgnored private var manualOperationTask: Task<Void, Never>?
+    @ObservationIgnored private var manualOperationKind: ManualOperationKind?
+    @ObservationIgnored private var manualPointsPreviousState: PointsWalletReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
     private(set) var memberProfileState: MemberProfileLoadState = .idle
@@ -321,6 +331,7 @@ struct WireframeRemoteReadDependencies {
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
+        cancelManualOperation()
         generation &+= 1
         accountScopeID = nextScopeID
         activeFeature = nil
@@ -330,25 +341,35 @@ struct WireframeRemoteReadDependencies {
 
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        let sameFeature = activeFeature == feature && feature != nil
+        cancelManualOperation(restorePreviousState: sameFeature)
         generation &+= 1
         let requestGeneration = generation
+        activeFeature = feature
 
         guard let feature else {
-            activeFeature = nil
             memberProfileState = .idle
             pointsState = .idle
             return
         }
 
-        if activeFeature != feature {
-            if activeFeature == .profile { memberProfileState = .idle }
-            if activeFeature == .points { pointsState = .idle }
-            activeFeature = feature
+        if !sameFeature {
+            memberProfileState = .idle
+            pointsState = .idle
+        } else {
+            if memberProfileState == .loading { memberProfileState = .idle }
+            switch pointsState {
+            case .loading, .loadingMore:
+                pointsState = .idle
+            default:
+                break
+            }
         }
 
         switch feature {
         case .profile:
             guard let memberProfileLoader else { memberProfileState = .idle; return }
+            guard memberProfileState == .idle else { return }
             memberProfileState = .loading
             await memberProfileLoader.load()
             let result = await memberProfileLoader.state
@@ -361,6 +382,7 @@ struct WireframeRemoteReadDependencies {
             }
         case .points:
             guard let pointsWalletLoader else { pointsState = .idle; return }
+            guard pointsState == .idle else { return }
             pointsState = .loading
             await pointsWalletLoader.load()
             let result = await pointsWalletLoader.state
@@ -374,44 +396,103 @@ struct WireframeRemoteReadDependencies {
         }
     }
 
-    func retryMemberProfile() async {
-        guard activeFeature == .profile, let memberProfileLoader else { return }
-        generation &+= 1
+    func retryMemberProfile() {
+        guard activeFeature == .profile,
+              manualOperationTask == nil,
+              case .failed = memberProfileState,
+              let memberProfileLoader else { return }
         let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .profileRetry
         memberProfileState = .loading
-        await memberProfileLoader.retry()
-        let result = await memberProfileLoader.state
-        guard requestGeneration == generation else { return }
-        memberProfileState = Task.isCancelled ? .idle : result
-    }
-
-    func retryPoints() async {
-        guard activeFeature == .points, let pointsWalletLoader else { return }
-        generation &+= 1
-        let requestGeneration = generation
-        if case .failedLoadingMore(let snapshot, _) = pointsState {
-            pointsState = .loadingMore(snapshot)
-        } else {
-            pointsState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            await memberProfileLoader.retry()
+            let result = await memberProfileLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.memberProfileState = Task.isCancelled ? .idle : result
         }
-        await pointsWalletLoader.retry()
-        let result = await pointsWalletLoader.state
-        guard requestGeneration == generation else { return }
-        pointsState = Task.isCancelled ? .idle : result
     }
 
-    func loadNextPointsPage() async {
+    func retryPoints() {
         guard activeFeature == .points,
+              manualOperationTask == nil,
+              let pointsWalletLoader else { return }
+        let requestGeneration = generation
+        switch pointsState {
+        case .failed(let failure) where failure.canManuallyRetry:
+            pointsState = .loading
+        case .failedLoadingMore(let snapshot, let failure) where failure.canManuallyRetry:
+            pointsState = .loadingMore(snapshot)
+        default:
+            return
+        }
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsRetry
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.retry()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func loadNextPointsPage() {
+        guard activeFeature == .points,
+              manualOperationTask == nil,
               case .loaded(let snapshot) = pointsState,
               snapshot.nextCursor != nil,
               let pointsWalletLoader else { return }
-        generation &+= 1
         let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsPage
+        manualPointsPreviousState = pointsState
         pointsState = .loadingMore(snapshot)
-        await pointsWalletLoader.loadNextPage()
-        let result = await pointsWalletLoader.state
-        guard requestGeneration == generation else { return }
-        pointsState = Task.isCancelled ? .idle : result
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.loadNextPage()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualPointsPreviousState = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    private func cancelManualOperation(restorePreviousState: Bool = false) {
+        let task = manualOperationTask
+        manualOperationTask = nil
+        manualOperationID = nil
+        if restorePreviousState {
+            switch manualOperationKind {
+            case .profileRetry:
+                memberProfileState = .idle
+            case .pointsRetry:
+                pointsState = .idle
+            case .pointsPage:
+                if let previous = manualPointsPreviousState { pointsState = previous }
+            case nil:
+                break
+            }
+        }
+        manualOperationKind = nil
+        manualPointsPreviousState = nil
+        task?.cancel()
     }
 }
 
@@ -714,7 +795,7 @@ struct WireframeRoot:View {
     var current:RunRecord {if ui.testing && ui.screen.hasPrefix("R") && store.session==nil{return RunRecord(date:Date(),title:"현재 러닝",seconds:ui.screen=="R01" ? 4:302,kilometers:ui.screen=="R01" ? 0:0.81)};if let id=ui.selected,let r=store.records.first(where:{$0.id==id}){return r};return store.session?.record(at:Date()) ?? store.records.first ?? RunRecord(date:Date(),title:"현재 러닝",seconds:0,kilometers:0)}
     var roots:[String]{WRootTab.allCases.map(\.route)}
     var remoteReadFeature:WireframeRemoteReadFeature? { WireframeRemoteReadFeature.forScreen(ui.screen) }
-    var remoteReadTaskKey:String { "\(remoteReadFeature?.rawValue ?? "idle")|\(ui.remoteAccountScopeID)" }
+    var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)" }
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
