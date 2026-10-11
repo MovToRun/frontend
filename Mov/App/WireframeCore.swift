@@ -319,7 +319,8 @@ struct WireframeRemoteReadDependencies {
         case runsRetry
         case runsPage
         case runDetailRetry
-        case progressOverviewRetry
+        case progressRetry
+        case weeklyGoalRetry
         case progressDailyRetry
     }
 
@@ -342,7 +343,8 @@ struct WireframeRemoteReadDependencies {
     private(set) var runRecordsState: RunRecordsReadState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
     private(set) var activeRunID: String?
-    private(set) var progressOverviewState: ProgressOverviewReadState = .idle
+    private(set) var progressState: ProgressReadState = .idle
+    private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
     private(set) var dailyProgressState: DailyProgressReadState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
@@ -371,7 +373,8 @@ struct WireframeRemoteReadDependencies {
         runRecordsState = .idle
         runDetailState = .idle
         activeRunID = nil
-        progressOverviewState = .idle
+        progressState = .idle
+        weeklyGoalState = .idle
         dailyProgressState = .idle
     }
 
@@ -394,7 +397,8 @@ struct WireframeRemoteReadDependencies {
             runRecordsState = .idle
             runDetailState = .idle
             activeRunID = nil
-            progressOverviewState = .idle
+            progressState = .idle
+            weeklyGoalState = .idle
             dailyProgressState = .idle
             dailyGeneration &+= 1
             return
@@ -406,7 +410,8 @@ struct WireframeRemoteReadDependencies {
             runRecordsState = .idle
             runDetailState = .idle
             activeRunID = nil
-            progressOverviewState = .idle
+            progressState = .idle
+            weeklyGoalState = .idle
             dailyProgressState = .idle
             dailyGeneration &+= 1
         } else {
@@ -419,7 +424,8 @@ struct WireframeRemoteReadDependencies {
             }
             if activeRunID != runID { runDetailState = .idle }
             if feature == .progressGoals {
-                if progressOverviewState == .loading { progressOverviewState = .idle }
+                if progressState == .loading { progressState = .idle }
+                if weeklyGoalState == .loading { weeklyGoalState = .idle }
                 if !["H07","H08","H09"].contains(nextScreen ?? "") {
                     dailyProgressState = .idle
                     dailyGeneration &+= 1
@@ -484,18 +490,49 @@ struct WireframeRemoteReadDependencies {
                 }
             }
         case .progressGoals:
-            guard let runningProgressLoader else { progressOverviewState = .idle; dailyProgressState = .idle; return }
-            guard progressOverviewState == .idle else { return }
-            progressOverviewState = .loading
-            await runningProgressLoader.loadOverview()
-            let result = await runningProgressLoader.overviewState
-            guard requestGeneration == generation else { return }
-            if Task.isCancelled {
-                progressOverviewState = .idle
-                activeFeature = nil
-            } else {
-                progressOverviewState = result
+            guard let runningProgressLoader else {
+                progressState = .idle
+                weeklyGoalState = .idle
+                dailyProgressState = .idle
+                return
             }
+            let shouldLoadProgress = progressState == .idle
+            let shouldLoadWeeklyGoal = weeklyGoalState == .idle
+            guard shouldLoadProgress || shouldLoadWeeklyGoal else { return }
+            if shouldLoadProgress { progressState = .loading }
+            if shouldLoadWeeklyGoal { weeklyGoalState = .loading }
+            if shouldLoadProgress && shouldLoadWeeklyGoal {
+                async let progressRead: Void = completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+                async let weeklyGoalRead: Void = completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+                await progressRead
+                await weeklyGoalRead
+            } else if shouldLoadProgress {
+                await completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+            } else {
+                await completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+            }
+        }
+    }
+
+    private func completeProgressRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadProgress()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            progressState = .idle
+            activeFeature = nil
+        } else {
+            progressState = result
+        }
+    }
+
+    private func completeWeeklyGoalRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadWeeklyGoal()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            weeklyGoalState = .idle
+            activeFeature = nil
+        } else {
+            weeklyGoalState = result
         }
     }
 
@@ -672,25 +709,45 @@ struct WireframeRemoteReadDependencies {
         }
     }
 
-    func retryProgressOverview() {
+    func retryProgress() {
         guard activeFeature == .progressGoals, manualOperationTask == nil,
-              case .failed(let failure) = progressOverviewState,
+              case .failed(let failure) = progressState,
               failure.canManuallyRetry, let runningProgressLoader else { return }
         let requestGeneration = generation
         let operationID = UUID()
         manualOperationID = operationID
-        manualOperationKind = .progressOverviewRetry
-        progressOverviewState = .loading
+        manualOperationKind = .progressRetry
+        progressState = .loading
         manualOperationTask = Task { @MainActor [weak self] in
-            await runningProgressLoader.retryOverview()
-            let result = await runningProgressLoader.overviewState
+            let result = await runningProgressLoader.retryProgress()
             guard let self,
                   self.generation == requestGeneration,
                   self.manualOperationID == operationID else { return }
             self.manualOperationTask = nil
             self.manualOperationID = nil
             self.manualOperationKind = nil
-            self.progressOverviewState = Task.isCancelled ? .idle : result
+            self.progressState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryWeeklyGoal() {
+        guard activeFeature == .progressGoals, manualOperationTask == nil,
+              case .failed(let failure) = weeklyGoalState,
+              failure.canManuallyRetry, let runningProgressLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalRetry
+        weeklyGoalState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.retryWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.weeklyGoalState = Task.isCancelled ? .idle : result
         }
     }
 
@@ -739,8 +796,10 @@ struct WireframeRemoteReadDependencies {
                 if let previous = manualRunsPreviousState { runRecordsState = previous }
             case .runDetailRetry:
                 runDetailState = .idle
-            case .progressOverviewRetry:
-                progressOverviewState = .idle
+            case .progressRetry:
+                progressState = .idle
+            case .weeklyGoalRetry:
+                weeklyGoalState = .idle
             case .progressDailyRetry:
                 dailyProgressState = .idle
             case nil:

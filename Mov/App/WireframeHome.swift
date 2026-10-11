@@ -963,13 +963,13 @@ extension WireframeRoot {
     }
     var homeWeekLabel:String {
         if remoteReads.hasRunningProgressDependency {
-            guard case .loaded(let overview)=remoteReads.progressOverviewState else { return "이번 주" }
+            guard case .loaded(let goal)=remoteReads.weeklyGoalState else { return "이번 주" }
             func short(_ value:String)->String {
                 let parts=value.split(separator:"-")
                 guard parts.count==3,let month=Int(parts[1]),let day=Int(parts[2]) else{return value}
                 return "\(month).\(day)"
             }
-            return "\(short(overview.weeklyGoal.weekStartDate)) — \(short(overview.weeklyGoal.weekEndDate))"
+            return "\(short(goal.weekStartDate)) — \(short(goal.weekEndDate))"
         }
         let date=WReviewClock.now
         var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current
@@ -1029,15 +1029,15 @@ extension WireframeRoot {
     }
     @ViewBuilder var remoteHomeRings:some View {
         VStack(spacing:0) {
-            switch remoteReads.progressOverviewState {
+            switch remoteReads.weeklyGoalState {
             case .idle,.loading:
                 VStack(spacing:10){ProgressView();WText(text:"이번 주 정보를 불러오는 중이에요",small:true)}
                     .frame(maxWidth:.infinity,minHeight:218).accessibilityIdentifier("remoteHomeProgressLoading")
             case .failed(let failure):
-                VStack(spacing:10){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryProgressOverview()}.font(W.font(13,.medium)).frame(minHeight:44).accessibilityIdentifier("remoteHomeProgressRetry")}}
+                VStack(spacing:10){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryWeeklyGoal()}.font(W.font(13,.medium)).frame(minHeight:44).accessibilityIdentifier("remoteHomeProgressRetry")}}
                     .frame(maxWidth:.infinity,minHeight:218).accessibilityIdentifier("remoteHomeProgressFailure")
-            case .loaded(let overview):
-                remoteGoalRings(overview.weeklyGoal)
+            case .loaded(let goal):
+                remoteGoalRings(goal)
             }
         }.frame(maxWidth:.infinity).padding(.top,14).accessibilityElement(children:.contain).accessibilityIdentifier("homeWeeklyRings")
     }
@@ -1097,14 +1097,13 @@ extension WireframeRoot {
         }
     }
     @ViewBuilder var remoteWeeklySummary:some View {
-        switch remoteReads.progressOverviewState {
+        switch remoteReads.weeklyGoalState {
         case .idle,.loading:
             VStack(spacing:8){ProgressView();WText(text:"주간 목표를 불러오는 중이에요",small:true)}.frame(maxWidth:.infinity,minHeight:96).accessibilityIdentifier("remoteWeeklySummaryLoading")
         case .failed(let failure):
-            VStack(spacing:8){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryProgressOverview()}.font(W.font(12)).frame(minHeight:44).accessibilityIdentifier("remoteWeeklySummaryRetry")}}
+            VStack(spacing:8){WNotice(text:failure.userMessage,danger:true);if failure.canManuallyRetry{Button("다시 시도"){remoteReads.retryWeeklyGoal()}.font(W.font(12)).frame(minHeight:44).accessibilityIdentifier("remoteWeeklySummaryRetry")}}
                 .frame(maxWidth:.infinity,minHeight:96).accessibilityIdentifier("remoteWeeklySummaryFailure")
-        case .loaded(let overview):
-            let status=overview.weeklyGoal
+        case .loaded(let status):
             VStack(alignment:.leading,spacing:18){
                 if let target=status.distance.goal{progress("거리 목표",value:Double(status.distance.done)/1_000,goal:Double(target)/1_000,unit:"km")}
                 if let target=status.time.goal{progress("시간 목표",value:Double(status.time.done)/60,goal:Double(target)/60,unit:"분")}

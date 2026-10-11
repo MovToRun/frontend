@@ -89,11 +89,6 @@ struct BackendWeeklyGoalStatus: Equatable, Sendable {
     let time: BackendWeeklyGoalAxis
 }
 
-struct BackendProgressOverview: Equatable, Sendable {
-    let progress: BackendProgressSummary
-    let weeklyGoal: BackendWeeklyGoalStatus
-}
-
 struct BackendDailyProgress: Equatable, Sendable {
     let range: BackendDailyProgressRange
     let days: [BackendDailyProgressDay]
@@ -549,10 +544,17 @@ private func decodeRequiredNullable<Value: Decodable, Key: CodingKey>(
     return try container.decodeIfPresent(type, forKey: key)
 }
 
-enum ProgressOverviewReadState: Equatable, Sendable {
+enum ProgressReadState: Equatable, Sendable {
     case idle
     case loading
-    case loaded(BackendProgressOverview)
+    case loaded(BackendProgressSummary)
+    case failed(ProgressGoalsFailure)
+}
+
+enum WeeklyGoalReadState: Equatable, Sendable {
+    case idle
+    case loading
+    case loaded(BackendWeeklyGoalStatus)
     case failed(ProgressGoalsFailure)
 }
 
@@ -565,38 +567,65 @@ enum DailyProgressReadState: Equatable, Sendable {
 
 actor RunningProgressLoader {
     private let client: any RunningProgressReading
-    private var overviewGeneration: UInt64 = 0
+    private var progressGeneration: UInt64 = 0
+    private var weeklyGoalGeneration: UInt64 = 0
     private var dailyGeneration: UInt64 = 0
-    private(set) var overviewState: ProgressOverviewReadState = .idle
+    private(set) var progressState: ProgressReadState = .idle
+    private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
     private(set) var dailyState: DailyProgressReadState = .idle
 
     init(client: any RunningProgressReading) { self.client = client }
 
-    func loadOverview() async {
-        overviewGeneration &+= 1
-        let generation = overviewGeneration
-        overviewState = .loading
-        async let progress = client.fetchProgress()
-        async let weeklyGoal = client.fetchWeeklyGoal()
+    func loadProgress() async -> ProgressReadState {
+        progressGeneration &+= 1
+        let generation = progressGeneration
+        progressState = .loading
         do {
-            let (summary, goal) = try await (progress, weeklyGoal)
-            guard generation == overviewGeneration else { return }
-            overviewState = .loaded(BackendProgressOverview(progress: summary, weeklyGoal: goal))
+            let summary = try await client.fetchProgress()
+            guard generation == progressGeneration else { return progressState }
+            progressState = .loaded(summary)
         } catch let failure as ProgressGoalsFailure {
-            guard generation == overviewGeneration else { return }
-            overviewState = .failed(failure)
+            guard generation == progressGeneration else { return progressState }
+            progressState = .failed(failure)
         } catch is CancellationError {
-            guard generation == overviewGeneration else { return }
-            overviewState = .failed(.cancelled)
+            guard generation == progressGeneration else { return progressState }
+            progressState = .failed(.cancelled)
         } catch {
-            guard generation == overviewGeneration else { return }
-            overviewState = .failed(.invalidResponse)
+            guard generation == progressGeneration else { return progressState }
+            progressState = .failed(.invalidResponse)
         }
+        return progressState
     }
 
-    func retryOverview() async {
-        guard case .failed = overviewState else { return }
-        await loadOverview()
+    func retryProgress() async -> ProgressReadState {
+        guard case .failed = progressState else { return progressState }
+        return await loadProgress()
+    }
+
+    func loadWeeklyGoal() async -> WeeklyGoalReadState {
+        weeklyGoalGeneration &+= 1
+        let generation = weeklyGoalGeneration
+        weeklyGoalState = .loading
+        do {
+            let goal = try await client.fetchWeeklyGoal()
+            guard generation == weeklyGoalGeneration else { return weeklyGoalState }
+            weeklyGoalState = .loaded(goal)
+        } catch let failure as ProgressGoalsFailure {
+            guard generation == weeklyGoalGeneration else { return weeklyGoalState }
+            weeklyGoalState = .failed(failure)
+        } catch is CancellationError {
+            guard generation == weeklyGoalGeneration else { return weeklyGoalState }
+            weeklyGoalState = .failed(.cancelled)
+        } catch {
+            guard generation == weeklyGoalGeneration else { return weeklyGoalState }
+            weeklyGoalState = .failed(.invalidResponse)
+        }
+        return weeklyGoalState
+    }
+
+    func retryWeeklyGoal() async -> WeeklyGoalReadState {
+        guard case .failed = weeklyGoalState else { return weeklyGoalState }
+        return await loadWeeklyGoal()
     }
 
     func loadDaily(range: BackendDailyProgressRange) async {

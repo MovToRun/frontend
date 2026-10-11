@@ -13,21 +13,24 @@ was created.
 ## Review points
 
 - `Mov/Networking/ProgressGoalsClient.swift` owns authenticated GET-only
-  requests, DTO validation, KST date ranges, and overview/daily load states.
+  requests, DTO validation, KST date ranges, and separate `/progress`, weekly
+  goal, and daily load states.
 - `Mov/App/WireframeCore.swift` exposes the optional injection boundary and
   account/screen generation handling. Repeating activation for the same
-  account/screen/run is idempotent so an in-flight overview is not invalidated.
+  account/screen/run is idempotent so an in-flight read is not invalidated.
 - `Mov/App/WireframeHome.swift` keeps the existing home arc/dual-goal selector
-  and summary layout. It reads remote weekly and daily values only when the
-  dependency is injected; errors do not display local totals as a fallback.
+  and summary layout. Home rings and summaries read the weekly-goal state; a
+  failed `/progress` request cannot hide those values. Errors do not display
+  local totals as a fallback.
 - `MovTests/ThemeTests.swift` exercises default-local mode, account reset,
-  duplicate activation, and daily aggregation.
+  independent endpoint failures and retries, cancellation and reload, stale
+  account responses, duplicate activation, and H08/H09 range movement.
 - `MovUITests/LaunchTests.swift` checks successful remote totals and explicit
   no-fallback failure states with in-memory synthetic fixtures.
 - `docs/BACKEND_PROGRESS_GOALS_READ_PREPARATION.md` records the pinned contract,
   source mapping, current test evidence, and follow-up boundary.
 
-## Verification
+## Verification recorded before the independent-state follow-up
 
 - SwiftPM mock networking suite: **50 passed, 0 failed**.
 - Focused app bridge tests: **3 passed, 0 failed**.
@@ -40,6 +43,17 @@ was created.
   to recover disk space; the UI `.xcresult` itself is not retained.
 - Functional coverage is not full Review52 pixel or motion QA. That comparison
   remains open.
+
+## Independent-state follow-up status
+
+- A non-building Swift parser check passed for the changed networking, bridge,
+  home view, and bridge-test sources.
+- The new SwiftPM and Xcode bridge/UI tests were not executed. The volume had
+  222 MiB free, and CoreSimulatorService was unavailable for listing the
+  designated iPhone 17 Pro. No simulator was created or reset, and no other
+  session cache or user data was removed.
+- The previous test counts above refer to the pre-follow-up PR head and do not
+  verify the independent-state changes.
 
 ## Follow-up boundary
 

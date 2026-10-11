@@ -23,9 +23,10 @@ goal or a failed read into a zero target.
 
 `ProgressGoalsClient` performs authenticated GET requests only. It validates
 the backend date ranges, Monday-based week, required nullable fields, grade
-shape, daily ordering and goal arithmetic. `RunningProgressLoader` loads the
-home overview as progress plus weekly-goal reads and loads daily records by an
-explicit range. The optional loader is injected through
+shape, daily ordering and goal arithmetic. `RunningProgressLoader` keeps
+`/progress`, `/goals/weekly`, and daily records in independent read states, so
+failure or retry of one endpoint does not replace another endpoint's result.
+The optional loader is injected through
 `WireframeRemoteReadDependencies`; the app's default composition still has no
 network client, token provider, host, or credential source.
 
@@ -44,14 +45,15 @@ UI test copy uses the already booted designated iPhone 17 Pro simulator and
 unique bundle IDs. These tests do not contact the backend. Full Review52
 pixel/motion comparison for this slice remains open.
 
-## Verification run (2026-10-11)
+## Prior PR verification (before the independent-state follow-up)
 
 - `swift test`: 50 passed, 0 failed (20 API client, 15 points, 8 progress/goals,
   and 7 run-record networking tests). Final run included the missing-nullable-
   weekly-field regression case.
 - Focused `MovTests/ThemeTests` bridge run: 3 passed, 0 failed on iPhone 17 Pro,
   iOS 26.3.1. It covered account reset, duplicate activation during a pending
-  read, and separate daily-range aggregation.
+  read, and separate daily-range aggregation. This was before independent
+  progress and weekly-goal states were introduced.
 - Focused `MovUITests/LaunchTests` run: 2 passed, 0 failed on iPhone 17 Pro,
   iOS 26.3.1. It checked that remote home and weekly summary values agree, goal
   editing is disabled, local records remain labeled as device data, and overview
@@ -67,10 +69,24 @@ pixel/motion comparison for this slice remains open.
   space; no UI `.xcresult` is retained.
 - The user-facing prototype was not reset or deleted. No simulator was created.
 
+## Independent-state follow-up verification (2026-10-11)
+
+- Added bridge regressions for each endpoint failing while its peer succeeds,
+  independent retry, cancellation followed by activation, account changes with
+  a late response, and H08-to-H09 daily-range movement.
+- Swift parser check passed for the changed networking, bridge, view, and test
+  sources using `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
+- Package and Xcode test suites were not run for this follow-up. The volume had
+  222 MiB free, the package build scratch directory was empty, and the selected
+  iPhone 17 Pro simulator could not be listed because CoreSimulatorService was
+  unavailable. No simulator was created or reset, and no other session cache
+  was removed.
+
 ## Follow-up
 
 The production session/composition owner must inject `ProgressGoalsClient`
 with the app's authorized `APIClient` and access-token provider before real
-backend reads are available. Daily range refresh, retry, account-scope reset,
-and duplicate screen activation remain covered by mock-based verification;
-production session behavior is outside this boundary.
+backend reads are available. The independent-state retry, cancellation, account
+switch, and H08/H09 movement regressions are present but await execution in an
+environment with adequate build space and a working simulator service.
+Production session behavior is outside this boundary.
