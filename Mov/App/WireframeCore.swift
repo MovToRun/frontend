@@ -224,6 +224,81 @@ enum WProfileValidation {
         return !normalized.isEmpty && normalized.count<=20 && introduction.count<=60
     }
 }
+enum WMemberProfileValidation {
+    static let activityRegions = ["모브시 북부권", "모브시 중부권", "모브시 남부권"]
+
+    enum WeightInput: Equatable {
+        case empty
+        case value(Decimal)
+        case invalid
+    }
+
+    static func nicknameError(for value: String) -> String? {
+        let normalized = value.precomposedStringWithCanonicalMapping
+        let scalars = Array(normalized.unicodeScalars)
+        let allowed = scalars.allSatisfy { scalar in
+            let code = scalar.value
+            return (0x41...0x5A).contains(code) || (0x61...0x7A).contains(code)
+                || (0x30...0x39).contains(code) || code == 0x5F
+                || (0xAC00...0xD7A3).contains(code)
+        }
+        guard (2...12).contains(scalars.count), allowed else {
+            return "닉네임은 2–12자이며 한글·영문·숫자·밑줄만 사용할 수 있어요."
+        }
+        return nil
+    }
+
+    static func introductionError(for value: String) -> String? {
+        value.count <= 60 ? nil : "한 줄 소개는 60자 이내로 입력해 주세요."
+    }
+
+    static func regionError(for value: String) -> String? {
+        value.isEmpty || value == "선택 안 함" || activityRegions.contains(value)
+            ? nil : "활동 지역을 선택해 주세요."
+    }
+
+    static func weightInput(_ value: String) -> WeightInput {
+        guard !value.isEmpty else { return .empty }
+        guard value.range(of: "^[0-9]+(?:\\.[0-9]+)?$", options: .regularExpression) != nil,
+              let decimal = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")),
+              decimal >= 20, decimal <= 300 else { return .invalid }
+        return .value(decimal)
+    }
+
+    static func weightText(_ value: Decimal?) -> String {
+        value.map { NSDecimalNumber(decimal: $0).stringValue } ?? ""
+    }
+
+    static func profilePatch(
+        baseline: MemberProfile,
+        nickname: String,
+        introduction: String,
+        region: String
+    ) -> MemberProfilePatch {
+        let nicknameField: MemberProfilePatchField<String> = nickname == baseline.nickname
+            ? .unchanged : .set(nickname)
+        let introductionValue = introduction.isEmpty ? nil : introduction
+        let introductionField: MemberProfilePatchField<String> = introductionValue == baseline.introduction
+            ? .unchanged : introductionValue.map(MemberProfilePatchField.set) ?? .clear
+        let regionValue = region.isEmpty || region == "선택 안 함" ? nil : region
+        let regionField: MemberProfilePatchField<String> = regionValue == baseline.region
+            ? .unchanged : regionValue.map(MemberProfilePatchField.set) ?? .clear
+        return MemberProfilePatch(nickname: nicknameField, introduction: introductionField, region: regionField)
+    }
+
+    static func weightPatch(baseline: MemberProfile, input: WeightInput) -> MemberProfilePatch {
+        let field: MemberProfilePatchField<Decimal>
+        switch input {
+        case .empty:
+            field = baseline.weightKg == nil ? .unchanged : .clear
+        case .value(let value):
+            field = baseline.weightKg == value ? .unchanged : .set(value)
+        case .invalid:
+            field = .unchanged
+        }
+        return MemberProfilePatch(weightKg: field)
+    }
+}
 enum WSignupNicknameValidation {
     static let fixtureNicknames=["달빛러너","RunMate"]
 
@@ -283,7 +358,7 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
 
     static func forScreen(_ screen: String) -> WireframeRemoteReadFeature? {
         switch screen {
-        case "M01": .profile
+        case "M01", "M02", "T02": .profile
         case "POINTS", "B02": .points
         case "L01", "L04": .runs
         case "H00", "H04", "H07", "H08", "H09", "H10": .progressGoals
@@ -301,6 +376,7 @@ enum WireframeDailyProgressTaskIdentity {
 
 struct WireframeRemoteReadDependencies {
     let memberProfileLoader: MemberProfileLoader?
+    let memberProfileUpdater: (any MemberProfileUpdating)?
     let pointsWalletLoader: PointsWalletLoader?
     let runRecordsLoader: RunRecordsLoader?
     let runningProgressLoader: RunningProgressLoader?
@@ -308,12 +384,14 @@ struct WireframeRemoteReadDependencies {
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
+        memberProfileUpdater: (any MemberProfileUpdating)? = nil,
         pointsWalletLoader: PointsWalletLoader? = nil,
         runRecordsLoader: RunRecordsLoader? = nil,
         runningProgressLoader: RunningProgressLoader? = nil,
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
+        self.memberProfileUpdater = memberProfileUpdater
         self.pointsWalletLoader = pointsWalletLoader
         self.runRecordsLoader = runRecordsLoader
         self.runningProgressLoader = runningProgressLoader
@@ -336,6 +414,7 @@ struct WireframeRemoteReadDependencies {
     }
 
     private let memberProfileLoader: MemberProfileLoader?
+    private let memberProfileUpdater: (any MemberProfileUpdating)?
     private let pointsWalletLoader: PointsWalletLoader?
     private let runRecordsLoader: RunRecordsLoader?
     private let runningProgressLoader: RunningProgressLoader?
@@ -350,12 +429,15 @@ struct WireframeRemoteReadDependencies {
     @ObservationIgnored private var manualRunsPreviousState: RunRecordsReadState?
     @ObservationIgnored private var weeklyGoalWriteOperationID: UUID?
     @ObservationIgnored private var weeklyGoalWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var memberProfileWriteOperationID: UUID?
+    @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var weeklyGoalNeedsRefresh = false
     @ObservationIgnored private var manualWeeklyGoalPreviousState: WeeklyGoalReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
     private(set) var activeScreen: String?
     private(set) var memberProfileState: MemberProfileLoadState = .idle
+    private(set) var memberProfileWriteState: MemberProfileWriteState = .idle
     private(set) var pointsState: PointsWalletReadState = .idle
     private(set) var runRecordsState: RunRecordsReadState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
@@ -368,6 +450,7 @@ struct WireframeRemoteReadDependencies {
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
+        memberProfileUpdater = dependencies?.memberProfileUpdater
         pointsWalletLoader = dependencies?.pointsWalletLoader
         runRecordsLoader = dependencies?.runRecordsLoader
         runningProgressLoader = dependencies?.runningProgressLoader
@@ -375,6 +458,8 @@ struct WireframeRemoteReadDependencies {
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
+    var canWriteMemberProfile: Bool { memberProfileUpdater != nil && memberProfileLoader != nil }
+    var isSavingMemberProfile: Bool { memberProfileWriteState == .saving }
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
     var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
     var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
@@ -391,6 +476,7 @@ struct WireframeRemoteReadDependencies {
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
+        cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
         cancelManualOperation()
         generation &+= 1
@@ -399,6 +485,7 @@ struct WireframeRemoteReadDependencies {
         activeFeature = nil
         activeScreen = nil
         memberProfileState = .idle
+        memberProfileWriteState = .idle
         pointsState = .idle
         runRecordsState = .idle
         runDetailState = .idle
@@ -420,6 +507,9 @@ struct WireframeRemoteReadDependencies {
         }
         if weeklyGoalWriteOperationID != nil, nextScreen != activeScreen {
             cancelWeeklyGoalMutation()
+        }
+        if memberProfileWriteOperationID != nil, nextScreen != activeScreen {
+            cancelMemberProfileMutation()
         }
         if activeFeature == feature, activeScreen == nextScreen, activeRunID == (feature == .runs ? runID : nil) {
             return
@@ -653,6 +743,120 @@ struct WireframeRemoteReadDependencies {
             self.manualOperationTask = nil
             self.manualOperationID = nil
             self.manualOperationKind = nil
+            self.memberProfileState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func saveMemberProfile(
+        _ patch: MemberProfilePatch,
+        accountScopeID: String,
+        screen: String
+    ) {
+        guard memberProfileWriteOperationID == nil else { return }
+        guard accountScopeID == self.accountScopeID, screen == activeScreen,
+              activeFeature == .profile else { return }
+        guard patch.hasChanges else { return }
+        guard case .loaded = memberProfileState else {
+            memberProfileWriteState = .failed(.profileWriteUnavailable)
+            return
+        }
+        guard let memberProfileUpdater else {
+            memberProfileWriteState = .failed(.profileWriteUnavailable)
+            return
+        }
+
+        let requestGeneration = generation
+        let operationID = UUID()
+        memberProfileWriteOperationID = operationID
+        memberProfileWriteState = .saving
+        memberProfileWriteTask = Task { @MainActor [weak self, memberProfileUpdater] in
+            do {
+                let saved = try await memberProfileUpdater.updateProfile(patch)
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileState = .loaded(saved)
+                self.memberProfileWriteState = .saved
+            } catch let failure as MemberProfileFailure {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(failure)
+            } catch is CancellationError {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(.cancelled)
+            } catch {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(.invalidResponse)
+            }
+        }
+    }
+
+    func cancelMemberProfileMutation() {
+        guard memberProfileWriteOperationID != nil else { return }
+        memberProfileWriteTask?.cancel()
+        memberProfileWriteTask = nil
+        memberProfileWriteOperationID = nil
+        memberProfileWriteState = .idle
+        memberProfileState = .idle
+    }
+
+    func consumeMemberProfileWriteResult() {
+        guard memberProfileWriteState == .saved else { return }
+        memberProfileWriteState = .idle
+    }
+
+    func clearMemberProfileWriteFailure() {
+        guard memberProfileWriteOperationID == nil else { return }
+        if case .failed = memberProfileWriteState { memberProfileWriteState = .idle }
+    }
+
+    private func refreshMemberProfileAfterStaleWrite(accountScopeID: String) {
+        guard self.accountScopeID == accountScopeID,
+              activeFeature == .profile,
+              let memberProfileLoader else { return }
+        let requestGeneration = generation
+        let requestScreen = activeScreen
+        memberProfileState = .loading
+        Task { @MainActor [weak self] in
+            await memberProfileLoader.load()
+            let result = await memberProfileLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeScreen == requestScreen else { return }
             self.memberProfileState = Task.isCancelled ? .idle : result
         }
     }
@@ -1289,7 +1493,15 @@ struct RootView:View {
         let runFixture = args.contains("-wire-run-records-fixture")
         let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
         let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
-        guard runFixture || progressFixture else { return nil }
+        let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
+            ? WireframeMemberProfileFixture(
+                failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
+                failWrite:args.contains("-wire-member-profile-write-fail"),
+                conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
+                delayWrite:args.contains("-wire-member-profile-write-delay")
+            ) : nil
+        guard runFixture || progressFixture || profileFixture != nil else { return nil }
+        let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runLoader = runFixture ? RunRecordsLoader(client:WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail")
         )):nil
@@ -1302,6 +1514,8 @@ struct RootView:View {
         ):nil
         let progressLoader = progressClient.map { RunningProgressLoader(client:$0) }
         return WireframeRemoteReadDependencies(
+            memberProfileLoader:profileLoader,
+            memberProfileUpdater:profileFixture,
             runRecordsLoader:runLoader,
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil
@@ -1321,6 +1535,62 @@ struct RootView:View {
                 WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies)
             }
         }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)
+    }
+}
+
+/// An in-memory profile API fake for isolated UI review and test suites.
+private actor WireframeMemberProfileFixture:MemberProfileFetching, MemberProfileUpdating {
+    private var profile=MemberProfile(
+        nickname:"RunMate",introduction:"아침마다 달려요",region:"모브시 북부권",weightKg:Decimal(string:"63.12")!
+    )
+    private var failReadOnce:Bool
+    private let failWrite:Bool
+    private let conflictNickname:Bool
+    private let delayWrite:Bool
+
+    init(failReadOnce:Bool,failWrite:Bool,conflictNickname:Bool,delayWrite:Bool){
+        self.failReadOnce=failReadOnce;self.failWrite=failWrite;self.conflictNickname=conflictNickname;self.delayWrite=delayWrite
+    }
+
+    func fetchProfile() async throws -> MemberProfile {
+        if failReadOnce {failReadOnce=false;throw MemberProfileFailure.serviceUnavailable(requestID:"fixture-profile-read")}
+        return profile
+    }
+
+    func updateProfile(_ patch:MemberProfilePatch) async throws -> MemberProfile {
+        if delayWrite {try await Task.sleep(for:.milliseconds(350))}
+        if failWrite {throw MemberProfileFailure.serviceUnavailable(requestID:"fixture-profile-write")}
+        if conflictNickname,case .set=patch.nickname {
+            throw MemberProfileFailure.nicknameAlreadyUsed(requestID:"fixture-profile-conflict")
+        }
+        var nickname=profile.nickname
+        var introduction=profile.introduction
+        var region=profile.region
+        var weightKg=profile.weightKg
+        switch patch.nickname {
+        case .unchanged:break
+        case .set(let value):nickname=value.precomposedStringWithCanonicalMapping
+        case .clear:throw MemberProfileFailure.invalidProfileDraft
+        }
+        switch patch.introduction {
+        case .unchanged:break
+        case .set(let value):introduction=value
+        case .clear:introduction=nil
+        }
+        switch patch.region {
+        case .unchanged:break
+        case .set(let value):region=value
+        case .clear:region=nil
+        }
+        switch patch.weightKg {
+        case .unchanged:break
+        case .set(let value):
+            guard value>=20,value<=300 else{throw MemberProfileFailure.validationFailed(requestID:"fixture-profile-validation")}
+            var input=value;var stored=Decimal();NSDecimalRound(&stored,&input,2,.down);weightKg=stored
+        case .clear:weightKg=nil
+        }
+        profile=MemberProfile(nickname:nickname,introduction:introduction,region:region,weightKg:weightKg)
+        return profile
     }
 }
 
@@ -1457,6 +1727,8 @@ struct WireframeRoot:View {
     @State var weeklyGoalDraftScopeID:String?
     @State var weeklyGoalDraftDirty=false
     @State var weeklyTimeDraftInvalid=false
+    @State var memberProfileDraftBaseline:MemberProfile?
+    @State var memberProfileDraftScopeID:String?
     init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil){
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
@@ -1563,6 +1835,8 @@ struct WireframeRoot:View {
         rootTaskViews
             .onChange(of:scenePhase){_,phase in handleScenePhaseChange(phase)}
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in handleRemoteAccountScopeChange(scopeID)}
+            .onChange(of:remoteReads.memberProfileState){_,state in handleRemoteMemberProfileStateChange(state)}
+            .onChange(of:remoteReads.memberProfileWriteState){_,state in handleRemoteMemberProfileWriteStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalState){_,state in handleRemoteWeeklyGoalStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalWriteState){_,state in handleRemoteWeeklyGoalWriteStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalConflictRefreshState){_,state in handleRemoteWeeklyGoalConflictRefreshStateChange(state)}
@@ -1670,6 +1944,10 @@ struct WireframeRoot:View {
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
         remoteReads.accountDidChange(to:scopeID)
+        memberProfileDraftBaseline=nil
+        memberProfileDraftScopeID=scopeID
+        if ui.screen=="M02" {ui.nickname="";ui.introduction="";ui.region="選択 안 함";ui.error=""}
+        if ui.screen=="T02" {ui.weight="";ui.error=""}
         guard ["H04","H10"].contains(ui.screen) else{return}
         weeklyGoalDraftVersion=nil
         weeklyGoalDraftScopeID=scopeID
@@ -1677,6 +1955,44 @@ struct WireframeRoot:View {
         weeklyTimeDraftInvalid=false
         ui.weekly=emptyWeeklyGoalDraft()
         ui.error=""
+    }
+    func handleRemoteMemberProfileStateChange(_ state:MemberProfileLoadState){
+        guard case .loaded(let profile)=state,
+              remoteReads.accountScopeID==ui.remoteAccountScopeID else{return}
+        applyMemberProfilePublicFields(profile)
+        if ui.screen=="M02",memberProfileDraftBaseline==nil || memberProfileDraftScopeID != ui.remoteAccountScopeID {
+            beginMemberProfileDraft(profile,for:"M02")
+        } else if ui.screen=="T02",memberProfileDraftBaseline==nil || memberProfileDraftScopeID != ui.remoteAccountScopeID {
+            beginMemberProfileDraft(profile,for:"T02")
+        }
+    }
+    func handleRemoteMemberProfileWriteStateChange(_ state:MemberProfileWriteState){
+        switch state {
+        case .failed(let failure):
+            guard ["M02","T02"].contains(ui.screen) else{return}
+            ui.error=failure.writeMessage
+        case .saved:
+            guard case .loaded(let profile)=remoteReads.memberProfileState else{
+                ui.error=MemberProfileFailure.invalidResponse.writeMessage
+                remoteReads.consumeMemberProfileWriteResult()
+                return
+            }
+            if ui.screen=="M02" {
+                beginMemberProfileDraft(profile,for:"M02")
+                applyMemberProfilePublicFields(profile)
+                ui.profile.photo=ui.photo
+                ui.save()
+            } else if ui.screen=="T02" {
+                beginMemberProfileDraft(profile,for:"T02")
+                ui.profile.weight=WMemberProfileValidation.weightText(profile.weightKg)
+                ui.save()
+            }
+            ui.error=""
+            remoteReads.consumeMemberProfileWriteResult()
+            performBack()
+        case .idle,.saving:
+            break
+        }
     }
     func handleRemoteWeeklyGoalStateChange(_ state:WeeklyGoalReadState){
         guard ["H04","H10"].contains(ui.screen),weeklyGoalDraftScopeID==ui.remoteAccountScopeID,
@@ -1720,9 +2036,9 @@ struct WireframeRoot:View {
         communityDiscardContext=nil
     }
     func go(_ id:String){let route=id=="B01" ? "POINTS":id;if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return};if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return};performNavigation(route)}
-    func performNavigation(_ route:String){if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
+    func performNavigation(_ route:String){if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return};performBack()}
-    func performBack(){if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
+    func performBack(){if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
     func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
@@ -1831,8 +2147,22 @@ struct WireframeRoot:View {
             }
         }
         if ["Q01","Q02","Q03"].contains(id),!current.isValid,let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
-        if id=="M02"{ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)}
-        if id=="T02"{ui.weight=ui.profile.weight}
+        if id=="M02"{
+            remoteReads.clearMemberProfileWriteFailure()
+            memberProfileDraftBaseline=nil;memberProfileDraftScopeID=ui.remoteAccountScopeID;ui.error=""
+            ui.nickname=ui.profile.nickname;ui.introduction=ui.profile.introduction;ui.region=ui.profile.region;ui.photo=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)
+            if remoteReads.hasMemberProfileDependency,
+               remoteReads.accountScopeID==ui.remoteAccountScopeID,
+               case .loaded(let profile)=remoteReads.memberProfileState {beginMemberProfileDraft(profile,for:"M02")}
+        }
+        if id=="T02"{
+            remoteReads.clearMemberProfileWriteFailure()
+            memberProfileDraftBaseline=nil;memberProfileDraftScopeID=ui.remoteAccountScopeID;ui.error=""
+            ui.weight=ui.profile.weight
+            if remoteReads.hasMemberProfileDependency,
+               remoteReads.accountScopeID==ui.remoteAccountScopeID,
+               case .loaded(let profile)=remoteReads.memberProfileState {beginMemberProfileDraft(profile,for:"T02")}
+        }
         if id=="L06"{ui.title=current.title;ui.memo=current.memo}
         if id=="C12",ui.communitySelectedCourse==nil{ui.communitySelectedCourse=WCommunityCourseFixtures.sample}
         if id=="C13"{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID}

@@ -199,12 +199,27 @@ final class APIClient: APIResponseSending, @unchecked Sendable {
 
 struct MemberProfile: Equatable, Sendable {
     let nickname: String
+    let introduction: String?
+    let region: String?
+    let weightKg: Decimal?
+
+    init(nickname: String, introduction: String? = nil, region: String? = nil, weightKg: Decimal? = nil) {
+        self.nickname = nickname
+        self.introduction = introduction
+        self.region = region
+        self.weightKg = weightKg
+    }
 }
 
 private struct MemberProfileResponse: Decodable, Sendable {
     let nickname: String
+    let introduction: String?
+    let region: String?
+    let weightKg: Decimal?
 
-    var profile: MemberProfile { MemberProfile(nickname: nickname) }
+    var profile: MemberProfile {
+        MemberProfile(nickname: nickname, introduction: introduction, region: region, weightKg: weightKg)
+    }
 }
 
 private struct APIProblemResponse: Decodable {
@@ -221,10 +236,47 @@ protocol MemberProfileFetching: Sendable {
     func fetchProfile() async throws -> MemberProfile
 }
 
+enum MemberProfilePatchField<Value: Sendable>: Equatable, Sendable where Value: Equatable {
+    case unchanged
+    case set(Value)
+    case clear
+}
+
+struct MemberProfilePatch: Equatable, Sendable {
+    let nickname: MemberProfilePatchField<String>
+    let introduction: MemberProfilePatchField<String>
+    let region: MemberProfilePatchField<String>
+    let weightKg: MemberProfilePatchField<Decimal>
+
+    init(
+        nickname: MemberProfilePatchField<String> = .unchanged,
+        introduction: MemberProfilePatchField<String> = .unchanged,
+        region: MemberProfilePatchField<String> = .unchanged,
+        weightKg: MemberProfilePatchField<Decimal> = .unchanged
+    ) {
+        self.nickname = nickname
+        self.introduction = introduction
+        self.region = region
+        self.weightKg = weightKg
+    }
+
+    var hasChanges: Bool {
+        nickname != .unchanged || introduction != .unchanged || region != .unchanged || weightKg != .unchanged
+    }
+}
+
+protocol MemberProfileUpdating: Sendable {
+    func updateProfile(_ patch: MemberProfilePatch) async throws -> MemberProfile
+}
+
 enum MemberProfileFailure: Error, Equatable, Sendable {
     case accessTokenUnavailable
     case unauthenticated
     case profileNotFound
+    case nicknameAlreadyUsed(requestID: String?)
+    case validationFailed(requestID: String?)
+    case invalidProfileDraft
+    case profileWriteUnavailable
     case serviceUnavailable(requestID: String?)
     case serverFailure(statusCode: Int, requestID: String?)
     case invalidResponse
@@ -237,6 +289,12 @@ enum MemberProfileFailure: Error, Equatable, Sendable {
             return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
         case .profileNotFound, .invalidResponse:
             return "프로필을 불러오지 못했어요. 다시 시도해 주세요."
+        case .nicknameAlreadyUsed:
+            return "이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해 주세요."
+        case .validationFailed, .invalidProfileDraft:
+            return "프로필 입력값을 확인해 주세요."
+        case .profileWriteUnavailable:
+            return "프로필 저장 기능을 사용할 수 없어요."
         case .serviceUnavailable:
             return "서비스가 잠시 불안정해요. 잠시 후 다시 시도해 주세요."
         case .serverFailure:
@@ -245,6 +303,27 @@ enum MemberProfileFailure: Error, Equatable, Sendable {
             return "네트워크 연결을 확인한 뒤 다시 시도해 주세요."
         case .cancelled:
             return "요청이 취소됐어요."
+        }
+    }
+
+    var writeMessage: String {
+        switch self {
+        case .nicknameAlreadyUsed:
+            return "이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해 주세요."
+        case .validationFailed, .invalidProfileDraft:
+            return "닉네임, 소개, 활동 지역, 체중 입력값을 확인해 주세요."
+        case .accessTokenUnavailable, .unauthenticated:
+            return "로그인 상태를 확인한 뒤 다시 시도해 주세요."
+        case .transport:
+            return "네트워크 연결을 확인한 뒤 다시 시도해 주세요."
+        case .serviceUnavailable:
+            return "서비스가 잠시 불안정해요. 잠시 후 다시 시도해 주세요."
+        case .profileWriteUnavailable:
+            return "프로필 저장 기능을 사용할 수 없어요."
+        case .cancelled:
+            return "저장이 취소됐어요. 변경 사항은 저장되지 않았어요."
+        case .profileNotFound, .invalidResponse, .serverFailure:
+            return "프로필을 저장하지 못했어요. 다시 시도해 주세요."
         }
     }
 }
@@ -259,14 +338,48 @@ struct MemberProfileRetryPolicy: Sendable {
     }
 }
 
-final class MemberProfileClient: MemberProfileFetching, Sendable {
-    private let apiClient: APIClient
+private struct MemberProfilePatchBody: Encodable {
+    private enum CodingKeys: String, CodingKey {
+        case nickname
+        case introduction
+        case region
+        case weightKg
+    }
+
+    let patch: MemberProfilePatch
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try encode(patch.nickname, forKey: .nickname, into: &container)
+        try encode(patch.introduction, forKey: .introduction, into: &container)
+        try encode(patch.region, forKey: .region, into: &container)
+        try encode(patch.weightKg, forKey: .weightKg, into: &container)
+    }
+
+    private func encode<Value: Encodable & Sendable>(
+        _ field: MemberProfilePatchField<Value>,
+        forKey key: CodingKeys,
+        into container: inout KeyedEncodingContainer<CodingKeys>
+    ) throws {
+        switch field {
+        case .unchanged:
+            break
+        case .set(let value):
+            try container.encode(value, forKey: key)
+        case .clear:
+            try container.encodeNil(forKey: key)
+        }
+    }
+}
+
+final class MemberProfileClient: MemberProfileFetching, MemberProfileUpdating, Sendable {
+    private let apiClient: any APIResponseSending
     private let tokenProvider: any AccessTokenProviding
     private let retryPolicy: MemberProfileRetryPolicy
     private let sleep: @Sendable (UInt64) async throws -> Void
 
     init(
-        apiClient: APIClient,
+        apiClient: any APIResponseSending,
         tokenProvider: any AccessTokenProviding,
         retryPolicy: MemberProfileRetryPolicy = MemberProfileRetryPolicy(),
         sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
@@ -278,31 +391,14 @@ final class MemberProfileClient: MemberProfileFetching, Sendable {
     }
 
     func fetchProfile() async throws -> MemberProfile {
-        let token: String
-        do {
-            guard let value = try await tokenProvider.accessToken(),
-                  !value.isEmpty,
-                  value.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
-                throw MemberProfileFailure.accessTokenUnavailable
-            }
-            token = value
-        } catch let failure as MemberProfileFailure {
-            throw failure
-        } catch is CancellationError {
-            throw MemberProfileFailure.cancelled
-        } catch {
-            throw MemberProfileFailure.accessTokenUnavailable
-        }
-
-        let headers = [
-            "Authorization": "Bearer \(token)",
-            "Accept": "application/json",
-            "Cache-Control": "no-store"
-        ]
+        let headers = try await authorizedHeaders()
 
         for attempt in 1...retryPolicy.maximumAttempts {
             do {
-                let response = try await apiClient.sendResponse(path: "members/me/profile", headers: headers)
+                let response = try await apiClient.sendResponse(
+                    path: "members/me/profile", method: "GET", body: nil,
+                    headers: headers, queryItems: []
+                )
                 guard (200..<300).contains(response.statusCode) else {
                     let failure = mapFailure(response)
                     if attempt < retryPolicy.maximumAttempts, failure.isRetryable {
@@ -340,6 +436,61 @@ final class MemberProfileClient: MemberProfileFetching, Sendable {
         throw MemberProfileFailure.invalidResponse
     }
 
+    func updateProfile(_ patch: MemberProfilePatch) async throws -> MemberProfile {
+        guard patch.hasChanges, patch.nickname != .clear else {
+            throw MemberProfileFailure.invalidProfileDraft
+        }
+        let headers = try await authorizedHeaders().merging(["Content-Type": "application/json"]) { _, new in new }
+        let body: Data
+        do {
+            body = try JSONEncoder().encode(MemberProfilePatchBody(patch: patch))
+        } catch {
+            throw MemberProfileFailure.invalidProfileDraft
+        }
+
+        do {
+            let response = try await apiClient.sendResponse(
+                path: "members/me/profile", method: "PATCH", body: body,
+                headers: headers, queryItems: []
+            )
+            guard (200..<300).contains(response.statusCode) else { throw mapFailure(response) }
+            do {
+                return try JSONDecoder().decode(MemberProfileResponse.self, from: response.data).profile
+            } catch {
+                throw MemberProfileFailure.invalidResponse
+            }
+        } catch let failure as MemberProfileFailure {
+            throw failure
+        } catch let error as APIClientError {
+            throw mapFailure(error)
+        } catch is CancellationError {
+            throw MemberProfileFailure.cancelled
+        } catch {
+            throw MemberProfileFailure.invalidResponse
+        }
+    }
+
+    private func authorizedHeaders() async throws -> [String: String] {
+        do {
+            guard let token = try await tokenProvider.accessToken(),
+                  !token.isEmpty,
+                  token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+                throw MemberProfileFailure.accessTokenUnavailable
+            }
+            return [
+                "Authorization": "Bearer \(token)",
+                "Accept": "application/json",
+                "Cache-Control": "no-store"
+            ]
+        } catch let failure as MemberProfileFailure {
+            throw failure
+        } catch is CancellationError {
+            throw MemberProfileFailure.cancelled
+        } catch {
+            throw MemberProfileFailure.accessTokenUnavailable
+        }
+    }
+
     private func waitBeforeRetry() async throws {
         do {
             try await sleep(retryPolicy.delayNanoseconds)
@@ -356,6 +507,10 @@ final class MemberProfileClient: MemberProfileFetching, Sendable {
             return .unauthenticated
         case 404:
             return .profileNotFound
+        case 400 where problem?.code == "VALIDATION_FAILED":
+            return .validationFailed(requestID: requestID)
+        case 409 where problem?.code == "NICKNAME_ALREADY_USED":
+            return .nicknameAlreadyUsed(requestID: requestID)
         case 503 where problem?.code == "AUTH_UNAVAILABLE":
             return .serviceUnavailable(requestID: requestID)
         default:
@@ -398,6 +553,13 @@ enum MemberProfileLoadState: Equatable, Sendable {
     case idle
     case loading
     case loaded(MemberProfile)
+    case failed(MemberProfileFailure)
+}
+
+enum MemberProfileWriteState: Equatable, Sendable {
+    case idle
+    case saving
+    case saved
     case failed(MemberProfileFailure)
 }
 

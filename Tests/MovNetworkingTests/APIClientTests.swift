@@ -8,6 +8,27 @@ private struct FixedAccessTokenProvider: AccessTokenProviding {
     func accessToken() async throws -> String? { value }
 }
 
+private struct CapturedAPIRequest: Sendable {
+    let path:String
+    let method:String
+    let body:Data?
+    let headers:[String:String]
+}
+
+private actor RecordingAPIResponseTransport: APIResponseSending {
+    private let response:APIClientResponse
+    private var capturedRequest:CapturedAPIRequest?
+
+    init(response:APIClientResponse){self.response=response}
+
+    func sendResponse(path:String,method:String,body:Data?,headers:[String:String],queryItems:[URLQueryItem]) async throws -> APIClientResponse {
+        capturedRequest=CapturedAPIRequest(path:path,method:method,body:body,headers:headers)
+        return response
+    }
+
+    func request()->CapturedAPIRequest?{capturedRequest}
+}
+
 private actor CountingAccessTokenProvider: AccessTokenProviding {
     private let value: String?
     private var requests = 0
@@ -293,6 +314,96 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-access-token")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+    }
+
+    func testMemberProfileFetchDecodesAllPrivateFieldsAndNumericWeight() async throws {
+        MockURLProtocol.respond(statusCode: 200, data: Data("{\"nickname\":\"RunMate\",\"introduction\":\"매일 달려요\",\"region\":\"모브시 북부권\",\"weightKg\":63.12}".utf8))
+        let client = MemberProfileClient(
+            apiClient: try makeClient(),
+            tokenProvider: FixedAccessTokenProvider(value: "fixture-access-token"),
+            sleep: { _ in }
+        )
+
+        let profile = try await client.fetchProfile()
+
+        XCTAssertEqual(profile.nickname, "RunMate")
+        XCTAssertEqual(profile.introduction, "매일 달려요")
+        XCTAssertEqual(profile.region, "모브시 북부권")
+        XCTAssertEqual(profile.weightKg, Decimal(string: "63.12"))
+    }
+
+    func testMemberProfilePatchPreservesOmittedFieldsAndEncodesNullAndDecimalNumber() async throws {
+        let transport=RecordingAPIResponseTransport(response:APIClientResponse(
+            statusCode:200,
+            data:Data("{\"nickname\":\"RunMate\",\"introduction\":null,\"region\":null,\"weightKg\":63.12}".utf8),
+            requestID:nil
+        ))
+        let client = MemberProfileClient(
+            apiClient: transport,
+            tokenProvider: FixedAccessTokenProvider(value: "fixture-access-token"),
+            sleep: { _ in }
+        )
+        let patch = MemberProfilePatch(
+            introduction: .clear,
+            region: .clear,
+            weightKg: .set(Decimal(string: "63.123")!)
+        )
+
+        let saved = try await client.updateProfile(patch)
+        let captured = await transport.request()
+        let request = try XCTUnwrap(captured)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.body)) as? [String: Any])
+
+        XCTAssertEqual(request.path, "members/me/profile")
+        XCTAssertEqual(request.method, "PATCH")
+        XCTAssertEqual(request.headers["Authorization"], "Bearer fixture-access-token")
+        XCTAssertEqual(request.headers["Accept"], "application/json")
+        XCTAssertEqual(request.headers["Content-Type"], "application/json")
+        XCTAssertEqual(Set(body.keys), Set(["introduction", "region", "weightKg"]))
+        XCTAssertTrue(body["introduction"] is NSNull)
+        XCTAssertTrue(body["region"] is NSNull)
+        let weightNumber = try XCTUnwrap(body["weightKg"] as? NSNumber)
+        XCTAssertEqual(weightNumber.doubleValue, 63.123, accuracy: 0.000_001)
+        XCTAssertFalse(body["weightKg"] is String, "The backend contract requires a JSON number")
+        XCTAssertEqual(saved.weightKg, Decimal(string: "63.12"), "The response supplies the server-truncated value")
+    }
+
+    func testMemberProfilePatchMapsNicknameConflictAndDoesNotRetryWrites() async throws {
+        let problem = Data("{\"code\":\"NICKNAME_ALREADY_USED\",\"requestId\":\"profile-conflict-1\"}".utf8)
+        MockURLProtocol.respond(statusCode: 409, data: problem)
+        let client = MemberProfileClient(
+            apiClient: try makeClient(),
+            tokenProvider: FixedAccessTokenProvider(value: "fixture-access-token"),
+            retryPolicy: MemberProfileRetryPolicy(maximumAttempts: 2, delayNanoseconds: 0),
+            sleep: { _ in }
+        )
+
+        do {
+            _ = try await client.updateProfile(MemberProfilePatch(nickname: .set("RunnerNew")))
+            XCTFail("Expected a nickname conflict")
+        } catch {
+            XCTAssertEqual(error as? MemberProfileFailure, .nicknameAlreadyUsed(requestID: "profile-conflict-1"))
+        }
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+    }
+
+    func testMemberProfilePatchRejectsEmptyAndNicknameClearWithoutSendingRequest() async throws {
+        MockURLProtocol.reset()
+        let client = MemberProfileClient(
+            apiClient: try makeClient(),
+            tokenProvider: FixedAccessTokenProvider(value: "fixture-access-token"),
+            sleep: { _ in }
+        )
+
+        for patch in [MemberProfilePatch(), MemberProfilePatch(nickname: .clear)] {
+            do {
+                _ = try await client.updateProfile(patch)
+                XCTFail("Expected invalid profile draft")
+            } catch {
+                XCTAssertEqual(error as? MemberProfileFailure, .invalidProfileDraft)
+            }
+        }
+        XCTAssertTrue(MockURLProtocol.requests.isEmpty)
     }
 
     func testUnavailableProfileServiceRetriesOnceAndReadsTokenOnlyOnce() async throws {
