@@ -279,14 +279,23 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
     case profile
     case points
     case runs
+    case progressGoals
 
     static func forScreen(_ screen: String) -> WireframeRemoteReadFeature? {
         switch screen {
         case "M01": .profile
         case "POINTS", "B02": .points
         case "L01", "L04": .runs
+        case "H00", "H07", "H08", "H09": .progressGoals
         default: nil
         }
+    }
+}
+
+enum WireframeDailyProgressTaskIdentity {
+    static func key(screen: String, accountScopeID: String, range: BackendDailyProgressRange) -> String {
+        let screenScope = ["H07","H08","H09"].contains(screen) ? "progress-statistics" : screen
+        return "\(screenScope)|\(accountScopeID)|\(range.cacheKey)"
     }
 }
 
@@ -294,32 +303,41 @@ struct WireframeRemoteReadDependencies {
     let memberProfileLoader: MemberProfileLoader?
     let pointsWalletLoader: PointsWalletLoader?
     let runRecordsLoader: RunRecordsLoader?
+    let runningProgressLoader: RunningProgressLoader?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
         pointsWalletLoader: PointsWalletLoader? = nil,
-        runRecordsLoader: RunRecordsLoader? = nil
+        runRecordsLoader: RunRecordsLoader? = nil,
+        runningProgressLoader: RunningProgressLoader? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.pointsWalletLoader = pointsWalletLoader
         self.runRecordsLoader = runRecordsLoader
+        self.runningProgressLoader = runningProgressLoader
     }
 }
 
 @MainActor @Observable final class WireframeRemoteReadBridge {
-    private enum ManualOperationKind {
+    private enum ManualOperationKind: Equatable {
         case profileRetry
         case pointsRetry
         case pointsPage
         case runsRetry
         case runsPage
         case runDetailRetry
+        case progressRetry
+        case weeklyGoalRetry
+        case progressDailyRetry
     }
 
     private let memberProfileLoader: MemberProfileLoader?
     private let pointsWalletLoader: PointsWalletLoader?
     private let runRecordsLoader: RunRecordsLoader?
+    private let runningProgressLoader: RunningProgressLoader?
     @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var dailyGeneration: UInt64 = 0
+    @ObservationIgnored private var dailyProgressTask: Task<Void, Never>?
     @ObservationIgnored private var manualOperationID: UUID?
     @ObservationIgnored private var manualOperationTask: Task<Void, Never>?
     @ObservationIgnored private var manualOperationKind: ManualOperationKind?
@@ -327,43 +345,65 @@ struct WireframeRemoteReadDependencies {
     @ObservationIgnored private var manualRunsPreviousState: RunRecordsReadState?
     private(set) var accountScopeID: String?
     private(set) var activeFeature: WireframeRemoteReadFeature?
+    private(set) var activeScreen: String?
     private(set) var memberProfileState: MemberProfileLoadState = .idle
     private(set) var pointsState: PointsWalletReadState = .idle
     private(set) var runRecordsState: RunRecordsReadState = .idle
     private(set) var runDetailState: RunDetailReadState = .idle
     private(set) var activeRunID: String?
+    private(set) var progressState: ProgressReadState = .idle
+    private(set) var weeklyGoalState: WeeklyGoalReadState = .idle
+    private(set) var dailyProgressState: DailyProgressReadState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
         pointsWalletLoader = dependencies?.pointsWalletLoader
         runRecordsLoader = dependencies?.runRecordsLoader
+        runningProgressLoader = dependencies?.runningProgressLoader
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
     var hasPointsDependency: Bool { pointsWalletLoader != nil }
     var hasRunRecordsDependency: Bool { runRecordsLoader != nil }
-    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency }
+    var hasRunningProgressDependency: Bool { runningProgressLoader != nil }
+    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency }
+
+    private func invalidateDailyProgressRead() {
+        dailyGeneration &+= 1
+        dailyProgressTask?.cancel()
+        dailyProgressTask = nil
+    }
 
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
         cancelManualOperation()
         generation &+= 1
+        invalidateDailyProgressRead()
         accountScopeID = nextScopeID
         activeFeature = nil
+        activeScreen = nil
         memberProfileState = .idle
         pointsState = .idle
         runRecordsState = .idle
         runDetailState = .idle
         activeRunID = nil
+        progressState = .idle
+        weeklyGoalState = .idle
+        dailyProgressState = .idle
     }
 
-    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil) async {
+    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        let nextScreen = screen ?? feature?.rawValue
+        if activeFeature == feature, activeScreen == nextScreen, activeRunID == (feature == .runs ? runID : nil) {
+            return
+        }
         let sameFeature = activeFeature == feature && feature != nil
         cancelManualOperation(restorePreviousState: sameFeature)
         generation &+= 1
         let requestGeneration = generation
         activeFeature = feature
+        activeScreen = nextScreen
 
         guard let feature else {
             memberProfileState = .idle
@@ -371,6 +411,10 @@ struct WireframeRemoteReadDependencies {
             runRecordsState = .idle
             runDetailState = .idle
             activeRunID = nil
+            progressState = .idle
+            weeklyGoalState = .idle
+            dailyProgressState = .idle
+            invalidateDailyProgressRead()
             return
         }
 
@@ -380,6 +424,10 @@ struct WireframeRemoteReadDependencies {
             runRecordsState = .idle
             runDetailState = .idle
             activeRunID = nil
+            progressState = .idle
+            weeklyGoalState = .idle
+            dailyProgressState = .idle
+            invalidateDailyProgressRead()
         } else {
             if memberProfileState == .loading { memberProfileState = .idle }
             switch pointsState {
@@ -389,6 +437,14 @@ struct WireframeRemoteReadDependencies {
                 break
             }
             if activeRunID != runID { runDetailState = .idle }
+            if feature == .progressGoals {
+                if progressState == .loading { progressState = .idle }
+                if weeklyGoalState == .loading { weeklyGoalState = .idle }
+                if !["H07","H08","H09"].contains(nextScreen ?? "") {
+                    dailyProgressState = .idle
+                    invalidateDailyProgressRead()
+                }
+            }
         }
         activeRunID = feature == .runs ? runID : nil
 
@@ -447,7 +503,88 @@ struct WireframeRemoteReadDependencies {
                     runRecordsState = result
                 }
             }
+        case .progressGoals:
+            guard let runningProgressLoader else {
+                progressState = .idle
+                weeklyGoalState = .idle
+                dailyProgressState = .idle
+                return
+            }
+            let shouldLoadProgress = progressState == .idle
+            let shouldLoadWeeklyGoal = weeklyGoalState == .idle
+            guard shouldLoadProgress || shouldLoadWeeklyGoal else { return }
+            if shouldLoadProgress { progressState = .loading }
+            if shouldLoadWeeklyGoal { weeklyGoalState = .loading }
+            if shouldLoadProgress && shouldLoadWeeklyGoal {
+                async let progressRead: Void = completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+                async let weeklyGoalRead: Void = completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+                await progressRead
+                await weeklyGoalRead
+            } else if shouldLoadProgress {
+                await completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+            } else {
+                await completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+            }
         }
+    }
+
+    private func completeProgressRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadProgress()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            progressState = .idle
+            activeFeature = nil
+        } else {
+            progressState = result
+        }
+    }
+
+    private func completeWeeklyGoalRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadWeeklyGoal()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            weeklyGoalState = .idle
+            activeFeature = nil
+        } else {
+            weeklyGoalState = result
+        }
+    }
+
+    func loadDailyProgress(range: BackendDailyProgressRange, accountScopeID: String, screen: String = "H07") async {
+        if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        guard let runningProgressLoader else { dailyProgressState = .idle; return }
+        guard ["H07","H08","H09"].contains(screen) else { return }
+        if activeFeature != .progressGoals || activeScreen != screen {
+            activeFeature = .progressGoals
+            activeScreen = screen
+        }
+        if case .loaded(let daily) = dailyProgressState, daily.range == range { return }
+        if case .loading(let loadingRange) = dailyProgressState,
+           loadingRange == range,
+           dailyProgressTask != nil { return }
+        if case .failed(let failedRange, _) = dailyProgressState, failedRange == range { return }
+        if manualOperationKind == .progressDailyRetry { cancelManualOperation() }
+        invalidateDailyProgressRead()
+        let requestGeneration = dailyGeneration
+        dailyProgressState = .loading(range)
+        let loader = runningProgressLoader
+        let requestTask = Task { @MainActor [weak self, loader] in
+            await loader.loadDaily(range: range)
+            let result = await loader.dailyState
+            guard let self,
+                  self.dailyGeneration == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .progressGoals,
+                  ["H07","H08","H09"].contains(self.activeScreen ?? "") else { return }
+            self.dailyProgressTask = nil
+            if Task.isCancelled {
+                self.dailyProgressState = .idle
+            } else {
+                self.dailyProgressState = result
+            }
+        }
+        dailyProgressTask = requestTask
+        await requestTask.value
     }
 
     func retryMemberProfile() {
@@ -598,6 +735,74 @@ struct WireframeRemoteReadDependencies {
         }
     }
 
+    func retryProgress() {
+        guard activeFeature == .progressGoals, manualOperationTask == nil,
+              case .failed(let failure) = progressState,
+              failure.canManuallyRetry, let runningProgressLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .progressRetry
+        progressState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.retryProgress()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.progressState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryWeeklyGoal() {
+        guard activeFeature == .progressGoals, manualOperationTask == nil,
+              case .failed(let failure) = weeklyGoalState,
+              failure.canManuallyRetry, let runningProgressLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalRetry
+        weeklyGoalState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.retryWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.weeklyGoalState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryDailyProgress(range: BackendDailyProgressRange) {
+        guard activeFeature == .progressGoals, ["H07","H08","H09"].contains(activeScreen ?? ""), manualOperationTask == nil,
+              case .failed(let failedRange, let failure) = dailyProgressState,
+              failedRange == range, failure.canManuallyRetry,
+              let runningProgressLoader else { return }
+        let requestGeneration = generation
+        dailyGeneration &+= 1
+        let dailyRequestGeneration = dailyGeneration
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .progressDailyRetry
+        dailyProgressState = .loading(range)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runningProgressLoader.retryDaily(range: range)
+            let result = await runningProgressLoader.dailyState
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.dailyGeneration == dailyRequestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.dailyProgressState = Task.isCancelled ? .idle : result
+        }
+    }
+
     private func cancelManualOperation(restorePreviousState: Bool = false) {
         let task = manualOperationTask
         manualOperationTask = nil
@@ -617,6 +822,12 @@ struct WireframeRemoteReadDependencies {
                 if let previous = manualRunsPreviousState { runRecordsState = previous }
             case .runDetailRetry:
                 runDetailState = .idle
+            case .progressRetry:
+                progressState = .idle
+            case .weeklyGoalRetry:
+                weeklyGoalState = .idle
+            case .progressDailyRetry:
+                dailyProgressState = .idle
             case nil:
                 break
             }
@@ -844,10 +1055,18 @@ struct RootView:View {
 
     private var resolvedRemoteReadDependencies:WireframeRemoteReadDependencies? {
         if let remoteReadDependencies { return remoteReadDependencies }
-        guard ProcessInfo.processInfo.arguments.contains("-wire-run-records-fixture") else { return nil }
-        return WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:WireframeRunRecordsFixture(
-            fails:ProcessInfo.processInfo.arguments.contains("-wire-run-records-fail")
-        )))
+        let args = ProcessInfo.processInfo.arguments
+        let runFixture = args.contains("-wire-run-records-fixture")
+        let progressFixture = args.contains("-wire-progress-goals-fixture")
+        guard runFixture || progressFixture else { return nil }
+        let runLoader = runFixture ? RunRecordsLoader(client:WireframeRunRecordsFixture(
+            fails:args.contains("-wire-run-records-fail")
+        )):nil
+        let progressLoader = progressFixture ? RunningProgressLoader(client:WireframeProgressGoalsFixture(
+            failsOverview:args.contains("-wire-progress-goals-fail"),
+            failsDaily:args.contains("-wire-progress-daily-fail")
+        )):nil
+        return WireframeRemoteReadDependencies(runRecordsLoader:runLoader,runningProgressLoader:progressLoader)
     }
 
     var body: some View {
@@ -863,6 +1082,45 @@ struct RootView:View {
                 WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies)
             }
         }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)
+    }
+}
+
+private actor WireframeProgressGoalsFixture: RunningProgressReading {
+    private let failsOverview: Bool
+    private let failsDaily: Bool
+
+    init(failsOverview: Bool, failsDaily: Bool) {
+        self.failsOverview=failsOverview
+        self.failsDaily=failsDaily
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-progress") }
+        return BackendProgressSummary(
+            grade:"SPROUT",gradeAchievedAt:nil,
+            window:.init(fromDate:"2026-07-04",toDate:"2026-10-01",distanceMeters:12_400,activityDays:8),
+            nextGrade:.init(grade:"PASSION",requiredDistanceMeters:30_000,requiredActivityDays:10,remainingDistanceMeters:17_600,remainingActivityDays:2),
+            total:.init(distanceMeters:48_200,seconds:17_350,activityDays:31,runCount:40)
+        )
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal") }
+        return BackendWeeklyGoalStatus(
+            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
+            distance:.init(goal:20_000,done:12_400,remaining:7_600,achieved:false),
+            time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+        )
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        if failsDaily { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-daily") }
+        let all=[
+            BackendDailyProgressDay(date:"2026-09-28",validDistanceMeters:6_400,validSeconds:2_400,runCount:1,activityDay:true),
+            BackendDailyProgressDay(date:"2026-09-30",validDistanceMeters:6_000,validSeconds:1_500,runCount:1,activityDay:true),
+            BackendDailyProgressDay(date:"2026-10-05",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)
+        ]
+        return BackendDailyProgress(range:range,days:all.filter{$0.date >= range.fromDate && $0.date <= range.toDate})
     }
 }
 
@@ -971,6 +1229,12 @@ struct WireframeRoot:View {
         return WireframeRemoteReadFeature.forScreen(ui.screen)
     }
     var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)|\(ui.remoteSelectedRunID ?? "")" }
+    var remoteDailyProgressRange:BackendDailyProgressRange {
+        ui.month ? .month(containing:ui.calendarMonth):.week(containing:WReviewClock.now)
+    }
+    var remoteDailyProgressTaskKey:String {
+        WireframeDailyProgressTaskIdentity.key(screen:ui.screen,accountScopeID:ui.remoteAccountScopeID,range:remoteDailyProgressRange)
+    }
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
@@ -1013,7 +1277,7 @@ struct WireframeRoot:View {
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
             if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
         }.background(W.paper).foregroundStyle(W.ink).tint(W.ink).preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme).clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
-            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID)}
+            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID,screen:ui.screen)}
             .task{
                 let args=ProcessInfo.processInfo.arguments
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
