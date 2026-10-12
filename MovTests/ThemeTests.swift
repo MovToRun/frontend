@@ -1629,10 +1629,11 @@ final class ThemeTests:XCTestCase {
         defer{defaults.removePersistentDomain(forName:suite)}
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         defer{try? FileManager.default.removeItem(at:directory)}
+        let outboxFile=directory.appendingPathComponent("outbox.json")
         let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
         let sender=RunStoreUploadSenderFake(delivery:.terminal(code:"INVALID_LOCAL_PAYLOAD"))
         let outbox=try RunUploadOutbox(
-            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            persistence:FileRunUploadOutboxPersistence(fileURL:outboxFile),
             sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
             uploader:sender
         )
@@ -1657,6 +1658,30 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(canonical.first?.id,completed.id)
         let entries=try await outbox.snapshot()
         XCTAssertEqual(entries.first?.state,.terminal(code:"INVALID_LOCAL_PAYLOAD"))
+
+        let repeatedResult=await store.drainPendingRunUploads()
+        XCTAssertEqual(repeatedResult,.permanentFailure(count:1,uploadedCount:0,deletedCount:0),"The same store must continue reporting a persisted terminal outcome")
+        let repeatedUploads=await sender.uploadedPayloads()
+        XCTAssertEqual(repeatedUploads.count,1,"A terminal payload is not transmitted again on a later manual drain")
+
+        let restartedSender=RunStoreUploadSenderFake()
+        let restartedOutbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:outboxFile),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:restartedSender
+        )
+        let restartedStore=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadDrainer:restartedOutbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        let afterRestart=await restartedStore.drainPendingRunUploads()
+        XCTAssertEqual(afterRestart,.permanentFailure(count:1,uploadedCount:0,deletedCount:0),"The terminal result survives outbox and RunStore recreation")
+        let restartedUploads=await restartedSender.uploadedPayloads()
+        XCTAssertTrue(restartedUploads.isEmpty,"A restarted store does not automatically resend a terminal item")
+        let canonicalAfterRestart=try FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords
+        XCTAssertEqual(canonicalAfterRestart.first?.id,completed.id)
     }
     @MainActor func testRunUploadDrainReportsRetryableDeliveryAndKeepsThePendingClientRunID() async throws {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!

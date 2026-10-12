@@ -739,6 +739,13 @@ enum RunStoreUploadDrainResult: Equatable {
         case .sessionUnavailable:
             return .authenticationUnavailable
         case .ownerMismatch:
+            if report.terminalCount > 0 {
+                return .permanentFailure(
+                    count: report.terminalCount,
+                    uploadedCount: report.uploadedCount,
+                    deletedCount: report.deletedCount
+                )
+            }
             return .ownerMismatch
         case .accountChanged:
             return .accountChanged

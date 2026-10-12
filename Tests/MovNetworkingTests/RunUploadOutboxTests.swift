@@ -492,9 +492,138 @@ final class RunUploadOutboxTests: XCTestCase {
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries.first?.state, .terminal(code: "CLIENT_RUN_ID_CONFLICT"))
         let secondReport = try await outbox.drain()
+        XCTAssertEqual(secondReport.terminalCount, 1)
         XCTAssertEqual(secondReport.stopReason, .finished)
         let requests = await uploader.requests()
         XCTAssertEqual(requests.count, 2)
+    }
+
+    func testTerminalEntryIsReportedAgainOnSecondDrainFromSameFileWithoutRetransmission() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("run-outbox.json")
+        let persistence = FileRunUploadOutboxPersistence(fileURL: file)
+        let uploader = RecordingRunUploader(deliveries: [.terminal(code: "CLIENT_RUN_ID_CONFLICT")])
+        let outbox = try makeOutbox(persistence, session: MutableUploadSessionProvider(userA), uploader: uploader)
+        let fixture = payload()
+        try await outbox.enqueue(fixture, ownerID: userA.ownerID)
+
+        let initial = try await outbox.drain(ownerID: userA.ownerID)
+        let repeated = try await outbox.drain(ownerID: userA.ownerID)
+
+        XCTAssertEqual(initial.terminalCount, 1)
+        XCTAssertEqual(repeated.terminalCount, 1)
+        XCTAssertEqual(repeated.stopReason, .finished)
+        let requests = await uploader.requests()
+        XCTAssertEqual(requests.map(\.0), [fixture], "Terminal entries are reported again but never automatically uploaded again")
+        XCTAssertEqual(try persistence.load().first?.state, .terminal(code: "CLIENT_RUN_ID_CONFLICT"))
+    }
+
+    func testTerminalEntryIsReportedAfterRestartWithoutRetransmission() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("run-outbox.json")
+        let fixture = payload()
+        let firstUploader = RecordingRunUploader(deliveries: [.terminal(code: "PAYLOAD_TOO_LARGE")])
+        let first = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userA),
+            uploader: firstUploader
+        )
+        try await first.enqueue(fixture, ownerID: userA.ownerID)
+        let initialReport = try await first.drain(ownerID: userA.ownerID)
+        XCTAssertEqual(initialReport.terminalCount, 1)
+
+        let restartedUploader = RecordingRunUploader()
+        let restarted = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userA),
+            uploader: restartedUploader
+        )
+        let report = try await restarted.drain(ownerID: userA.ownerID)
+
+        XCTAssertEqual(report.terminalCount, 1)
+        XCTAssertEqual(report.stopReason, .finished)
+        let restartedRequests = await restartedUploader.requests()
+        XCTAssertTrue(restartedRequests.isEmpty)
+        let restartedEntries = try await restarted.snapshot()
+        XCTAssertEqual(restartedEntries.first?.state, .terminal(code: "PAYLOAD_TOO_LARGE"))
+    }
+
+    func testCurrentOwnerTerminalIsReportedAlongsidePendingSuccessAndExcludesOtherOwnerTerminal() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("run-outbox.json")
+        let terminalA = payload()
+        let terminalB = payload()
+        let pendingA = payload()
+
+        let terminalWriterA = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userA),
+            uploader: RecordingRunUploader(deliveries: [.terminal(code: "INVALID_A")])
+        )
+        try await terminalWriterA.enqueue(terminalA, ownerID: userA.ownerID)
+        let reportA = try await terminalWriterA.drain(ownerID: userA.ownerID)
+        XCTAssertEqual(reportA.terminalCount, 1)
+
+        let terminalWriterB = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userB),
+            uploader: RecordingRunUploader(deliveries: [.terminal(code: "INVALID_B")])
+        )
+        try await terminalWriterB.enqueue(terminalB, ownerID: userB.ownerID)
+        let reportB = try await terminalWriterB.drain(ownerID: userB.ownerID)
+        XCTAssertEqual(reportB.terminalCount, 1)
+
+        let currentUploader = RecordingRunUploader()
+        let currentOwnerOutbox = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userA),
+            uploader: currentUploader
+        )
+        try await currentOwnerOutbox.enqueue(pendingA, ownerID: userA.ownerID)
+        let report = try await currentOwnerOutbox.drain(ownerID: userA.ownerID)
+
+        XCTAssertEqual(report.uploadedCount, 1)
+        XCTAssertEqual(report.terminalCount, 1, "Only member A's persisted terminal entry contributes to member A's result")
+        XCTAssertEqual(report.stopReason, .finished)
+        let currentRequests = await currentUploader.requests()
+        XCTAssertEqual(currentRequests.map(\.0), [pendingA])
+        let entries = try await currentOwnerOutbox.snapshot()
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertTrue(entries.contains { $0.envelope.ownerID == userA.ownerID && $0.envelope.payload.clientRunID == terminalA.clientRunID && $0.state == .terminal(code: "INVALID_A") })
+        XCTAssertTrue(entries.contains { $0.envelope.ownerID == userB.ownerID && $0.envelope.payload.clientRunID == terminalB.clientRunID && $0.state == .terminal(code: "INVALID_B") })
+    }
+
+    func testOtherOwnersTerminalEntryDoesNotAffectCurrentOwnerReport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("run-outbox.json")
+        let fixture = payload()
+        let writerB = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userB),
+            uploader: RecordingRunUploader(deliveries: [.terminal(code: "INVALID_B")])
+        )
+        try await writerB.enqueue(fixture, ownerID: userB.ownerID)
+        let writerReport = try await writerB.drain(ownerID: userB.ownerID)
+        XCTAssertEqual(writerReport.terminalCount, 1)
+
+        let currentOwnerUploader = RecordingRunUploader()
+        let currentOwnerOutbox = try makeOutbox(
+            FileRunUploadOutboxPersistence(fileURL: file),
+            session: MutableUploadSessionProvider(userA),
+            uploader: currentOwnerUploader
+        )
+        let report = try await currentOwnerOutbox.drain(ownerID: userA.ownerID)
+
+        XCTAssertEqual(report.terminalCount, 0)
+        XCTAssertEqual(report.stopReason, .finished)
+        let currentOwnerRequests = await currentOwnerUploader.requests()
+        XCTAssertTrue(currentOwnerRequests.isEmpty)
+        let remaining = try await currentOwnerOutbox.snapshot()
+        XCTAssertEqual(remaining.first?.state, .terminal(code: "INVALID_B"))
     }
 
     func testAtomicFileStoreRecoversAfterRestartAndDoesNotReplaceCorruptData() async throws {

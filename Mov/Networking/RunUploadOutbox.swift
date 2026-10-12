@@ -275,6 +275,10 @@ actor RunUploadOutbox {
         }
 
         let initialEntries = try persistence.load()
+        terminalCount = initialEntries.reduce(into: 0) { count, entry in
+            guard entry.envelope.ownerID == initialSession.ownerID else { return }
+            if case .terminal = entry.state { count += 1 }
+        }
         let eligibleKeys = initialEntries.compactMap { entry -> (String, UUID)? in
             guard entry.state == .pending, entry.envelope.ownerID == initialSession.ownerID else { return nil }
             return (entry.envelope.ownerID, entry.envelope.payload.clientRunID)
@@ -282,7 +286,7 @@ actor RunUploadOutbox {
         if eligibleKeys.isEmpty {
             let hasPendingForOtherOwner = initialEntries.contains { $0.state == .pending }
             let stop: RunUploadDrainStopReason = hasPendingForOtherOwner ? .ownerMismatch : .finished
-            return Self.report(uploaded: 0, deleted: 0, terminal: 0, stop: stop)
+            return Self.report(uploaded: 0, deleted: 0, terminal: terminalCount, stop: stop)
         }
 
         for (ownerID, clientRunID) in eligibleKeys {
