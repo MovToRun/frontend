@@ -2218,8 +2218,12 @@ private enum AuthSessionTransportOutcome: Sendable {
 private actor AuthSessionFixtureTransport: APIResponseSending {
     private let outcomes: [AuthSessionTransportOutcome]
     private var captured: [AuthSessionCapturedRequest] = []
-    private var heldResponses: [Int: CheckedContinuation<APIClientResponse, Error>] = [:]
+    private var heldResponses: [Int: (continuation: CheckedContinuation<APIClientResponse, Error>, isLogin: Bool)] = [:]
     private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var loginRequestCount = 0
+    private var inFlightLoginCount = 0
+    private var maximumConcurrentLoginCount = 0
+    private var activeServerRefreshToken: String?
 
     init(_ outcomes: [AuthSessionTransportOutcome]) {
         self.outcomes = outcomes
@@ -2227,17 +2231,28 @@ private actor AuthSessionFixtureTransport: APIResponseSending {
 
     func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
         let index = captured.count
+        let isLogin = path == "auth/login"
         captured.append(AuthSessionCapturedRequest(path: path, method: method, body: body, headers: headers))
+        if isLogin {
+            loginRequestCount += 1
+            inFlightLoginCount += 1
+            maximumConcurrentLoginCount = max(maximumConcurrentLoginCount, inFlightLoginCount)
+        }
         resumeSatisfiedRequestWaiters()
-        guard outcomes.indices.contains(index) else { throw APIClientError.unexpectedResponse }
+        guard outcomes.indices.contains(index) else {
+            if isLogin { inFlightLoginCount -= 1 }
+            throw APIClientError.unexpectedResponse
+        }
         switch outcomes[index] {
         case .response(let response):
+            if isLogin { recordServerLoginCompletion(response) }
             return response
         case .failure(let failure):
+            if isLogin { inFlightLoginCount -= 1 }
             throw failure
         case .hold:
             return try await withCheckedThrowingContinuation { continuation in
-                heldResponses[index] = continuation
+                heldResponses[index] = (continuation, isLogin)
             }
         }
     }
@@ -2250,10 +2265,22 @@ private actor AuthSessionFixtureTransport: APIResponseSending {
     }
 
     func resumeRequest(_ index: Int, with response: APIClientResponse) {
-        heldResponses.removeValue(forKey: index)?.resume(returning: response)
+        guard let held = heldResponses.removeValue(forKey: index) else { return }
+        if held.isLogin { recordServerLoginCompletion(response) }
+        held.continuation.resume(returning: response)
     }
 
     func requests() -> [AuthSessionCapturedRequest] { captured }
+
+    func loginServerState() -> (requestCount: Int, maximumConcurrentRequests: Int, activeRefreshToken: String?) {
+        (loginRequestCount, maximumConcurrentLoginCount, activeServerRefreshToken)
+    }
+
+    private func recordServerLoginCompletion(_ response: APIClientResponse) {
+        inFlightLoginCount -= 1
+        guard let json = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any] else { return }
+        activeServerRefreshToken = json["refreshToken"] as? String
+    }
 
     private func resumeSatisfiedRequestWaiters() {
         let ready = requestWaiters.filter { captured.count >= $0.0 }
@@ -2337,80 +2364,75 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertEqual((body["deviceId"] as? String)?.lowercased(), AuthSessionFixtures.deviceID.uuidString.lowercased())
     }
 
-    func testLatestLoginWinsWhenSameClientResponsesArriveInReverseAccountOrder() async throws {
+    func testLoginIsBusyAcrossClientsSharingStoreUntilServerRequestCompletes() async throws {
         let store = AuthSessionFixtureStore()
         let transport = AuthSessionFixtureTransport([
             .hold,
             .response(AuthSessionFixtures.tokenResponse(
                 memberID: "42",
-                accessToken: AuthSessionFixtures.serverToken(memberID: "42", tokenNonce: "account-42"),
-                refreshToken: "account-42-refresh"
+                accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "would-be-last-server-login"),
+                refreshToken: "would-be-last-server-login"
             ))
         ])
-        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let earlierClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let laterClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let serverFirstResponse = AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "server-active-single-login"),
+            refreshToken: "server-active-single-login"
+        )
         let earlierLogin = Task {
-            try await client.login(email: "member-41@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            try await earlierClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
         }
         await transport.waitForRequests(1)
-        let laterLogin = Task {
-            try await client.login(email: "member-42@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
-        }
-
-        await transport.waitForRequests(2)
-        let acceptedLater = try await laterLogin.value
-        XCTAssertEqual(acceptedLater.memberID, "42")
-        XCTAssertEqual(try store.loadSnapshot()?.memberID, "42")
-
-        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(
-            memberID: "41",
-            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "account-41"),
-            refreshToken: "account-41-refresh"
-        ))
         do {
-            _ = try await earlierLogin.value
-            XCTFail("An older login response cannot replace a newer account session")
+            _ = try await laterClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            XCTFail("A second same-device login must not reach a server that replaces its active session")
         } catch let failure as AuthSessionFailure {
-            XCTAssertEqual(failure, .sessionChanged)
+            XCTAssertEqual(failure, .requestInProgress)
         }
-        XCTAssertEqual(try store.loadSnapshot()?.memberID, "42")
-        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, "account-42-refresh")
+
+        var serverState = await transport.loginServerState()
+        XCTAssertEqual(serverState.requestCount, 1, "Clients sharing one store share the device-login request owner")
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
+
+        await transport.resumeRequest(0, with: serverFirstResponse)
+        let accepted = try await earlierLogin.value
+        serverState = await transport.loginServerState()
+        XCTAssertEqual(accepted.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, serverState.activeRefreshToken,
+                       "The locally stored credential must match the fake backend's active same-device session")
+        XCTAssertEqual(serverState.requestCount, 1, "The overlapping POST that would replace this server session was rejected")
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
     }
 
-    func testLatestSameMemberSameDeviceLoginWinsWhenResponsesArriveInReverseOrder() async throws {
+    func testCanceledLoginRetainsSharedRequestOwnerUntilCancellationIgnoringTransportFinishes() async throws {
         let store = AuthSessionFixtureStore()
-        let transport = AuthSessionFixtureTransport([
-            .hold,
-            .response(AuthSessionFixtures.tokenResponse(
-                memberID: "41",
-                accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-newer"),
-                refreshToken: "same-member-newer-refresh"
-            ))
-        ])
-        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
-        let earlierLogin = Task {
-            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        let transport = AuthSessionFixtureTransport([.hold, .response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "must-not-be-issued"))])
+        let firstClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await firstClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
         }
         await transport.waitForRequests(1)
-        let laterLogin = Task {
-            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
-        }
+        login.cancel()
 
-        await transport.waitForRequests(2)
-        _ = try await laterLogin.value
-        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(
-            memberID: "41",
-            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-older"),
-            refreshToken: "same-member-older-refresh"
-        ))
         do {
-            _ = try await earlierLogin.value
-            XCTFail("A same-account login still has an ordering owner")
+            _ = try await secondClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            XCTFail("Cancellation cannot release ownership while the transport is still waiting for its response")
         } catch let failure as AuthSessionFailure {
-            XCTAssertEqual(failure, .sessionChanged)
+            XCTAssertEqual(failure, .requestInProgress)
         }
-        XCTAssertEqual(try store.loadSnapshot()?.memberID, "41")
-        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, "same-member-newer-refresh")
-        XCTAssertEqual(try store.loadSnapshot()?.accessToken, AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-newer"))
+        let canceledState = await transport.loginServerState()
+        XCTAssertEqual(canceledState.requestCount, 1)
+
+        let successfulResponse = AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "completed-after-cancel")
+        await transport.resumeRequest(0, with: successfulResponse)
+        let result = try await login.value
+        let serverState = await transport.loginServerState()
+        XCTAssertEqual(result.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
     }
 
     func testLogoutDuringPendingLoginInvalidatesItsLateServerSuccess() async throws {

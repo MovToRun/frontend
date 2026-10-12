@@ -49,6 +49,7 @@ enum AuthSessionFailure: Error, Equatable, Sendable {
     case storageUnavailable
     case sessionChanged
     case memberIdentityChanged
+    case requestInProgress
 }
 
 /// One atomic value contains the access token, refresh token, stable server member ID,
@@ -97,38 +98,50 @@ protocol AuthSessionStoring: Sendable {
 actor AuthSessionMutationCoordinator {
     private var mutationVersion: UInt64 = 0
     private var activeLoginID: UUID?
+    private var activeLoginVersion: UInt64?
     private var activeLogoutID: UUID?
     private var refreshInFlight: (id: UUID, task: Task<AuthSessionSnapshot, Error>)?
 
-    func beginLogin() -> UUID {
+    func beginLogin() throws -> UUID {
+        // Keep this owner for the full transport lifetime. Replacing it when a newer
+        // request starts is unsafe because the server may process the older POST last.
+        guard activeLoginID == nil, activeLogoutID == nil else {
+            throw AuthSessionFailure.requestInProgress
+        }
         mutationVersion &+= 1
         let lease = UUID()
         activeLoginID = lease
-        activeLogoutID = nil
+        activeLoginVersion = mutationVersion
         refreshInFlight = nil
         return lease
     }
 
     func commitLogin(_ snapshot: AuthSessionSnapshot, lease: UUID, store: any AuthSessionStoring) throws {
-        guard activeLoginID == lease else { throw AuthSessionFailure.sessionChanged }
+        guard activeLoginID == lease,
+              activeLoginVersion == mutationVersion,
+              activeLogoutID == nil else {
+            throw AuthSessionFailure.sessionChanged
+        }
         do {
             try store.replaceAtomically(with: snapshot)
         } catch {
-            activeLoginID = nil
             throw AuthSessionFailure.storageUnavailable
         }
         activeLoginID = nil
+        activeLoginVersion = nil
         mutationVersion &+= 1
     }
 
     func finishLogin(lease: UUID) {
-        if activeLoginID == lease { activeLoginID = nil }
+        if activeLoginID == lease {
+            activeLoginID = nil
+            activeLoginVersion = nil
+        }
     }
 
     func beginLogout() -> UUID {
         mutationVersion &+= 1
         let lease = UUID()
-        activeLoginID = nil
         activeLogoutID = lease
         refreshInFlight = nil
         return lease
@@ -302,7 +315,14 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
         }
 
         let coordinator = store.mutationCoordinator
-        let lease = await coordinator.beginLogin()
+        let lease: UUID
+        do {
+            lease = try await coordinator.beginLogin()
+        } catch let failure as AuthSessionFailure {
+            throw failure
+        } catch {
+            throw AuthSessionFailure.sessionChanged
+        }
         do {
             let response = try await apiClient.sendResponse(
                 path: "auth/login",
