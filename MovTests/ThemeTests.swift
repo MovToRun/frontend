@@ -1658,6 +1658,42 @@ final class ThemeTests:XCTestCase {
         let entries=try await outbox.snapshot()
         XCTAssertEqual(entries.first?.state,.terminal(code:"INVALID_LOCAL_PAYLOAD"))
     }
+    @MainActor func testRunUploadDrainReportsRetryableDeliveryAndKeepsThePendingClientRunID() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let sender=RunStoreUploadSenderFake(delivery:.retryLater(code:"TEMPORARY_UNAVAILABLE"))
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:sender
+        )
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            uploadDrainer:outbox,
+            ownedRecordsPersistence:ownedRecords
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+        let clientRunID=try XCTUnwrap(completed.clientRunID)
+
+        let result=await store.drainPendingRunUploads()
+
+        XCTAssertEqual(result,.retryableFailure(clientRunID:clientRunID,code:"TEMPORARY_UNAVAILABLE",uploadedCount:0,deletedCount:0,permanentFailureCount:0))
+        let canonical=try ownedRecords.loadSnapshot().canonicalRecords
+        XCTAssertEqual(canonical.first?.id,completed.id)
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.first?.state,.pending)
+        XCTAssertEqual(entries.first?.envelope.payload.clientRunID,clientRunID)
+    }
     @MainActor func testDuplicateRunCompletionAndRecoveryKeepOneImmutablePayload() async throws {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
