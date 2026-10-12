@@ -1352,45 +1352,50 @@ extension WireframeRoot {
     }
 
     var communityFeed:some View {
-        let topHotPosts=Array(communityHotVisiblePosts.prefix(3))
-        return VStack(spacing:0){
-            HStack {
-                if ui.path.last=="C24" {
-                    Button(action:back){Image(systemName:"chevron.left").font(.system(size:17,weight:.medium)).frame(width:44,height:44).contentShape(Rectangle())}
-                        .buttonStyle(.plain).accessibilityLabel("알림으로 돌아가기").accessibilityIdentifier("communityNotificationBackFromFeed")
-                } else {
-                    Button { go("C02") } label:{Image(systemName:"square.grid.2x2").font(.system(size:19,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
-                        .buttonStyle(.plain).accessibilityLabel("전체 게시판").accessibilityIdentifier("communityAllBoards")
-                }
-                Spacer(minLength:0)
-                Button{ui.communityCrewTab="my";go("C15")}label:{Image(systemName:"person.3").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("크루").accessibilityIdentifier("communityOpenCrews")
-                Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
-                Button{go("C28")}label:{Image(systemName:"gearshape").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 설정").accessibilityIdentifier("communitySettings")
-                Button{openCommunityOwnProfile()}label:{Image(systemName:"person.crop.circle").font(.system(size:20,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("내 프로필").accessibilityIdentifier("communityOpenOwnProfile")
-            }
-            .overlay { BrandMark(size:26).frame(width:44,height:44).accessibilityIdentifier("communityHeaderMark") }
-            .padding(.horizontal,16).frame(height:64).background(W.paper)
-            ScrollView {
-                VStack(alignment:.leading,spacing:0){
-                    HStack(spacing:9){Text("지금 많이 보는 글").font(W.font(17,.semibold));Text("HOT").font(W.font(10,.bold)).foregroundStyle(Color(red:0.92,green:0.30,blue:0.32));Spacer();Button("더 보기"){go("C41")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityHotMore")}
-                        .padding(.top,16).padding(.bottom,8)
-                    Button { ui.communitySelectedCourse=WCommunityCourseFixtures.sample;go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 예시");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenSampleCourse")
-                    if ui.communityAccountVerified{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true;ui.communityCourseError="";communityComposerOriginal=nil;go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
-                    ForEach(Array(topHotPosts.enumerated()),id:\.element.id){rank,post in
-                        Button { openCommunityPost(post) } label:{
-                            HStack(spacing:12){Text("\(rank+1)").font(W.font(13,.medium)).foregroundStyle(W.muted).frame(width:18);Text(post.title).font(W.font(14,.medium)).lineLimit(1);Spacer(minLength:4);Text("♡ \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").font(W.font(11)).foregroundStyle(W.muted)}
-                                .frame(minHeight:44).contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityIdentifier("communityHot-\(post.id)")
-                    }
-                    if communityHotVisiblePosts.isEmpty{Text("아직 인기글이 없어요").font(W.font(13)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:48,alignment:.leading).accessibilityIdentifier("communityHotEmpty")}
-                    W.line.frame(height:1).padding(.top,10)
-                    HStack{Text("러너들의 이야기").font(W.font(17,.semibold));Spacer();Text("최신순").font(W.font(11)).foregroundStyle(W.muted)}.padding(.top,22).padding(.bottom,4)
-                    ForEach(communityPublicVisiblePosts){post in communityPostCard(post)}
-                }.padding(.horizontal,22).padding(.bottom,28)
-            }.accessibilityIdentifier("communityFeedScroll")
+        VStack(spacing:0){communityFeedHeader;communityFeedScroll}.background(W.paper)
+    }
+    var communityFeedHeader:some View {
+        let actions=AnyView(communityFeedHeaderActions)
+        if ui.path.last=="C24" { return WHeader(title:"커뮤니티",back:back,root:true,showRootMark:false,trailing:actions) }
+        return WHeader(title:"커뮤니티",root:true,showRootMark:true,trailing:actions)
+    }
+    var communityFeedHeaderActions:some View {
+        HStack(spacing:0){
+            Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
+            Button{go("C28")}label:{Image(systemName:"gearshape").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 설정").accessibilityIdentifier("communitySettings")
         }
-        .background(W.paper)
-        .overlay(alignment:.bottomTrailing){Button { beginCommunityCompose() } label:{Label("글쓰기",systemImage:"square.and.pencil").font(W.font(13,.medium)).padding(.horizontal,16).frame(height:46).foregroundStyle(Color(red:32/255,green:41/255,blue:37/255)).background(W.lime,in:Capsule()).shadow(color:.black.opacity(0.12),radius:8,y:3)}.buttonStyle(.plain).padding(.trailing,18).padding(.bottom,18).accessibilityIdentifier("communityCompose")}
+    }
+    var communityFeedScroll:some View {
+        ScrollViewReader{proxy in
+            ScrollView{VStack(spacing:0){WCommunityScrollOffsetProbe(coordinateSpace:"community-feed-scroll");communityFeedItems}}
+                .coordinateSpace(name:"community-feed-scroll")
+                .wObserveCommunityScrollOffset(handleCommunityScrollOffset)
+                .accessibilityIdentifier("communityFeedScroll")
+                .overlay(alignment:.bottomTrailing){communityFloatingActions(proxy:proxy)}
+        }
+    }
+    var communityFeedItems:some View {
+        VStack(alignment:.leading,spacing:0){
+            HStack(spacing:9){Text("지금 많이 보는 글").font(W.font(17,.semibold));Text("HOT").font(W.font(10,.bold)).foregroundStyle(Color(red:0.92,green:0.30,blue:0.32));Spacer();Button("더 보기"){go("C41")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityHotMore")}
+                .padding(.top,16).padding(.bottom,8)
+            Button { ui.communitySelectedCourse=WCommunityCourseFixtures.sample;go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 예시");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenSampleCourse")
+            if ui.communityAccountVerified{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true;ui.communityCourseError="";communityComposerOriginal=nil;go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
+            ForEach(Array(communityHotVisiblePosts.prefix(3).enumerated()),id:\.element.id){rank,post in
+                Button { openCommunityPost(post) } label:{HStack(spacing:12){Text("\(rank+1)").font(W.font(13,.medium)).foregroundStyle(W.muted).frame(width:18);Text(post.title).font(W.font(14,.medium)).lineLimit(1);Spacer(minLength:4);Text("♡ \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").font(W.font(11)).foregroundStyle(W.muted)}.frame(minHeight:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityHot-\(post.id)")
+            }
+            if communityHotVisiblePosts.isEmpty{Text("아직 인기글이 없어요").font(W.font(13)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:48,alignment:.leading).accessibilityIdentifier("communityHotEmpty")}
+            W.line.frame(height:1).padding(.top,10)
+            HStack{Text("러너들의 이야기").font(W.font(17,.semibold));Spacer();Text("최신순").font(W.font(11)).foregroundStyle(W.muted)}.padding(.top,22).padding(.bottom,4)
+            ForEach(communityPublicVisiblePosts){post in communityPostCard(post)}
+        }.padding(.horizontal,22).padding(.bottom,WCommunityBottomTab.barHeight+24).id("communityFeedTop")
+    }
+    func communityFloatingActions(proxy:ScrollViewProxy)->some View {
+        VStack(spacing:10){
+            if communityScrollToTopVisible {
+                Button{withAnimation(.easeInOut(duration:0.32)){proxy.scrollTo("communityFeedTop",anchor:.top)}}label:{Image(systemName:"arrow.up").font(.system(size:17,weight:.medium)).frame(width:44,height:44).foregroundStyle(W.ink).background(W.paper,in:Circle()).overlay(Circle().stroke(W.line,lineWidth:1))}.buttonStyle(.plain).accessibilityLabel("맨 위로").accessibilityIdentifier("communityScrollToTop").transition(.move(edge:.bottom).combined(with:.opacity))
+            }
+            Button { beginCommunityCompose() } label:{Label("글쓰기",systemImage:"square.and.pencil").font(W.font(13,.medium)).padding(.horizontal,16).frame(height:46).foregroundStyle(Color(red:32/255,green:41/255,blue:37/255)).background(W.lime,in:Capsule()).shadow(color:.black.opacity(0.12),radius:8,y:3)}.buttonStyle(.plain).accessibilityIdentifier("communityCompose")
+        }.padding(.trailing,18).padding(.bottom,communityBottomBarVisible ? WCommunityBottomTab.barHeight+18:18).animation(.easeInOut(duration:0.24),value:communityBottomBarVisible)
     }
 
     func communityCrew(_ id:String? = nil)->WCommunityCrew? {
@@ -1642,7 +1647,7 @@ extension WireframeRoot {
     }
 
     var communityCrewOverview:some View {
-        WPage(title:"크루",back:back){communityCrewOverviewContent}actions:{}
+        WPage(title:"크루",back:back,onCommunityScrollOffset:handleCommunityScrollOffset){communityCrewOverviewContent}actions:{}
             .accessibilityIdentifier("communityCrewOverview")
     }
     var communityCrewOverviewContent:some View {
@@ -2472,10 +2477,12 @@ extension WireframeRoot {
     var communityOwnProfile:some View {
         VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28",notificationRoute:"C24",notificationIdentifier:"communityNotificationBell")
             if ui.communityProfileEditing {
-                ScrollView{VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22)}
-                HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12)
+                ScrollView{WCommunityScrollOffsetProbe(coordinateSpace:"community-own-profile-scroll");VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22).padding(.bottom,WCommunityBottomTab.barHeight+24)}
+                    .coordinateSpace(name:"community-own-profile-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset)
+                HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12+WCommunityBottomTab.barHeight+8)
             } else {
-                ScrollView{VStack(alignment:.leading,spacing:18){communityRunnerCard(communityRunner(ui.communityViewerMemberID),photo:communityRunnerPhoto(ui.communityViewerMemberID),zoomable:false);let posts=communityProfilePosts(for:ui.communityViewerMemberID);communityProfileMetrics(ui.communityViewerMemberID,posts:posts);Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit");Text("작성한 글").font(W.font(17,.semibold));if posts.isEmpty{Text("아직 작성한 글이 없어요").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityProfilePostsEmpty")}else{ForEach(posts){post in communityPostCard(post)}}}.padding(.horizontal,22).padding(.top,16).padding(.bottom,24)}
+                ScrollView{WCommunityScrollOffsetProbe(coordinateSpace:"community-own-profile-scroll");VStack(alignment:.leading,spacing:18){communityRunnerCard(communityRunner(ui.communityViewerMemberID),photo:communityRunnerPhoto(ui.communityViewerMemberID),zoomable:false);let posts=communityProfilePosts(for:ui.communityViewerMemberID);communityProfileMetrics(ui.communityViewerMemberID,posts:posts);Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit");Text("작성한 글").font(W.font(17,.semibold));if posts.isEmpty{Text("아직 작성한 글이 없어요").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityProfilePostsEmpty")}else{ForEach(posts){post in communityPostCard(post)}}}.padding(.horizontal,22).padding(.top,16).padding(.bottom,WCommunityBottomTab.barHeight+24)}
+                    .coordinateSpace(name:"community-own-profile-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset)
             }
         }.background(W.paper).accessibilityElement(children:.contain).accessibilityIdentifier("communityOwnProfile")
     }
@@ -2704,7 +2711,7 @@ extension WireframeRoot {
     }
 
     var communityBoards:some View {
-        WPage(title:"게시판",back:back){
+        WPage(title:"게시판",back:back,onCommunityScrollOffset:handleCommunityScrollOffset){
             Text("게시판 바로가기").font(W.font(15,.semibold))
             LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){ForEach(["러닝 질문","러닝 인증","대회 정보·후기","크루 모집"],id:\.self){board in Button{ui.communityBoard=board;go("C03")}label:{VStack(alignment:.leading,spacing:8){Image(systemName:board=="러닝 질문" ? "bubble.left.and.bubble.right":"figure.run").font(.system(size:20));Text(board).font(W.font(12,.medium))}.frame(maxWidth:.infinity,minHeight:78,alignment:.leading).padding(.horizontal,14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityBoardShortcut-\(board)")}}
             HStack{Text("새로 올라온 이야기").font(W.font(15,.semibold));Spacer();Button("전체 게시판 보기"){go("C27")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityBrowseAllBoards")}.padding(.top,14)
