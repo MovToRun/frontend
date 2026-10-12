@@ -7,6 +7,22 @@ import Observation
     func currentAuthenticatedMemberID() -> String?
 }
 
+/// RunStore receives only the stable ID mapped from an accepted server session.
+/// A screen's fixture/account scope is never used as a member identity.
+@MainActor final class AuthSessionRunUploadMemberIdentityProvider: RunUploadMemberIdentityProviding {
+    private let sessionStore: any AuthSessionStoring
+
+    init(sessionStore: any AuthSessionStoring) {
+        self.sessionStore = sessionStore
+    }
+
+    func currentAuthenticatedMemberID() -> String? {
+        guard let snapshot = try? sessionStore.loadSnapshot(),
+              AuthSessionSnapshot.isCanonicalMemberID(snapshot.memberID) else { return nil }
+        return snapshot.memberID
+    }
+}
+
 enum MovNumber {
     static func display(_ value:Double)->String {
         guard value.isFinite else{return "—"}
