@@ -2622,14 +2622,15 @@ struct WireframeRoot:View {
     init(
         remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
         runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
-        runUploadQueue: (any RunUploadEnqueueing)? = nil
+        runUploadQueue: (any RunUploadEnqueueing)? = nil,
+        runUploadDrainer: (any RunUploadDraining)? = nil
     ){
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
         if resetFixture{Self.didPrepareFixture=true;if let suite=defaultsSelection.suiteName{defaults.removePersistentDomain(forName:suite)}}
-        let model=RunStore(defaults:defaults,uploadIdentityProvider:runUploadIdentityProvider,uploadQueue:runUploadQueue)
+        let model=RunStore(defaults:defaults,uploadIdentityProvider:runUploadIdentityProvider,uploadQueue:runUploadQueue,uploadDrainer:runUploadDrainer)
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
@@ -2841,6 +2842,7 @@ struct WireframeRoot:View {
         if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
+        store.cancelPendingRunUploadDrain()
         remoteReads.accountDidChange(to:scopeID)
         memberProfileDraftBaseline=nil
         memberProfileDraftScopeID=scopeID
@@ -2927,6 +2929,7 @@ struct WireframeRoot:View {
         guard ui.screen=="T10",remoteReads.accountScopeID==ui.remoteAccountScopeID else{return}
         guard state == .loggedOut else{return}
         guard store.session==nil else{go("T14");return}
+        store.cancelPendingRunUploadDrain()
         ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
     }
     func discardCurrentCommunityDraft(){

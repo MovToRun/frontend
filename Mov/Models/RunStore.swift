@@ -343,11 +343,36 @@ enum RunStoreOwnedRecordsSnapshot {
     }
 }
 
+enum RunStoreUploadDrainResult: Equatable {
+    case authenticationUnavailable
+    case drainerUnavailable
+    case alreadyRunning
+    case completed(uploadedCount: Int, deletedCount: Int)
+    case permanentFailure(count: Int, uploadedCount: Int, deletedCount: Int)
+    case retryableFailure(
+        clientRunID: UUID?,
+        code: String,
+        uploadedCount: Int,
+        deletedCount: Int,
+        permanentFailureCount: Int
+    )
+    case retryableAcknowledgementFailure
+    case ownerMismatch
+    case accountChanged
+    case cancelled
+    case ignored
+    case storageFailure
+}
+
 @MainActor @Observable final class RunStore {
     private let defaults: UserDefaults
     private let uploadIdentityProvider: (any RunUploadMemberIdentityProviding)?
     private let uploadQueue: (any RunUploadEnqueueing)?
+    private let uploadDrainer: (any RunUploadDraining)?
     private let ownedRecordsPersistence: any RunStoreOwnedRecordsPersisting
+    private var uploadDrainOperationID: UUID?
+    private var uploadDrainGeneration: UInt64 = 0
+    private var uploadDrainTask: Task<RunUploadDrainReport, Error>?
     var records: [RunRecord] = []
     var goal = RunGoal()
     var weekly = WeeklyGoal()
@@ -357,11 +382,13 @@ enum RunStoreOwnedRecordsSnapshot {
         defaults: UserDefaults = .standard,
         uploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
         uploadQueue: (any RunUploadEnqueueing)? = nil,
+        uploadDrainer: (any RunUploadDraining)? = nil,
         ownedRecordsPersistence: (any RunStoreOwnedRecordsPersisting)? = nil
     ) {
         self.defaults = defaults
         self.uploadIdentityProvider = uploadIdentityProvider
         self.uploadQueue = uploadQueue
+        self.uploadDrainer = uploadDrainer
         self.ownedRecordsPersistence = ownedRecordsPersistence ?? FileRunStoreOwnedRecordsPersistence()
         if let data = defaults.data(forKey: "mov.demo.v1") {
             do { let state = try JSONDecoder().decode(Saved.self, from: data); records=state.records; goal=state.goal; weekly=state.weekly; session=state.session; session?.segmentStart=nil }
@@ -623,6 +650,107 @@ enum RunStoreOwnedRecordsSnapshot {
             } catch {
                 // Leave the atomic recovery source pending so a later launch can retry it.
             }
+        }
+    }
+
+    /// Drains the existing outbox only when an authenticated stable member ID is available.
+    /// The caller must invoke this explicitly; completion records remain canonical after drain.
+    func drainPendingRunUploads() async -> RunStoreUploadDrainResult {
+        guard uploadDrainOperationID == nil else { return .alreadyRunning }
+        guard let ownerID = uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID) else {
+            return .authenticationUnavailable
+        }
+        guard let uploadDrainer else { return .drainerUnavailable }
+
+        let operationID = UUID()
+        let generation = uploadDrainGeneration
+        uploadDrainOperationID = operationID
+        let task = Task { try await uploadDrainer.drain(ownerID: ownerID) }
+        uploadDrainTask = task
+
+        let drainResult: Result<RunUploadDrainReport, Error> = await withTaskCancellationHandler {
+            do { return .success(try await task.value) }
+            catch { return .failure(error) }
+        } onCancel: { [weak self] in
+            Task { @MainActor in self?.cancelPendingRunUploadDrain(operationID: operationID) }
+        }
+
+        if Task.isCancelled {
+            cancelPendingRunUploadDrain(operationID: operationID)
+            return .ignored
+        }
+        guard uploadDrainOperationID == operationID,
+              uploadDrainGeneration == generation else { return .ignored }
+
+        uploadDrainOperationID = nil
+        uploadDrainTask = nil
+        guard uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID) == ownerID else {
+            return .ignored
+        }
+
+        switch drainResult {
+        case .success(let report):
+            return Self.uploadDrainResult(for: report)
+        case .failure(let error):
+            if error is CancellationError { return .cancelled }
+            if let failure = error as? RunUploadOutboxPersistenceFailure, failure == .writeFailed {
+                return .retryableAcknowledgementFailure
+            }
+            return .storageFailure
+        }
+    }
+
+    /// Call on logout, account transition, or cancellation. A later response from this
+    /// operation cannot be reflected by its caller, even if it ignores task cancellation.
+    func cancelPendingRunUploadDrain() {
+        cancelPendingRunUploadDrain(operationID: uploadDrainOperationID)
+    }
+
+    private func cancelPendingRunUploadDrain(operationID: UUID?) {
+        guard let operationID, uploadDrainOperationID == operationID else { return }
+        uploadDrainGeneration &+= 1
+        uploadDrainOperationID = nil
+        let task = uploadDrainTask
+        uploadDrainTask = nil
+        task?.cancel()
+    }
+
+    private static func uploadDrainResult(for report: RunUploadDrainReport) -> RunStoreUploadDrainResult {
+        switch report.stopReason {
+        case .finished:
+            if report.terminalCount > 0 {
+                return .permanentFailure(
+                    count: report.terminalCount,
+                    uploadedCount: report.uploadedCount,
+                    deletedCount: report.deletedCount
+                )
+            }
+            return .completed(uploadedCount: report.uploadedCount, deletedCount: report.deletedCount)
+        case .retryLater(let clientRunID, let code):
+            return .retryableFailure(
+                clientRunID: clientRunID,
+                code: code,
+                uploadedCount: report.uploadedCount,
+                deletedCount: report.deletedCount,
+                permanentFailureCount: report.terminalCount
+            )
+        case .busy:
+            return .alreadyRunning
+        case .sessionUnavailable:
+            return .authenticationUnavailable
+        case .ownerMismatch:
+            if report.terminalCount > 0 {
+                return .permanentFailure(
+                    count: report.terminalCount,
+                    uploadedCount: report.uploadedCount,
+                    deletedCount: report.deletedCount
+                )
+            }
+            return .ownerMismatch
+        case .accountChanged:
+            return .accountChanged
+        case .cancelled:
+            return .cancelled
         }
     }
 
