@@ -54,34 +54,28 @@ private actor RunStoreUploadQueueFake: RunUploadEnqueueing {
     func snapshot() -> [QueuedRunUploadFixture] { entries }
 }
 
-@MainActor private final class RunStoreUploadRecoveryFake: RunUploadRecoveryPersisting {
-    private(set) var records: [RunRecord] = []
+@MainActor private final class RunStoreOwnedRecordsFake: RunStoreOwnedRecordsPersisting {
+    private(set) var snapshot: RunStoreOwnedRecordsSnapshot
     private var failNextSave: Bool
 
-    init(failNextSave: Bool = false) { self.failNextSave = failNextSave }
-
-    func loadPending() throws -> [RunRecord] { records }
-
-    func savePending(_ record: RunRecord) throws {
-        if failNextSave {
-            failNextSave = false
-            throw RunUploadRecoveryPersistenceFailure.writeFailed
-        }
-        guard let clientRunID = record.uploadPayload?.clientRunID else {
-            throw RunUploadRecoveryPersistenceFailure.invalidRecord
-        }
-        if let existing = records.first(where: { $0.uploadPayload?.clientRunID == clientRunID }) {
-            guard existing.uploadOwnerID == record.uploadOwnerID,
-                  existing.uploadPayload == record.uploadPayload else {
-                throw RunUploadRecoveryPersistenceFailure.duplicateClientRunIDConflict
-            }
-            return
-        }
-        records.append(record)
+    init(snapshot: RunStoreOwnedRecordsSnapshot = .missing, failNextSave: Bool = false) {
+        self.snapshot = snapshot
+        self.failNextSave = failNextSave
     }
 
-    func removePending(clientRunID: UUID) throws {
-        records.removeAll { $0.uploadPayload?.clientRunID == clientRunID }
+    func loadSnapshot() throws -> RunStoreOwnedRecordsSnapshot { snapshot }
+
+    func saveCanonical(_ records: [RunRecord]) throws {
+        if failNextSave {
+            failNextSave = false
+            throw RunStoreOwnedRecordsPersistenceFailure.writeFailed
+        }
+        snapshot = .canonical(records)
+    }
+
+    var canonicalRecords: [RunRecord] {
+        if case .canonical(let records) = snapshot { return records }
+        return []
     }
 }
 
@@ -1443,8 +1437,8 @@ final class ThemeTests:XCTestCase {
             uploader:sender
         )
         let identity=RunStoreUploadIdentityFake(memberID:"member-A")
-        let recovery=RunStoreUploadRecoveryFake()
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadQueue:outbox,uploadRecoveryPersistence:recovery)
+        let ownedRecords=RunStoreOwnedRecordsFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadQueue:outbox,ownedRecordsPersistence:ownedRecords)
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
         let clientRunID=try XCTUnwrap(store.session?.clientRunID)
@@ -1479,8 +1473,8 @@ final class ThemeTests:XCTestCase {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
         let queue=RunStoreUploadQueueFake()
-        let recovery=RunStoreUploadRecoveryFake()
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        let ownedRecords=RunStoreOwnedRecordsFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
         store.session?.distance=2.5
@@ -1498,7 +1492,7 @@ final class ThemeTests:XCTestCase {
         edited.uploadPayload=nil
         edited.uploadEnqueued=false
         store.update(edited)
-        let restarted=RunStore(defaults:defaults,uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        let restarted=RunStore(defaults:defaults,uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
         await restarted.recoverPendingRunUploads()
 
         let entries=await queue.snapshot()
@@ -1518,7 +1512,7 @@ final class ThemeTests:XCTestCase {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
         let queue=RunStoreUploadQueueFake()
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:RunStoreUploadRecoveryFake())
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
         let clientRunID=try XCTUnwrap(store.session?.clientRunID)
@@ -1537,12 +1531,12 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(restarted.session?.uploadOwnerID,"member-A")
         XCTAssertTrue(restarted.records.isEmpty)
     }
-    @MainActor func testUploadRecoverySourceWriteFailureKeepsSessionAndMeasurementsWithoutSuccess() async throws {
+    @MainActor func testCanonicalOwnedRecordsWriteFailureKeepsSessionAndMeasurementsWithoutSuccess() async throws {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
-        let recovery=RunStoreUploadRecoveryFake(failNextSave:true)
+        let ownedRecords=RunStoreOwnedRecordsFake(failNextSave:true)
         let queue=RunStoreUploadQueueFake()
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
         var active=try XCTUnwrap(store.session)
@@ -1560,11 +1554,11 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(store.session?.distance,1.25)
         XCTAssertEqual(store.session?.accumulated,180)
         XCTAssertNotNil(store.storageMessage)
-        XCTAssertTrue(try recovery.loadPending().isEmpty)
+        XCTAssertTrue(ownedRecords.canonicalRecords.isEmpty)
         let attempts=await queue.attemptCount()
         XCTAssertEqual(attempts,0)
 
-        let restarted=RunStore(defaults:defaults,uploadRecoveryPersistence:recovery)
+        let restarted=RunStore(defaults:defaults,ownedRecordsPersistence:ownedRecords)
         XCTAssertEqual(restarted.session?.clientRunID,clientRunID)
         XCTAssertEqual(restarted.session?.distance,1.25)
         XCTAssertEqual(restarted.session?.accumulated,180)
@@ -1575,10 +1569,10 @@ final class ThemeTests:XCTestCase {
         defer{defaults.removePersistentDomain(forName:suite)}
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         defer{try? FileManager.default.removeItem(at:directory)}
-        let recoveryFile=directory.appendingPathComponent("upload-recovery.json")
-        let recovery=FileRunUploadRecoveryPersistence(fileURL:recoveryFile)
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
         let failedQueue=RunStoreUploadQueueFake(failFirstWrite:true)
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:failedQueue,uploadRecoveryPersistence:recovery)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:failedQueue,ownedRecordsPersistence:ownedRecords)
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         let legacy=RunRecord(date:startedAt,title:"owner 없는 기존 기록",seconds:90,kilometers:1.1)
         store.records.append(legacy)
@@ -1591,16 +1585,15 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(record.uploadEnqueued,false,"The outbox failure does not mark the durable recovery snapshot as queued")
         let attempts=await failedQueue.attemptCount()
         XCTAssertEqual(attempts,1)
-        let pendingSource=try recovery.loadPending()
-        XCTAssertEqual(pendingSource.count,1)
-        XCTAssertEqual(pendingSource.first?.uploadPayload,payload,"The atomic source remains after the outbox write fails")
+        let canonicalSource=try XCTUnwrap(ownedRecords.loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(canonicalSource.uploadPayload,payload,"The permanent local record remains after the outbox write fails")
         let sender=RunStoreUploadSenderFake()
         let outbox=try RunUploadOutbox(
             persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
             sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-B",accessToken:"fake-token-B")),
             uploader:sender
         )
-        let restarted=RunStore(defaults:defaults,uploadQueue:outbox,uploadRecoveryPersistence:FileRunUploadRecoveryPersistence(fileURL:recoveryFile))
+        let restarted=RunStore(defaults:defaults,uploadQueue:outbox,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
         XCTAssertEqual(restarted.records.first(where:{$0.id==record.id})?.uploadEnqueued,false)
         await restarted.recoverPendingRunUploads()
 
@@ -1612,7 +1605,8 @@ final class ThemeTests:XCTestCase {
         XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadOwnerID)
         XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadPayload)
         XCTAssertEqual(restarted.records.first(where:{$0.id==legacy.id}),legacy,"Legacy ownerless history remains unchanged")
-        XCTAssertEqual(try recovery.loadPending(),[],"The recovery source is retired only after the outbox durably accepts the snapshot")
+        let stillCanonical=try XCTUnwrap(FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(stillCanonical.uploadEnqueued,true,"Outbox acceptance updates the permanent local record instead of deleting it")
         let report=try await outbox.drain()
         XCTAssertEqual(report.stopReason,.ownerMismatch)
         let sent=await sender.uploadedPayloads()
@@ -1622,7 +1616,7 @@ final class ThemeTests:XCTestCase {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
         let queue=RunStoreUploadQueueFake()
-        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:RunStoreUploadRecoveryFake())
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
         let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(60))
@@ -1634,6 +1628,125 @@ final class ThemeTests:XCTestCase {
         let attempts=await queue.attemptCount()
         XCTAssertEqual(attempts,0,"No distance is synthesized from the local timer")
     }
+
+    @MainActor func testCanonicalOwnerRecordSurvivesEmptyOutboxAndStaleDefaultsRollback() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:RunStoreUploadSenderFake()
+        )
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        XCTAssertTrue(store.persist())
+        let staleActiveSession=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+        XCTAssertEqual(completed.clientRunID,clientRunID)
+        XCTAssertEqual(completed.uploadEnqueued,true)
+        let queuedBeforeDrain=try await outbox.snapshot()
+        XCTAssertEqual(queuedBeforeDrain.count,1)
+        let delivery=try await outbox.drain()
+        XCTAssertEqual(delivery.stopReason,.finished)
+        let queuedAfterDrain=try await outbox.snapshot()
+        XCTAssertEqual(queuedAfterDrain,[])
+
+        // Simulate a delayed rollback of the cache to the serialized active-session snapshot.
+        defaults.set(staleActiveSession,forKey:"mov.demo.v1")
+        let restarted=RunStore(
+            defaults:defaults,
+            uploadQueue:outbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        XCTAssertNil(restarted.session,"A completed clientRunID in canonical storage suppresses stale active-session restoration")
+        XCTAssertEqual(restarted.records.first?.id,completed.id)
+        XCTAssertEqual(restarted.records.first?.uploadPayload,completed.uploadPayload)
+        await restarted.recoverPendingRunUploads()
+        let queuedAfterRecovery=try await outbox.snapshot()
+        XCTAssertEqual(queuedAfterRecovery,[],"An empty acknowledged outbox is not repopulated from stale UserDefaults")
+    }
+
+    @MainActor func testCanonicalOwnerEditsAndDeletesWinOverStaleDefaults() throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let persistence=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),ownedRecordsPersistence:persistence)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        let ownerless=RunRecord(date:startedAt,title:"기존 회원 미지정 기록",seconds:90,kilometers:1.1)
+        store.records.append(ownerless)
+        XCTAssertTrue(store.persist())
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let original=try XCTUnwrap(store.finish(save:true,at:startedAt.addingTimeInterval(180)))
+        let staleBeforeEdit=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+
+        var edited=original
+        edited.title="수정한 로컬 제목"
+        edited.memo="수정한 메모"
+        store.update(edited)
+        defaults.set(staleBeforeEdit,forKey:"mov.demo.v1")
+        let afterEdit=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        let restoredEdit=try XCTUnwrap(afterEdit.records.first(where:{$0.id==original.id}))
+        XCTAssertEqual(restoredEdit.title,"수정한 로컬 제목")
+        XCTAssertEqual(restoredEdit.memo,"수정한 메모")
+        XCTAssertEqual(restoredEdit.uploadPayload?.title,original.uploadPayload?.title,"The saved payload remains immutable when local display fields change")
+        XCTAssertEqual(afterEdit.records.first(where:{$0.id==ownerless.id}),ownerless,"Ownerless history remains unchanged")
+        let staleBeforeDelete=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+
+        afterEdit.delete(original.id)
+        XCTAssertFalse(afterEdit.records.contains(where:{$0.id==original.id}))
+        defaults.set(staleBeforeDelete,forKey:"mov.demo.v1")
+        let afterDelete=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        XCTAssertFalse(afterDelete.records.contains(where:{$0.id==original.id}),"An authoritative empty canonical snapshot prevents a deleted row from returning")
+        XCTAssertEqual(afterDelete.records.first(where:{$0.id==ownerless.id}),ownerless)
+        XCTAssertEqual(try FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords,[])
+    }
+
+    @MainActor func testCorruptCanonicalOwnedRecordsArePreservedAndMutationsAreBlocked() throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let seed=RunStore(defaults:defaults,ownedRecordsPersistence:RunStoreOwnedRecordsFake(snapshot:.canonical([])))
+        let date=Date(timeIntervalSince1970:1_791_233_400)
+        let ownerless=RunRecord(date:date,title:"기존 기록",seconds:90,kilometers:1)
+        let owned=RunRecord(date:date,title:"회원 기록",seconds:120,kilometers:1.25,uploadOwnerID:"member-A",clientRunID:UUID())
+        seed.records=[owned,ownerless]
+        XCTAssertTrue(seed.persist())
+        let defaultsBeforeLoad=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+        let corruptBytes=Data("{not valid canonical json".utf8)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        try corruptBytes.write(to:canonicalFile,options:.atomic)
+
+        let restarted=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        XCTAssertNotNil(restarted.storageMessage)
+        XCTAssertEqual(restarted.records,[owned,ownerless])
+        var changed=owned
+        changed.title="덮어쓰면 안 되는 수정"
+        restarted.update(changed)
+        restarted.delete(ownerless.id)
+        XCTAssertEqual(restarted.records,[owned,ownerless],"Corrupt canonical storage blocks edits and deletes")
+        XCTAssertEqual(defaults.data(forKey:"mov.demo.v1"),defaultsBeforeLoad,"Loading corrupt canonical data does not rewrite the UserDefaults cache")
+        XCTAssertEqual(try Data(contentsOf:canonicalFile),corruptBytes,"Corrupt canonical bytes are retained for recovery")
+    }
+
     @MainActor func testTierRequiresDistanceAndDistinctQualifyingDays() {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
         defer{defaults.removePersistentDomain(forName:suite)}
