@@ -3,6 +3,7 @@ import XCTest
 @testable import MovNetworking
 
 private final class MemoryOutboxPersistence: RunUploadOutboxPersisting, @unchecked Sendable {
+    let drainOwnershipKey = "memory-outbox-\(UUID().uuidString)"
     private let lock = NSLock()
     private var stored: [RunUploadOutboxEntry] = []
     private var shouldFailNextSave = false
@@ -29,6 +30,33 @@ private final class MemoryOutboxPersistence: RunUploadOutboxPersisting, @uncheck
     func failNextSave() {
         lock.lock(); defer { lock.unlock() }
         shouldFailNextSave = true
+    }
+}
+
+private final class FailNextFileOutboxTransactionPersistence: RunUploadOutboxPersisting, @unchecked Sendable {
+    private let file: FileRunUploadOutboxPersistence
+    private let lock = NSLock()
+    private var shouldFailNextTransaction = false
+
+    init(fileURL: URL) { file = FileRunUploadOutboxPersistence(fileURL: fileURL) }
+    var drainOwnershipKey: String { file.drainOwnershipKey }
+
+    func load() throws -> [RunUploadOutboxEntry] { try file.load() }
+
+    func transact<Result>(
+        _ update: ([RunUploadOutboxEntry]) throws -> RunUploadOutboxMutation<Result>
+    ) throws -> Result {
+        lock.lock()
+        let shouldFail = shouldFailNextTransaction
+        shouldFailNextTransaction = false
+        lock.unlock()
+        if shouldFail { throw RunUploadOutboxPersistenceFailure.writeFailed }
+        return try file.transact(update)
+    }
+
+    func failNextTransaction() {
+        lock.lock(); defer { lock.unlock() }
+        shouldFailNextTransaction = true
     }
 }
 
@@ -96,6 +124,31 @@ private actor RecordingRunUploader: RunUploading {
     }
 
     func requests() -> [(RunUploadPayload, RunUploadSession)] { recorded }
+}
+
+private actor GatedRunUploader: RunUploading {
+    private var payloads: [RunUploadPayload] = []
+    private var startedContinuation: CheckedContinuation<Void, Never>?
+    private var deliveryContinuation: CheckedContinuation<RunUploadDelivery, Never>?
+
+    func upload(_ payload: RunUploadPayload, session: RunUploadSession) async throws -> RunUploadDelivery {
+        payloads.append(payload)
+        startedContinuation?.resume()
+        startedContinuation = nil
+        return await withCheckedContinuation { deliveryContinuation = $0 }
+    }
+
+    func waitUntilStarted() async {
+        guard payloads.isEmpty else { return }
+        await withCheckedContinuation { startedContinuation = $0 }
+    }
+
+    func resume(_ delivery: RunUploadDelivery) {
+        deliveryContinuation?.resume(returning: delivery)
+        deliveryContinuation = nil
+    }
+
+    func submittedPayloads() -> [RunUploadPayload] { payloads }
 }
 
 private struct FixedRunUploadTransport: APIResponseSending {
@@ -346,10 +399,13 @@ final class RunUploadOutboxTests: XCTestCase {
     }
 
     func testSuccessThenAckPersistenceFailureRestartsWithSameClientRunID() async throws {
-        let persistence = MemoryOutboxPersistence()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("outbox.json")
+        let persistence = FailNextFileOutboxTransactionPersistence(fileURL: file)
         let session = MutableUploadSessionProvider(userA)
         let payload = self.payload()
-        let uploader = RecordingRunUploader(afterUpload: { persistence.failNextSave() })
+        let uploader = RecordingRunUploader(afterUpload: { persistence.failNextTransaction() })
         let outbox = try makeOutbox(persistence, session: session, uploader: uploader)
         try await outbox.enqueue(payload, ownerID: userA.ownerID)
 
@@ -360,11 +416,18 @@ final class RunUploadOutboxTests: XCTestCase {
             XCTAssertEqual(error as? RunUploadOutboxPersistenceFailure, .writeFailed)
         }
         XCTAssertEqual(try persistence.load().first?.envelope.payload.clientRunID, payload.clientRunID)
+        let acceptedRequests = await uploader.requests()
+        XCTAssertEqual(acceptedRequests.map(\.0), [payload], "The first accepted POST is followed by a failed local ack write")
 
-        let recovered = try makeOutbox(persistence, session: session, uploader: RecordingRunUploader())
+        let retryUploader = RecordingRunUploader()
+        let restartedPersistence = FileRunUploadOutboxPersistence(fileURL: file)
+        let recovered = try makeOutbox(restartedPersistence, session: session, uploader: retryUploader)
         let report = try await recovered.drain()
         XCTAssertEqual(report.uploadedCount, 1)
         XCTAssertEqual(report.stopReason, .finished)
+        let retriedRequests = await retryUploader.requests()
+        XCTAssertEqual(retriedRequests.map(\.0), [payload], "Ack failure recovery is at-least-once with the identical payload and clientRunID")
+        XCTAssertEqual(retriedRequests.first?.0.clientRunID, payload.clientRunID)
         XCTAssertTrue(try persistence.load().isEmpty)
     }
 
@@ -527,5 +590,33 @@ final class RunUploadOutboxTests: XCTestCase {
         XCTAssertEqual(cancellationReport.stopReason, .cancelled)
         let entries = try await outbox.snapshot()
         XCTAssertEqual(entries.filter { $0.state == .pending }.count, 1)
+    }
+
+    func testSeparateOutboxInstancesCannotDrainTheSameFileConcurrently() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("outbox.json")
+        let firstPersistence = FileRunUploadOutboxPersistence(fileURL: file)
+        let secondPersistence = FileRunUploadOutboxPersistence(fileURL: file)
+        let uploader = GatedRunUploader()
+        let first = try makeOutbox(firstPersistence, session: MutableUploadSessionProvider(userA), uploader: uploader)
+        let second = try makeOutbox(secondPersistence, session: MutableUploadSessionProvider(userA), uploader: uploader)
+        let fixture = payload()
+        try await first.enqueue(fixture, ownerID: userA.ownerID)
+
+        let firstDrain = Task { try await first.drain() }
+        await uploader.waitUntilStarted()
+        let secondReport = try await second.drain()
+        XCTAssertEqual(secondReport.stopReason, .busy)
+        let submittedWhileFirstIsGated = await uploader.submittedPayloads()
+        XCTAssertEqual(submittedWhileFirstIsGated, [fixture], "The shared path must have only one in-flight uploader")
+
+        await uploader.resume(.accepted)
+        let firstReport = try await firstDrain.value
+        XCTAssertEqual(firstReport.uploadedCount, 1)
+        XCTAssertEqual(firstReport.stopReason, .finished)
+        let submittedAfterRelease = await uploader.submittedPayloads()
+        XCTAssertEqual(submittedAfterRelease, [fixture], "Two instances must not POST the same pending payload concurrently")
+        XCTAssertTrue(try firstPersistence.load().isEmpty)
     }
 }

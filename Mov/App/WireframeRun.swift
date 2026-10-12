@@ -57,14 +57,14 @@ extension WireframeRoot {
         withAnimation(reduceMotion ? nil:.easeOut(duration:0.18)){ui.screen=next}
     }
 
-    func togglePause(){withAnimation(reduceMotion ? nil:.easeOut(duration:0.18)){if store.session==nil{store.start(weight:Double(ui.profile.weight))};if store.session?.paused == true || ui.screen=="R04"{store.resume();ui.screen="R02"}else{store.pause();ui.screen="R04"}}}
+    func togglePause(){withAnimation(reduceMotion ? nil:.easeOut(duration:0.18)){if store.session==nil, !store.start(weight:Double(ui.profile.weight)){return};if store.session?.paused == true || ui.screen=="R04"{store.resume();ui.screen="R02"}else{store.pause();ui.screen="R04"}}}
     func saveRun(){
         guard !ui.saving,let session=store.session else{return}
         guard session.elapsed(at:Date())>0 else{go("R12");return}
         ui.saving=true;store.pause();ui.screen="S02"
         Task { @MainActor in
             if !reduceMotion{try? await Task.sleep(for:.milliseconds(220))}
-            if let record=store.finish(save:true){ui.selected=record.id;ui.screen=record.isValid ? "S01":"S05"}else{ui.screen="S03"}
+            if let record=await store.finishAndEnqueue(save:true){ui.selected=record.id;ui.screen=record.isValid ? "S01":"S05"}else{ui.screen="S03"}
             ui.saving=false
         }
     }
@@ -117,15 +117,23 @@ extension WireframeRoot {
             case .idle:
                 EmptyView()
             case .refreshing:
-                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"서버 기록을 전체 확인하는 중이에요.",small:true)}
-                    .accessibilityIdentifier("remoteRunsRefreshing")
+                if case .loading = remoteReads.runRecordsState {
+                    EmptyView()
+                } else {
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"서버 기록을 전체 확인하는 중이에요.",small:true)}
+                        .accessibilityIdentifier("remoteRunsRefreshing")
+                }
             case .failed(let failure):
-                VStack(alignment:.leading,spacing:8){
-                    WNotice(text:"새로고침을 완료하지 못했어요. 기존 목록은 유지했어요. \(failure.userMessage)",danger:true)
-                        .accessibilityIdentifier("remoteRunsRefreshFailure")
-                    if failure.canManuallyRetry {
-                        Button("목록 다시 새로고침"){remoteReads.retryRunRecords()}
-                            .buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRefreshRetry")
+                if case .failed = remoteReads.runRecordsState {
+                    EmptyView()
+                } else {
+                    VStack(alignment:.leading,spacing:8){
+                        WNotice(text:"새로고침을 완료하지 못했어요. 기존 목록은 유지했어요. \(failure.userMessage)",danger:true)
+                            .accessibilityIdentifier("remoteRunsRefreshFailure")
+                        if failure.canManuallyRetry {
+                            Button("목록 다시 새로고침"){remoteReads.retryRunRecords()}
+                                .buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("remoteRunsRefreshRetry")
+                        }
                     }
                 }
             }

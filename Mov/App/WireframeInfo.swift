@@ -153,7 +153,7 @@ extension WireframeRoot {
         } else {
             store.weekly.distanceEnabled=false;store.weekly.timeEnabled=false;store.persist();go("H00")
         }
-    case "start-local":store.start(weight:Double(ui.profile.weight));go("R01")
+    case "start-local":if store.start(weight:Double(ui.profile.weight)){go("R01")}
     case "discard":store.finish(save:false);ui.collapsed=false;go("H01")
     case "delete-record":
         if let runID=ui.remoteSelectedRunID {

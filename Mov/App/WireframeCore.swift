@@ -877,6 +877,12 @@ enum SessionLogoutState: Equatable {
         let requestGeneration = generation
         runRecordsRefreshOperationID = operationID
         runRecordsNeedsRefresh = true
+        switch runRecordsState {
+        case .idle, .failed:
+            runRecordsState = .loading
+        default:
+            break
+        }
         runRecordsRefreshState = .refreshing
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -930,7 +936,14 @@ enum SessionLogoutState: Equatable {
                 return
             }
             runRecordsState = await loader.state
-            runDetailState = await loader.detailState
+            // A successful list refresh can prove that a previously viewed run was deleted.
+            // Keep that explicit not-found result, but do not restore a still-existing detail
+            // into the list screen after returning from an edit.
+            if case .failed(let runID, .recordNotFound) = await loader.detailState {
+                runDetailState = .failed(runID: runID, .recordNotFound)
+            } else {
+                runDetailState = .idle
+            }
             runRecordsNeedsRefresh = false
             runRecordsRefreshState = .idle
         } catch let failure as RunRecordsFailure {
@@ -939,10 +952,11 @@ enum SessionLogoutState: Equatable {
                 generation: requestGeneration,
                 accountScopeID: accountScopeID
             ) else { return }
-            runRecordsState = await loader.state
             if failure == .cancelled || Task.isCancelled {
+                if case .loading = runRecordsState { runRecordsState = .idle }
                 runRecordsRefreshState = .idle
             } else {
+                if case .loading = runRecordsState { runRecordsState = .failed(failure) }
                 runRecordsRefreshState = .failed(failure)
             }
             runRecordsNeedsRefresh = true
@@ -952,7 +966,9 @@ enum SessionLogoutState: Equatable {
                 generation: requestGeneration,
                 accountScopeID: accountScopeID
             ) else { return }
-            runRecordsState = await loader.state
+            if case .loading = runRecordsState {
+                runRecordsState = Task.isCancelled ? .idle : .failed(.invalidResponse)
+            }
             runRecordsRefreshState = Task.isCancelled ? .idle : .failed(.invalidResponse)
             runRecordsNeedsRefresh = true
         }
@@ -2603,13 +2619,17 @@ struct WireframeRoot:View {
     @State var weeklyTimeDraftInvalid=false
     @State var memberProfileDraftBaseline:MemberProfile?
     @State var memberProfileDraftScopeID:String?
-    init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil){
+    init(
+        remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
+        runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
+        runUploadQueue: (any RunUploadEnqueueing)? = nil
+    ){
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
         if resetFixture{Self.didPrepareFixture=true;if let suite=defaultsSelection.suiteName{defaults.removePersistentDomain(forName:suite)}}
-        let model=RunStore(defaults:defaults)
+        let model=RunStore(defaults:defaults,uploadIdentityProvider:runUploadIdentityProvider,uploadQueue:runUploadQueue)
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
@@ -2719,7 +2739,10 @@ struct WireframeRoot:View {
     var rootTaskViews:some View {
         rootStyledLayers
             .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID,screen:ui.screen)}
-            .task { await configureRootForLaunch() }
+            .task {
+                await configureRootForLaunch()
+                await store.recoverPendingRunUploads()
+            }
     }
     var rootStyledLayers:some View {
         rootLayers.background(W.paper).foregroundStyle(W.ink).tint(W.ink)

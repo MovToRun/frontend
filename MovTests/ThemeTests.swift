@@ -19,6 +19,87 @@ private struct V1PointsFixture: Codable {
     var owned: Set<String>
 }
 
+@MainActor private final class RunStoreUploadIdentityFake: RunUploadMemberIdentityProviding {
+    var memberID: String?
+    init(memberID: String?) { self.memberID = memberID }
+    func currentAuthenticatedMemberID() -> String? { memberID }
+}
+
+private struct QueuedRunUploadFixture: Equatable, Sendable {
+    let ownerID: String
+    let payload: RunUploadPayload
+}
+
+private enum RunStoreUploadQueueFixtureError: Error {
+    case writeFailed
+}
+
+private actor RunStoreUploadQueueFake: RunUploadEnqueueing {
+    private var attempts = 0
+    private var failFirstWrite: Bool
+    private var entries: [QueuedRunUploadFixture] = []
+
+    init(failFirstWrite: Bool = false) { self.failFirstWrite = failFirstWrite }
+
+    func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws {
+        attempts += 1
+        if failFirstWrite {
+            failFirstWrite = false
+            throw RunStoreUploadQueueFixtureError.writeFailed
+        }
+        entries.append(QueuedRunUploadFixture(ownerID: ownerID, payload: payload))
+    }
+
+    func attemptCount() -> Int { attempts }
+    func snapshot() -> [QueuedRunUploadFixture] { entries }
+}
+
+@MainActor private final class RunStoreUploadRecoveryFake: RunUploadRecoveryPersisting {
+    private(set) var records: [RunRecord] = []
+    private var failNextSave: Bool
+
+    init(failNextSave: Bool = false) { self.failNextSave = failNextSave }
+
+    func loadPending() throws -> [RunRecord] { records }
+
+    func savePending(_ record: RunRecord) throws {
+        if failNextSave {
+            failNextSave = false
+            throw RunUploadRecoveryPersistenceFailure.writeFailed
+        }
+        guard let clientRunID = record.uploadPayload?.clientRunID else {
+            throw RunUploadRecoveryPersistenceFailure.invalidRecord
+        }
+        if let existing = records.first(where: { $0.uploadPayload?.clientRunID == clientRunID }) {
+            guard existing.uploadOwnerID == record.uploadOwnerID,
+                  existing.uploadPayload == record.uploadPayload else {
+                throw RunUploadRecoveryPersistenceFailure.duplicateClientRunIDConflict
+            }
+            return
+        }
+        records.append(record)
+    }
+
+    func removePending(clientRunID: UUID) throws {
+        records.removeAll { $0.uploadPayload?.clientRunID == clientRunID }
+    }
+}
+
+private actor RunStoreUploadSessionFake: RunUploadSessionProviding {
+    private var session: RunUploadSession?
+    init(session: RunUploadSession?) { self.session = session }
+    func currentSession() async throws -> RunUploadSession? { session }
+}
+
+private actor RunStoreUploadSenderFake: RunUploading {
+    private var uploaded: [RunUploadPayload] = []
+    func upload(_ payload: RunUploadPayload, session: RunUploadSession) async throws -> RunUploadDelivery {
+        uploaded.append(payload)
+        return .accepted
+    }
+    func uploadedPayloads() -> [RunUploadPayload] { uploaded }
+}
+
 private actor PendingSessionLogoutBridgeFake: SessionLogoutRequesting {
     private var continuations: [CheckedContinuation<Void, Error>?] = []
     private var requests = 0
@@ -1348,6 +1429,210 @@ final class ThemeTests:XCTestCase {
         XCTAssertFalse(record.isValid);XCTAssertEqual(record.kilometers,0);XCTAssertEqual(record.pace,"0:00")
         store.start(at:start);store.finish(save:false,at:start.addingTimeInterval(100))
         XCTAssertEqual(store.records.count,count+1)
+    }
+    @MainActor func testRunUploadIdentityIsPinnedAtStartAndDifferentOwnerCannotDrain() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let sender=RunStoreUploadSenderFake()
+        let session=RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-B",accessToken:"fake-token-B"))
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:session,
+            uploader:sender
+        )
+        let identity=RunStoreUploadIdentityFake(memberID:"member-A")
+        let recovery=RunStoreUploadRecoveryFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadQueue:outbox,uploadRecoveryPersistence:recovery)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+        XCTAssertEqual(store.session?.uploadOwnerID,"member-A")
+
+        identity.memberID="member-B"
+        store.session?.distance=1.25
+        let endedAt=startedAt.addingTimeInterval(120.75)
+        let finished=await store.finishAndEnqueue(save:true,at:endedAt)
+        let record=try XCTUnwrap(finished)
+        XCTAssertEqual(record.clientRunID,clientRunID)
+        XCTAssertEqual(record.uploadOwnerID,"member-A")
+        let payload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(payload.clientRunID,clientRunID)
+        XCTAssertEqual(payload.startedAt,startedAt)
+        XCTAssertEqual(payload.endedAt,endedAt)
+        XCTAssertEqual(payload.movingSeconds,120)
+        XCTAssertEqual(payload.distanceMeters,1_250)
+        XCTAssertTrue(payload.points.isEmpty)
+        XCTAssertTrue(payload.pauses.isEmpty)
+
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.envelope.ownerID,"member-A")
+        XCTAssertEqual(entries.first?.envelope.payload,payload)
+        let report=try await outbox.drain()
+        XCTAssertEqual(report.stopReason,.ownerMismatch)
+        let sent=await sender.uploadedPayloads()
+        XCTAssertTrue(sent.isEmpty,"Member B must not send member A's run")
+    }
+    @MainActor func testDuplicateRunCompletionAndRecoveryKeepOneImmutablePayload() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let recovery=RunStoreUploadRecoveryFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=2.5
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(641.9))
+        let record=try XCTUnwrap(finished)
+        let originalPayload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(record.uploadEnqueued,true)
+        let duplicate=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(642))
+        XCTAssertNil(duplicate)
+
+        var edited=record
+        edited.title="수정한 로컬 제목"
+        edited.uploadOwnerID="member-B"
+        edited.clientRunID=UUID()
+        edited.uploadPayload=nil
+        edited.uploadEnqueued=false
+        store.update(edited)
+        let restarted=RunStore(defaults:defaults,uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        await restarted.recoverPendingRunUploads()
+
+        let entries=await queue.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.payload,originalPayload)
+        XCTAssertEqual(entries.first?.payload.title,record.title)
+        XCTAssertEqual(entries.first?.ownerID,"member-A")
+        XCTAssertEqual(restarted.records.first?.title,"수정한 로컬 제목")
+        XCTAssertEqual(restarted.records.first?.uploadPayload,originalPayload)
+        XCTAssertEqual(restarted.records.first?.uploadOwnerID,"member-A")
+        XCTAssertEqual(restarted.records.first?.clientRunID,originalPayload.clientRunID)
+        XCTAssertEqual(restarted.records.first?.uploadEnqueued,true)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,1,"An already-enqueued immutable payload is not queued again on recovery")
+    }
+    @MainActor func testRunStoreSaveFailurePreservesStartedRunAndDoesNotEnqueue() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:RunStoreUploadRecoveryFake())
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+        store.session?.accumulated = .infinity
+
+        let failed=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(60))
+        XCTAssertNil(failed)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertNotNil(store.session)
+        XCTAssertNotNil(store.storageMessage)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0)
+
+        let restarted=RunStore(defaults:defaults)
+        XCTAssertEqual(restarted.session?.clientRunID,clientRunID)
+        XCTAssertEqual(restarted.session?.uploadOwnerID,"member-A")
+        XCTAssertTrue(restarted.records.isEmpty)
+    }
+    @MainActor func testUploadRecoverySourceWriteFailureKeepsSessionAndMeasurementsWithoutSuccess() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let recovery=RunStoreUploadRecoveryFake(failNextSave:true)
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:recovery)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        var active=try XCTUnwrap(store.session)
+        active.segmentStart=nil
+        active.accumulated=180
+        active.distance=1.25
+        store.session=active
+        XCTAssertTrue(store.persist(),"The active measurement snapshot is stored before trying to complete the run")
+        let clientRunID=try XCTUnwrap(active.clientRunID)
+
+        let failed=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        XCTAssertNil(failed,"A recovery-source write failure must not report a saved completion")
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertEqual(store.session?.clientRunID,clientRunID)
+        XCTAssertEqual(store.session?.distance,1.25)
+        XCTAssertEqual(store.session?.accumulated,180)
+        XCTAssertNotNil(store.storageMessage)
+        XCTAssertTrue(try recovery.loadPending().isEmpty)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0)
+
+        let restarted=RunStore(defaults:defaults,uploadRecoveryPersistence:recovery)
+        XCTAssertEqual(restarted.session?.clientRunID,clientRunID)
+        XCTAssertEqual(restarted.session?.distance,1.25)
+        XCTAssertEqual(restarted.session?.accumulated,180)
+        XCTAssertTrue(restarted.records.isEmpty)
+    }
+    @MainActor func testFailedOutboxWriteRecoversAfterRestartWithoutClaimingOwnerlessRecords() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let recoveryFile=directory.appendingPathComponent("upload-recovery.json")
+        let recovery=FileRunUploadRecoveryPersistence(fileURL:recoveryFile)
+        let failedQueue=RunStoreUploadQueueFake(failFirstWrite:true)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:failedQueue,uploadRecoveryPersistence:recovery)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        let legacy=RunRecord(date:startedAt,title:"owner 없는 기존 기록",seconds:90,kilometers:1.1)
+        store.records.append(legacy)
+        XCTAssertTrue(store.persist())
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let record=try XCTUnwrap(finished)
+        let payload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(record.uploadEnqueued,false,"The outbox failure does not mark the durable recovery snapshot as queued")
+        let attempts=await failedQueue.attemptCount()
+        XCTAssertEqual(attempts,1)
+        let pendingSource=try recovery.loadPending()
+        XCTAssertEqual(pendingSource.count,1)
+        XCTAssertEqual(pendingSource.first?.uploadPayload,payload,"The atomic source remains after the outbox write fails")
+        let sender=RunStoreUploadSenderFake()
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-B",accessToken:"fake-token-B")),
+            uploader:sender
+        )
+        let restarted=RunStore(defaults:defaults,uploadQueue:outbox,uploadRecoveryPersistence:FileRunUploadRecoveryPersistence(fileURL:recoveryFile))
+        XCTAssertEqual(restarted.records.first(where:{$0.id==record.id})?.uploadEnqueued,false)
+        await restarted.recoverPendingRunUploads()
+
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.envelope.ownerID,"member-A")
+        XCTAssertEqual(entries.first?.envelope.payload,payload)
+        XCTAssertEqual(restarted.records.first(where:{$0.id==record.id})?.uploadEnqueued,true)
+        XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadOwnerID)
+        XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadPayload)
+        XCTAssertEqual(restarted.records.first(where:{$0.id==legacy.id}),legacy,"Legacy ownerless history remains unchanged")
+        XCTAssertEqual(try recovery.loadPending(),[],"The recovery source is retired only after the outbox durably accepts the snapshot")
+        let report=try await outbox.drain()
+        XCTAssertEqual(report.stopReason,.ownerMismatch)
+        let sent=await sender.uploadedPayloads()
+        XCTAssertTrue(sent.isEmpty)
+    }
+    @MainActor func testUnknownRunDistanceDoesNotCreateOrEnqueueMeasurements() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,uploadRecoveryPersistence:RunStoreUploadRecoveryFake())
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(60))
+        let record=try XCTUnwrap(finished)
+        XCTAssertEqual(record.kilometers,0)
+        XCTAssertNotNil(record.clientRunID)
+        XCTAssertEqual(record.uploadOwnerID,"member-A")
+        XCTAssertNil(record.uploadPayload)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0,"No distance is synthesized from the local timer")
     }
     @MainActor func testTierRequiresDistanceAndDistinctQualifyingDays() {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
