@@ -946,7 +946,8 @@ extension WireframeRoot {
             rootHeader("")
             ScrollView {
                 VStack(alignment:.leading,spacing:0) {
-                    Text(homeWeekLabel).font(W.font(11)).foregroundStyle(W.muted).padding(.bottom,10)
+                    Text(homeWeekLabel).font(W.font(11)).foregroundStyle(W.muted)
+                        .accessibilityIdentifier("homeWeekLabel").padding(.bottom,10)
                     HStack(alignment:.top,spacing:10) {
                         Text("이번 주,\n이만큼 달렸어요")
                             .font(W.font(25,.semibold)).lineSpacing(3).fixedSize(horizontal:false,vertical:true)

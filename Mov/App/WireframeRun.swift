@@ -14,11 +14,16 @@ extension WireframeRoot {
         }
     }
     private func fixedRunPanel(record:RunRecord,paused:Bool,handle:AnyView)->some View {
-        VStack(spacing:0){
-            handle.frame(maxWidth:.infinity).frame(height:44)
-            ZStack(alignment:.topLeading){
-                runPanelMetrics(record:record,paused:paused).id(ui.screen=="R05" ? "finish":ui.screen=="R10" ? "error":"metrics").transition(.opacity)
-            }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+        ZStack(alignment:.topLeading){
+            VStack(spacing:0){
+                handle.frame(maxWidth:.infinity).frame(height:44)
+                ZStack(alignment:.topLeading){
+                    runPanelMetrics(record:record,paused:paused).id(ui.screen=="R05" ? "finish":ui.screen=="R10" ? "error":"metrics").transition(.opacity)
+                }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+            }
+            .frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+        }
+        .overlay(alignment:.bottom){
             VStack(spacing:10){
                 Button(ui.screen=="R05" ? "아직 쉴게요":ui.screen=="R10" ? "저장 다시 시도":paused ? "계속 달리기":"Ⅱ 일시정지"){
                     if ui.screen=="R05"{changeRunState("R04")}
@@ -31,8 +36,8 @@ extension WireframeRoot {
                     else if paused{changeRunState(record.seconds<=0 ? "R12":"R05")}
                     else{go("R06")}
                 }.buttonStyle(WButtonStyle(kind:1,panel:true)).contentTransition(.opacity).accessibilityIdentifier(ui.screen=="R05" ? "saveRun":paused ? "finishRun":"runDetails").accessibilityHidden(ui.collapsed)
-            }
-        }.padding(.horizontal,24).padding(.bottom,21)
+            }.padding(.bottom,21)
+        }.padding(.horizontal,24)
     }
     @ViewBuilder private func runPanelMetrics(record:RunRecord,paused:Bool)->some View {
         VStack(alignment:.leading,spacing:8){
