@@ -40,6 +40,12 @@ protocol RunUploadEnqueueing: Sendable {
     func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws
 }
 
+/// App-triggered upload boundary. The expected owner is captured from the authenticated
+/// identity provider and checked against the uploader session before any request is sent.
+protocol RunUploadDraining: Sendable {
+    func drain(ownerID: String) async throws -> RunUploadDrainReport
+}
+
 struct RunUploadOutboxMutation<Result> {
     let entries: [RunUploadOutboxEntry]
     let result: Result
@@ -217,6 +223,18 @@ actor RunUploadOutbox {
 
     /// Manual only: this actor has no timer, background task, or automatic retry trigger.
     func drain() async throws -> RunUploadDrainReport {
+        try await performDrain(expectedOwnerID: nil)
+    }
+
+    /// Manual app boundary that pins the authenticated identity observed by RunStore.
+    func drain(ownerID: String) async throws -> RunUploadDrainReport {
+        guard Self.isValidOwnerID(ownerID) else {
+            return Self.report(stop: .sessionUnavailable)
+        }
+        return try await performDrain(expectedOwnerID: ownerID)
+    }
+
+    private func performDrain(expectedOwnerID: String?) async throws -> RunUploadDrainReport {
         guard !isDraining else {
             return Self.report(stop: .busy)
         }
@@ -227,7 +245,7 @@ actor RunUploadOutbox {
             return Self.report(stop: .busy)
         }
         do {
-            let report = try await drainOwnedPath()
+            let report = try await drainOwnedPath(expectedOwnerID: expectedOwnerID)
             await RunUploadDrainOwnershipRegistry.shared.release(drainOwnershipKey)
             return report
         } catch {
@@ -236,7 +254,7 @@ actor RunUploadOutbox {
         }
     }
 
-    private func drainOwnedPath() async throws -> RunUploadDrainReport {
+    private func drainOwnedPath(expectedOwnerID: String?) async throws -> RunUploadDrainReport {
         var uploadedCount = 0
         var deletedCount = 0
         var terminalCount = 0
@@ -251,6 +269,9 @@ actor RunUploadOutbox {
         }
         guard let initialSession, Self.isValidSession(initialSession) else {
             return Self.report(uploaded: 0, deleted: 0, terminal: 0, stop: .sessionUnavailable)
+        }
+        guard expectedOwnerID == nil || initialSession.ownerID == expectedOwnerID else {
+            return Self.report(uploaded: 0, deleted: 0, terminal: 0, stop: .ownerMismatch)
         }
 
         let initialEntries = try persistence.load()
@@ -390,3 +411,5 @@ extension RunUploadOutbox: RunUploadEnqueueing {
         _ = try enqueue(payload, ownerID: ownerID)
     }
 }
+
+extension RunUploadOutbox: RunUploadDraining {}

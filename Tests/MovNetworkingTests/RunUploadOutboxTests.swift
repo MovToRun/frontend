@@ -359,6 +359,26 @@ final class RunUploadOutboxTests: XCTestCase {
         XCTAssertEqual(entries.map(\.envelope.payload.clientRunID), [fixture.clientRunID])
     }
 
+    func testAppExpectedOwnerMustMatchOutboxSessionBeforeSending() async throws {
+        let persistence = MemoryOutboxPersistence()
+        let uploader = RecordingRunUploader()
+        let outbox = try makeOutbox(persistence, session: MutableUploadSessionProvider(userA), uploader: uploader)
+        let fixture = payload()
+        try await outbox.enqueue(fixture, ownerID: userA.ownerID)
+
+        let mismatchedReport = try await outbox.drain(ownerID: userB.ownerID)
+        XCTAssertEqual(mismatchedReport.stopReason, .ownerMismatch)
+        let requestsAfterMismatch = await uploader.requests()
+        XCTAssertTrue(requestsAfterMismatch.isEmpty, "A stale session for another member must not upload from the app boundary")
+        let entriesAfterMismatch = try await outbox.snapshot()
+        XCTAssertEqual(entriesAfterMismatch.map(\.envelope.payload.clientRunID), [fixture.clientRunID])
+
+        let matchingReport = try await outbox.drain(ownerID: userA.ownerID)
+        XCTAssertEqual(matchingReport.stopReason, .finished)
+        let requestsAfterMatch = await uploader.requests()
+        XCTAssertEqual(requestsAfterMatch.map(\.0.clientRunID), [fixture.clientRunID])
+    }
+
     func testAccountSwitchDuringRequestKeepsAcknowledgedItemForOriginalOwner() async throws {
         let persistence = MemoryOutboxPersistence()
         let session = MutableUploadSessionProvider(userA)
