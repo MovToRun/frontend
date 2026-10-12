@@ -25,12 +25,19 @@ enum RunUploadOutboxPersistenceFailure: Error, Equatable, Sendable {
 }
 
 protocol RunUploadOutboxPersisting: Sendable {
+    /// Stable within the process for every persistence instance that shares storage.
+    var drainOwnershipKey: String { get }
     /// A missing file is an empty outbox. Existing unreadable or corrupt data must throw.
     func load() throws -> [RunUploadOutboxEntry]
     /// Read, transform, and atomically replace one current snapshot under a storage-wide lock.
     func transact<Result>(
         _ update: ([RunUploadOutboxEntry]) throws -> RunUploadOutboxMutation<Result>
     ) throws -> Result
+}
+
+/// Narrow persistence seam for the local run lifecycle. Enqueueing never starts a drain.
+protocol RunUploadEnqueueing: Sendable {
+    func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws
 }
 
 struct RunUploadOutboxMutation<Result> {
@@ -52,6 +59,19 @@ private final class OutboxPathLockRegistry: @unchecked Sendable {
     }
 }
 
+private actor RunUploadDrainOwnershipRegistry {
+    static let shared = RunUploadDrainOwnershipRegistry()
+    private var ownedPaths = Set<String>()
+
+    func acquire(_ key: String) -> Bool {
+        ownedPaths.insert(key).inserted
+    }
+
+    func release(_ key: String) {
+        ownedPaths.remove(key)
+    }
+}
+
 final class FileRunUploadOutboxPersistence: RunUploadOutboxPersisting, @unchecked Sendable {
     private struct StoredOutbox: Codable {
         let version: Int
@@ -62,8 +82,10 @@ final class FileRunUploadOutboxPersistence: RunUploadOutboxPersisting, @unchecke
     private let fileURL: URL
     private let lock: NSRecursiveLock
 
+    var drainOwnershipKey: String { fileURL.path }
+
     init(fileURL: URL) {
-        self.fileURL = fileURL.standardizedFileURL
+        self.fileURL = fileURL.standardizedFileURL.resolvingSymlinksInPath()
         self.lock = Self.pathLockRegistry.lock(for: self.fileURL.path)
     }
 
@@ -155,6 +177,7 @@ actor RunUploadOutbox {
     private let persistence: any RunUploadOutboxPersisting
     private let sessionProvider: any RunUploadSessionProviding
     private let uploader: any RunUploading
+    private let drainOwnershipKey: String
     private var isDraining = false
 
     init(
@@ -165,6 +188,7 @@ actor RunUploadOutbox {
         self.persistence = persistence
         self.sessionProvider = sessionProvider
         self.uploader = uploader
+        self.drainOwnershipKey = persistence.drainOwnershipKey
         _ = try persistence.load()
     }
 
@@ -199,6 +223,20 @@ actor RunUploadOutbox {
         isDraining = true
         defer { isDraining = false }
 
+        guard await RunUploadDrainOwnershipRegistry.shared.acquire(drainOwnershipKey) else {
+            return Self.report(stop: .busy)
+        }
+        do {
+            let report = try await drainOwnedPath()
+            await RunUploadDrainOwnershipRegistry.shared.release(drainOwnershipKey)
+            return report
+        } catch {
+            await RunUploadDrainOwnershipRegistry.shared.release(drainOwnershipKey)
+            throw error
+        }
+    }
+
+    private func drainOwnedPath() async throws -> RunUploadDrainReport {
         var uploadedCount = 0
         var deletedCount = 0
         var terminalCount = 0
@@ -344,5 +382,11 @@ actor RunUploadOutbox {
         stop: RunUploadDrainStopReason
     ) -> RunUploadDrainReport {
         RunUploadDrainReport(uploadedCount: uploaded, deletedCount: deleted, terminalCount: terminal, stopReason: stop)
+    }
+}
+
+extension RunUploadOutbox: RunUploadEnqueueing {
+    func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws {
+        _ = try enqueue(payload, ownerID: ownerID)
     }
 }

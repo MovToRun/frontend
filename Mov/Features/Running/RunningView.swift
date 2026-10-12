@@ -58,7 +58,10 @@ struct RunningView: View {
         VStack(alignment:.leading,spacing:16) {
             Text("러닝을 종료할까요?").font(.title2.bold())
             Text("이 기록은 실제 측정이 아닌 샘플 기록으로 저장됩니다.").foregroundStyle(MovTokens.secondary)
-            Button("종료하고 샘플 저장") {finishSheet=false;completed(store.finish(save:true))}.buttonStyle(DestructiveButton()).accessibilityIdentifier("saveRun")
+            Button("종료하고 샘플 저장") {
+                finishSheet=false
+                Task { @MainActor in completed(await store.finishAndEnqueue(save:true)) }
+            }.buttonStyle(DestructiveButton()).accessibilityIdentifier("saveRun")
             Button("저장하지 않고 삭제",role:.destructive) {finishSheet=false;completed(store.finish(save:false))}.frame(maxWidth:.infinity,minHeight:44)
             Button("돌아가기"){finishSheet=false}.buttonStyle(SecondaryButton())
         }.padding(24).foregroundStyle(MovTokens.text)

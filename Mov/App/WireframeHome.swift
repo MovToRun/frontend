@@ -1144,8 +1144,14 @@ extension WireframeRoot {
             VStack(alignment:.leading,spacing:16){Capsule().fill(W.border).frame(width:32,height:4).frame(maxWidth:.infinity).padding(.bottom,10)
                 Text(ui.screen=="H05" ? "러닝이 이어지고 있어요":"오늘의 러닝").font(W.font(24,.bold))
                 if ui.screen=="H02"{WText(text:"첫 러닝을 시작해 보세요")}
+                if let storageMessage=store.storageMessage{WNotice(text:storageMessage,danger:true)}
                 Button{go("H03")}label:{HStack{VStack(alignment:.leading,spacing:6){WText(text:"이번 러닝",small:true);Text(store.goal.summary).font(W.font(14,.medium))};Spacer();Text(store.goal.kind == .none ? "목표 설정":"목표 변경").font(W.font(12))}.padding(16).background(W.soft,in:RoundedRectangle(cornerRadius:12))}
-                Button(store.session==nil ? "러닝 시작":"러닝으로 돌아가기"){if store.session==nil{store.start(weight:Double(ui.profile.weight));go("R01")}else{go(store.session?.paused == true ? "R04":"R02")}}.buttonStyle(WButtonStyle()).accessibilityIdentifier("startRun")
+                Button(store.session==nil ? "러닝 시작":"러닝으로 돌아가기"){
+                    if store.session==nil {
+                        guard store.start(weight:Double(ui.profile.weight)) else{return}
+                        go("R01")
+                    } else { go(store.session?.paused == true ? "R04":"R02") }
+                }.buttonStyle(WButtonStyle()).accessibilityIdentifier("startRun")
                 runWeeklySummary
             }.padding(.horizontal,24).padding(.top,11).padding(.bottom,32).background(W.paper,in:UnevenRoundedRectangle(topLeadingRadius:24,topTrailingRadius:24)).frame(maxHeight:g.size.height,alignment:.bottom)
         }}}

@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+/// Supplies the authenticated member identity at run start. UI-only account scopes
+/// are deliberately not accepted by this boundary.
+@MainActor protocol RunUploadMemberIdentityProviding {
+    func currentAuthenticatedMemberID() -> String?
+}
+
 enum MovNumber {
     static func display(_ value:Double)->String {
         guard value.isFinite else{return "—"}
@@ -116,6 +122,14 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var weightKg:Double? = nil
     var isExample:Bool? = nil
     var pointReward:RunPointReward? = nil
+    /// Set only for runs started with an explicitly injected authenticated identity.
+    var uploadOwnerID:String? = nil
+    /// Stable idempotency key pinned when this run starts.
+    var clientRunID:UUID? = nil
+    /// Immutable measurement snapshot used for enqueue and crash recovery.
+    var uploadPayload:RunUploadPayload? = nil
+    /// True once the immutable snapshot has been persisted in the outbox.
+    var uploadEnqueued:Bool? = nil
     var caloriesText:String {guard isValid else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
     var isValid: Bool { kilometers > 0 }
     var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }
@@ -157,49 +171,566 @@ struct DemoSession: Codable {
     var goal: RunGoal
     var distance:Double? = nil
     var weightKg:Double? = nil
+    var uploadOwnerID:String? = nil
+    var clientRunID:UUID? = nil
     var paused: Bool { segmentStart == nil }
     func elapsed(at now: Date) -> Double { accumulated + (segmentStart.map { max(0, now.timeIntervalSince($0)) } ?? 0) }
     func record(at now: Date) -> RunRecord {
         let seconds = elapsed(at: now)
-        return RunRecord(date: startedAt, title: RunRecord.title(for: startedAt), seconds: seconds, kilometers: distance ?? 0,weightKg:weightKg)
+        return RunRecord(
+            date: startedAt,
+            title: RunRecord.title(for: startedAt),
+            seconds: seconds,
+            kilometers: distance ?? 0,
+            weightKg: weightKg,
+            uploadOwnerID: uploadOwnerID,
+            clientRunID: clientRunID
+        )
+    }
+}
+
+enum RunStoreOwnedRecordsPersistenceFailure: Error, Equatable {
+    case unreadable
+    case corrupt
+    case unsupportedVersion
+    case invalidRecord
+    case duplicateRecordID
+    case writeFailed
+}
+
+enum RunStoreOwnedRecordsSnapshot {
+    case missing
+    case legacyPending([RunRecord])
+    case canonical([RunRecord])
+
+    var canonicalRecords: [RunRecord] {
+        switch self {
+        case .missing: return []
+        case .legacyPending(let records), .canonical(let records): return records
+        }
+    }
+}
+
+@MainActor protocol RunStoreOwnedRecordsPersisting {
+    func loadSnapshot() throws -> RunStoreOwnedRecordsSnapshot
+    /// Replaces the canonical set of owner-assigned local records atomically.
+    func saveCanonical(_ records: [RunRecord]) throws
+}
+
+/// Canonical local source for owner-assigned records. Ownerless history remains in the
+/// existing local store and is never copied into this file.
+@MainActor final class FileRunStoreOwnedRecordsPersistence: RunStoreOwnedRecordsPersisting {
+    private struct StoredOwnedRecords: Codable {
+        let version: Int
+        let records: [RunRecord]
+    }
+
+    /// Version 1 was the short-lived enqueue-recovery file used by the preceding PR60 build.
+    private struct LegacyRecovery: Codable {
+        let version: Int
+        let records: [RunRecord]
+    }
+
+    private let fileURL: URL
+    private let legacyRecoveryFileURL: URL?
+
+    init(fileURL: URL, legacyRecoveryFileURL: URL? = nil) {
+        self.fileURL = fileURL.standardizedFileURL
+        self.legacyRecoveryFileURL = legacyRecoveryFileURL?.standardizedFileURL
+    }
+
+    convenience init() {
+        let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("Library/Application Support/MovToRun", isDirectory: true)
+        self.init(
+            fileURL: directory.appendingPathComponent("owned-run-records.json"),
+            legacyRecoveryFileURL: directory.appendingPathComponent("run-upload-recovery.json")
+        )
+    }
+
+    func loadSnapshot() throws -> RunStoreOwnedRecordsSnapshot {
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let data: Data
+            do {
+                data = try Data(contentsOf: fileURL)
+            } catch {
+                throw RunStoreOwnedRecordsPersistenceFailure.unreadable
+            }
+            do {
+                let stored = try JSONDecoder().decode(StoredOwnedRecords.self, from: data)
+                guard stored.version == 1 else { throw RunStoreOwnedRecordsPersistenceFailure.unsupportedVersion }
+                guard Self.hasValidUniqueOwnedRecords(stored.records) else {
+                    throw RunStoreOwnedRecordsPersistenceFailure.corrupt
+                }
+                removeLegacyRecoveryFileIfPresent()
+                return .canonical(stored.records)
+            } catch let failure as RunStoreOwnedRecordsPersistenceFailure {
+                throw failure
+            } catch {
+                throw RunStoreOwnedRecordsPersistenceFailure.corrupt
+            }
+        }
+
+        guard let legacyRecoveryFileURL,
+              FileManager.default.fileExists(atPath: legacyRecoveryFileURL.path) else { return .missing }
+        let data: Data
+        do {
+            data = try Data(contentsOf: legacyRecoveryFileURL)
+        } catch {
+            throw RunStoreOwnedRecordsPersistenceFailure.unreadable
+        }
+        do {
+            let stored = try JSONDecoder().decode(LegacyRecovery.self, from: data)
+            guard stored.version == 1 else { throw RunStoreOwnedRecordsPersistenceFailure.unsupportedVersion }
+            guard stored.records.allSatisfy(Self.isValidLegacyPendingRecord),
+                  Set(stored.records.compactMap { $0.uploadPayload?.clientRunID }).count == stored.records.count else {
+                throw RunStoreOwnedRecordsPersistenceFailure.corrupt
+            }
+            return .legacyPending(stored.records)
+        } catch let failure as RunStoreOwnedRecordsPersistenceFailure {
+            throw failure
+        } catch {
+            throw RunStoreOwnedRecordsPersistenceFailure.corrupt
+        }
+    }
+
+    func saveCanonical(_ records: [RunRecord]) throws {
+        guard Self.hasValidUniqueOwnedRecords(records) else {
+            throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(StoredOwnedRecords(version: 1, records: records))
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            throw RunStoreOwnedRecordsPersistenceFailure.writeFailed
+        }
+        removeLegacyRecoveryFileIfPresent()
+    }
+
+    private func removeLegacyRecoveryFileIfPresent() {
+        guard let legacyRecoveryFileURL,
+              FileManager.default.fileExists(atPath: legacyRecoveryFileURL.path) else { return }
+        try? FileManager.default.removeItem(at: legacyRecoveryFileURL)
+    }
+
+    private static func hasValidUniqueOwnedRecords(_ records: [RunRecord]) -> Bool {
+        var recordIDs = Set<UUID>()
+        var clientRunIDs = Set<UUID>()
+        for record in records {
+            guard isValidOwnedRecord(record), recordIDs.insert(record.id).inserted else { return false }
+            if let clientRunID = record.clientRunID, !clientRunIDs.insert(clientRunID).inserted { return false }
+        }
+        return true
+    }
+
+    private static func isValidLegacyPendingRecord(_ record: RunRecord) -> Bool {
+        guard isValidOwnedRecord(record), let payload = record.uploadPayload else { return false }
+        return record.clientRunID == payload.clientRunID
+    }
+
+    private static func isValidOwnedRecord(_ record: RunRecord) -> Bool {
+        guard let ownerID = record.uploadOwnerID,
+              !ownerID.isEmpty,
+              ownerID.rangeOfCharacter(from: .controlCharacters) == nil else { return false }
+        guard let payload = record.uploadPayload else { return true }
+        return record.clientRunID == payload.clientRunID
     }
 }
 
 @MainActor @Observable final class RunStore {
     private let defaults: UserDefaults
+    private let uploadIdentityProvider: (any RunUploadMemberIdentityProviding)?
+    private let uploadQueue: (any RunUploadEnqueueing)?
+    private let ownedRecordsPersistence: any RunStoreOwnedRecordsPersisting
     var records: [RunRecord] = []
     var goal = RunGoal()
     var weekly = WeeklyGoal()
     var session: DemoSession?
     var storageMessage: String?
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        uploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
+        uploadQueue: (any RunUploadEnqueueing)? = nil,
+        ownedRecordsPersistence: (any RunStoreOwnedRecordsPersisting)? = nil
+    ) {
         self.defaults = defaults
+        self.uploadIdentityProvider = uploadIdentityProvider
+        self.uploadQueue = uploadQueue
+        self.ownedRecordsPersistence = ownedRecordsPersistence ?? FileRunStoreOwnedRecordsPersistence()
         if let data = defaults.data(forKey: "mov.demo.v1") {
             do { let state = try JSONDecoder().decode(Saved.self, from: data); records=state.records; goal=state.goal; weekly=state.weekly; session=state.session; session?.segmentStart=nil }
             catch { storageMessage = "저장한 기록을 읽지 못했습니다. 새 데이터를 저장하기 전에 앱을 다시 실행해 주세요." }
         } else {
             records=[]
-            persist()
         }
+        restoreOwnedRecordSnapshot()
     }
     private struct Saved: Codable { var records: [RunRecord]; var goal: RunGoal; var weekly: WeeklyGoal; var session: DemoSession? }
-    func persist() {
-        guard storageMessage == nil else { return }
-        do { defaults.set(try JSONEncoder().encode(Saved(records: records, goal: goal, weekly: weekly, session: session)), forKey: "mov.demo.v1") }
-        catch { storageMessage = "기록을 저장하지 못했습니다." }
+
+    private func restoreOwnedRecordSnapshot() {
+        do {
+            let snapshot = try ownedRecordsPersistence.loadSnapshot()
+            let defaultOwnedRecords = records.filter { $0.uploadOwnerID != nil }
+            let canonicalRecords: [RunRecord]
+            switch snapshot {
+            case .missing:
+                canonicalRecords = defaultOwnedRecords
+                try Self.validateOwnedRecordSet(canonicalRecords)
+                try Self.validateNoOwnerlessIdentityCollision(canonicalRecords, among: records)
+                if !canonicalRecords.isEmpty { try ownedRecordsPersistence.saveCanonical(canonicalRecords) }
+            case .legacyPending(let pendingRecords):
+                canonicalRecords = try Self.mergeLegacyPendingRecords(pendingRecords, with: defaultOwnedRecords)
+                try Self.validateOwnedRecordSet(canonicalRecords)
+                try Self.validateNoOwnerlessIdentityCollision(canonicalRecords, among: records)
+                if !canonicalRecords.isEmpty { try ownedRecordsPersistence.saveCanonical(canonicalRecords) }
+            case .canonical(let records):
+                canonicalRecords = records
+                try Self.validateOwnedRecordSet(canonicalRecords)
+            }
+
+            try Self.validateNoOwnerlessIdentityCollision(canonicalRecords, among: records)
+            var reconciledRecords: [RunRecord] = []
+            let canonicalByID = Dictionary(uniqueKeysWithValues: canonicalRecords.map { ($0.id, $0) })
+            var includedIDs = Set<UUID>()
+            for localRecord in records {
+                if localRecord.uploadOwnerID == nil {
+                    reconciledRecords.append(localRecord)
+                } else if let canonicalRecord = canonicalByID[localRecord.id] {
+                    reconciledRecords.append(canonicalRecord)
+                    includedIDs.insert(canonicalRecord.id)
+                }
+            }
+            for canonicalRecord in canonicalRecords where !includedIDs.contains(canonicalRecord.id) {
+                reconciledRecords.append(canonicalRecord)
+            }
+
+            var restoredSession = session
+            let completedClientRunIDs = Set(canonicalRecords.compactMap(\.clientRunID))
+            let sessionWasCleared = restoredSession?.clientRunID.map(completedClientRunIDs.contains) == true
+            if let activeClientRunID = restoredSession?.clientRunID,
+               completedClientRunIDs.contains(activeClientRunID) {
+                restoredSession = nil
+            }
+            records = reconciledRecords
+            session = restoredSession
+            if sessionWasCleared || snapshotNeedsCacheRefresh(snapshot, originalRecords: defaultOwnedRecords, canonicalRecords: canonicalRecords) {
+                _ = persist()
+            }
+        } catch {
+            if storageMessage == nil {
+                storageMessage = "저장한 회원 기록을 복구하지 못했습니다. 원본 파일을 보존했어요."
+            }
+        }
     }
-    func start(at now: Date = Date(),weight:Double?=nil) { guard session == nil else { return }; session=DemoSession(startedAt:now,segmentStart:now,goal:goal,weightKg:weight); persist() }
+
+    private func snapshotNeedsCacheRefresh(
+        _ snapshot: RunStoreOwnedRecordsSnapshot,
+        originalRecords: [RunRecord],
+        canonicalRecords: [RunRecord]
+    ) -> Bool {
+        switch snapshot {
+        case .missing: return !canonicalRecords.isEmpty
+        case .legacyPending: return true
+        case .canonical: return originalRecords != canonicalRecords
+        }
+    }
+
+    private static func mergeLegacyPendingRecords(_ pendingRecords: [RunRecord], with localOwnedRecords: [RunRecord]) throws -> [RunRecord] {
+        var merged = localOwnedRecords
+        for pending in pendingRecords {
+            guard isValidOwnedSnapshotRecord(pending),
+                  let clientRunID = pending.clientRunID,
+                  let payload = pending.uploadPayload else {
+                throw RunStoreOwnedRecordsPersistenceFailure.corrupt
+            }
+            if let index = merged.firstIndex(where: { $0.id == pending.id }) {
+                let local = merged[index]
+                guard local.uploadOwnerID == pending.uploadOwnerID,
+                      local.clientRunID == clientRunID,
+                      local.uploadPayload == payload else {
+                    throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+                }
+                // Keep user-edited local metadata and its enqueue marker when available.
+                continue
+            }
+            guard !merged.contains(where: { $0.clientRunID == clientRunID }) else {
+                throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+            }
+            merged.append(pending)
+        }
+        return merged
+    }
+
+    private static func validateNoOwnerlessIdentityCollision(_ ownedRecords: [RunRecord], among records: [RunRecord]) throws {
+        let ownerlessIDs = Set(records.filter { $0.uploadOwnerID == nil }.map(\.id))
+        guard ownedRecords.allSatisfy({ !ownerlessIDs.contains($0.id) }) else {
+            throw RunStoreOwnedRecordsPersistenceFailure.duplicateRecordID
+        }
+    }
+
+    private static func validateOwnedRecordSet(_ records: [RunRecord]) throws {
+        var recordIDs = Set<UUID>()
+        var clientRunIDs = Set<UUID>()
+        for record in records {
+            guard let ownerID = record.uploadOwnerID,
+                  validMemberID(ownerID) != nil,
+                  recordIDs.insert(record.id).inserted else {
+                throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+            }
+            if let clientRunID = record.clientRunID,
+               !clientRunIDs.insert(clientRunID).inserted {
+                throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+            }
+            if let payload = record.uploadPayload,
+               record.clientRunID != payload.clientRunID {
+                throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+            }
+        }
+    }
+
+    @discardableResult func persist() -> Bool {
+        guard storageMessage == nil else { return false }
+        do {
+            defaults.set(try JSONEncoder().encode(Saved(records: records, goal: goal, weekly: weekly, session: session)), forKey: "mov.demo.v1")
+            return true
+        } catch {
+            storageMessage = "기록을 저장하지 못했습니다."
+            return false
+        }
+    }
+    @discardableResult func start(at now: Date = Date(),weight:Double?=nil) -> Bool {
+        guard session == nil, storageMessage == nil else { return false }
+        let memberID = uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID)
+        session = DemoSession(
+            startedAt: now,
+            segmentStart: now,
+            goal: goal,
+            weightKg: weight,
+            uploadOwnerID: memberID,
+            clientRunID: UUID()
+        )
+        guard persist() else {
+            session = nil
+            return false
+        }
+        return true
+    }
     func pause(at now: Date = Date()) { guard var current=session, !current.paused else { return }; current.accumulated=current.elapsed(at:now); current.segmentStart=nil; session=current; persist() }
     func resume(at now: Date = Date()) { guard var current=session, current.paused else { return }; current.segmentStart=now; session=current; persist() }
     @discardableResult func finish(save: Bool, at now: Date = Date()) -> RunRecord? {
         guard let current=session else { return nil }
         if save && (current.elapsed(at:now)<=0 || storageMessage != nil) { return nil }
-        let record=current.record(at:now)
-        if save { records.insert(record,at:0) }
-        session=nil; persist(); return save ? record : nil
+        var record=current.record(at:now)
+        if save {
+            record.uploadPayload = Self.uploadPayload(for: current, record: record, endedAt: now)
+            record.uploadEnqueued = record.uploadPayload == nil ? nil : false
+            guard record.seconds.isFinite,
+                  record.kilometers.isFinite,
+                  record.weightKg?.isFinite != false else {
+                storageMessage = "측정값을 안전하게 저장하지 못했습니다. 러닝 상태를 유지했어요."
+                return nil
+            }
+        }
+
+        if save, let ownerID = record.uploadOwnerID {
+            do {
+                var canonicalRecords = try ownedRecordsPersistence.loadSnapshot().canonicalRecords
+                if let clientRunID = record.clientRunID,
+                   let existingIndex = canonicalRecords.firstIndex(where: { $0.clientRunID == clientRunID }) {
+                    let existing = canonicalRecords[existingIndex]
+                    guard existing.uploadOwnerID == ownerID,
+                          existing.uploadPayload == record.uploadPayload,
+                          Self.isValidOwnedSnapshotRecord(existing) else {
+                        throw RunStoreOwnedRecordsPersistenceFailure.invalidRecord
+                    }
+                    record = existing
+                } else {
+                    canonicalRecords.removeAll { $0.id == record.id }
+                    canonicalRecords.insert(record, at: 0)
+                    try ownedRecordsPersistence.saveCanonical(canonicalRecords)
+                }
+            } catch {
+                storageMessage = "완료 기록을 안전하게 저장하지 못했습니다. 러닝 상태를 유지했어요."
+                return nil
+            }
+        }
+
+        let previousRecords = records
+        if save, !records.contains(where: { $0.id == record.id }) { records.insert(record,at:0) }
+        session=nil
+        if save, record.uploadOwnerID != nil {
+            // The canonical file is the durability boundary. UserDefaults is refreshed only as
+            // a display/session cache and cannot roll a committed completion back.
+            _ = persist()
+        } else if !persist() {
+            records = previousRecords
+            session = current
+            return nil
+        }
+        return save ? record : nil
     }
-    func update(_ record: RunRecord) { if let i=records.firstIndex(where:{$0.id==record.id}) { records[i]=record; persist() } }
-    func delete(_ id: UUID) { records.removeAll{$0.id==id}; persist() }
+
+    /// Saves locally first. If queue persistence fails or the app stops before enqueue,
+    /// the immutable payload on the completed record remains available for recovery.
+    @discardableResult func finishAndEnqueue(save: Bool, at now: Date = Date()) async -> RunRecord? {
+        guard let record = finish(save: save, at: now) else { return nil }
+        guard save,
+              let ownerID = record.uploadOwnerID,
+              let payload = record.uploadPayload,
+              let uploadQueue else { return record }
+        do {
+            try await uploadQueue.enqueueRunUpload(payload, ownerID: ownerID)
+            _ = markUploadEnqueued(recordID: record.id)
+        } catch {
+            // The durable local payload remains pending for a later recovery attempt.
+        }
+        return records.first(where: { $0.id == record.id }) ?? record
+    }
+
+    /// Re-enqueues completed snapshots after launch. The outbox de-duplicates the
+    /// same owner/clientRunId/payload, and this method never drains or sends requests.
+    func recoverPendingRunUploads() async {
+        guard let uploadQueue else { return }
+        let snapshots: [RunRecord]
+        do {
+            snapshots = try ownedRecordsPersistence.loadSnapshot().canonicalRecords.filter {
+                $0.uploadEnqueued != true && $0.uploadPayload != nil
+            }
+        } catch {
+            storageMessage = "업로드 기록을 복구하지 못했습니다. 저장된 기록은 보존했어요."
+            return
+        }
+
+        for durableRecord in snapshots {
+            guard Self.isValidOwnedSnapshotRecord(durableRecord),
+                  let ownerID = durableRecord.uploadOwnerID,
+                  let payload = durableRecord.uploadPayload else {
+                storageMessage = "업로드 기록을 복구하지 못했습니다. 저장된 기록은 보존했어요."
+                return
+            }
+
+            do {
+                try await uploadQueue.enqueueRunUpload(payload, ownerID: ownerID)
+                if records.contains(where: { $0.id == durableRecord.id }) {
+                    _ = markUploadEnqueued(recordID: durableRecord.id)
+                }
+            } catch {
+                // Leave the atomic recovery source pending so a later launch can retry it.
+            }
+        }
+    }
+
+    @discardableResult private func markUploadEnqueued(recordID: UUID) -> Bool {
+        guard let index = records.firstIndex(where: { $0.id == recordID }),
+              records[index].uploadPayload != nil else { return false }
+        let previous = records[index]
+        records[index].uploadEnqueued = true
+        do {
+            try ownedRecordsPersistence.saveCanonical(records.filter { $0.uploadOwnerID != nil })
+        } catch {
+            records[index] = previous
+            storageMessage = "업로드 상태를 저장하지 못했습니다. 완료 기록은 보존했어요."
+            return false
+        }
+        if !persist() {
+            // The canonical owner record is already committed. Do not roll it back because
+            // the UserDefaults cache could not be refreshed.
+        }
+        return true
+    }
+
+    private static func validMemberID(_ memberID: String) -> String? {
+        guard !memberID.isEmpty,
+              memberID.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        return memberID
+    }
+
+    private static func isValidOwnedSnapshotRecord(_ record: RunRecord) -> Bool {
+        guard let ownerID = record.uploadOwnerID,
+              validMemberID(ownerID) != nil,
+              record.clientRunID != nil || record.uploadPayload == nil else { return false }
+        guard let payload = record.uploadPayload else { return true }
+        return record.clientRunID == payload.clientRunID
+    }
+
+    private static func uploadPayload(for session: DemoSession, record: RunRecord, endedAt: Date) -> RunUploadPayload? {
+        guard let ownerID = session.uploadOwnerID,
+              validMemberID(ownerID) != nil,
+              let clientRunID = session.clientRunID,
+              let measuredKilometers = session.distance,
+              measuredKilometers.isFinite,
+              measuredKilometers >= 0,
+              session.startedAt <= endedAt,
+              record.seconds.isFinite,
+              record.seconds >= 0 else { return nil }
+
+        let meters = measuredKilometers * 1_000
+        guard meters.isFinite else { return nil }
+        let wholeMeters = meters.rounded()
+        // The backend accepts integer meters. Do not invent a rounding policy for
+        // fractional-meter values that this RunStore cannot represent exactly.
+        guard abs(meters - wholeMeters) <= max(1, abs(meters)) * 1e-12,
+              let distanceMeters = Int(exactly: wholeMeters) else { return nil }
+
+        let wholeSeconds = record.seconds.rounded(.towardZero)
+        guard let movingSeconds = Int(exactly: wholeSeconds) else { return nil }
+
+        return RunUploadPayload(
+            clientRunID: clientRunID,
+            startedAt: session.startedAt,
+            endedAt: endedAt,
+            movingSeconds: movingSeconds,
+            distanceMeters: distanceMeters,
+            title: record.title,
+            memo: record.memo,
+            points: [],
+            pauses: []
+        )
+    }
+    func update(_ record: RunRecord) {
+        guard storageMessage == nil else { return }
+        guard let index=records.firstIndex(where:{$0.id==record.id}) else{return}
+        var updated=record
+        let persisted=records[index]
+        updated.uploadOwnerID=persisted.uploadOwnerID
+        updated.clientRunID=persisted.clientRunID
+        updated.uploadPayload=persisted.uploadPayload
+        updated.uploadEnqueued=persisted.uploadEnqueued
+        if persisted.uploadOwnerID != nil {
+            var nextOwnedRecords = records.filter { $0.uploadOwnerID != nil }
+            guard let ownedIndex = nextOwnedRecords.firstIndex(where: { $0.id == persisted.id }) else { return }
+            nextOwnedRecords[ownedIndex] = updated
+            do {
+                try ownedRecordsPersistence.saveCanonical(nextOwnedRecords)
+            } catch {
+                storageMessage = "회원 기록을 안전하게 수정하지 못했습니다. 기존 기록을 보존했어요."
+                return
+            }
+        }
+        records[index]=updated
+        _ = persist()
+    }
+    func delete(_ id: UUID) {
+        guard storageMessage == nil,
+              let record = records.first(where: { $0.id == id }) else { return }
+        if record.uploadOwnerID != nil {
+            let nextOwnedRecords = records.filter { $0.uploadOwnerID != nil && $0.id != id }
+            do {
+                try ownedRecordsPersistence.saveCanonical(nextOwnedRecords)
+            } catch {
+                storageMessage = "회원 기록을 안전하게 삭제하지 못했습니다. 기존 기록을 보존했어요."
+                return
+            }
+        }
+        records.removeAll { $0.id == id }
+        _ = persist()
+    }
     func weeklyRecords(asOf now: Date = WReviewClock.now) -> [RunRecord] { var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current;let interval=calendar.dateInterval(of:.weekOfYear,for:now)!;return records.filter{interval.contains($0.date) && $0.isValid} }
     var weeklyRecords: [RunRecord] { weeklyRecords(asOf: WReviewClock.now) }
     var weeklyDistance: Double { weeklyRecords.reduce(0){$0+$1.kilometers} }
