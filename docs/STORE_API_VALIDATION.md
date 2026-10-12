@@ -19,5 +19,5 @@
 
 - Swift package: 113 tests passed, 0 failures (기존 100 + 신규 상점 13).
 - Xcode 앱 빌드: asset catalog 처리 중 `No available simulator runtimes for platform iphonesimulator`로 중단됐습니다. CoreSimulatorService 및 `simdiskimaged`가 연결되지 않아 발생한 실행 환경 제한입니다.
-- 앱 테스트: 지정된 기존 iPhone 17 Pro simulator도 CoreSimulatorService가 기기 목록 조회 요청을 거부해 사용할 수 없었습니다. 새 simulator를 만들거나 기존 기기를 초기화하지 않았습니다.
+- 앱 테스트: 지정된 기존 iPhone 17 Pro UDID `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`로 `xcodebuild test`를 시도했습니다(`-parallel-testing-enabled NO`). CoreSimulatorService가 device set을 초기화하지 못해 destination 조회가 실패했고 테스트는 시작되지 않았습니다. 새 simulator를 만들거나 기존 기기를 초기화하지 않았습니다.
 - 실제 서버, 인증 토큰, Keychain, 환경 설정 또는 인프라는 연결하지 않았습니다.
