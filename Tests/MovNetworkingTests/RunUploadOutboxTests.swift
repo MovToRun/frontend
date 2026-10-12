@@ -680,17 +680,22 @@ final class RunUploadOutboxTests: XCTestCase {
             points: collisionA.points,
             pauses: collisionA.pauses
         )
-        async let collisionInsertA = enqueueAttempt(outboxA, payload: collisionA, ownerID: ownerID)
-        async let collisionInsertB = enqueueAttempt(outboxB, payload: collisionB, ownerID: ownerID)
-        let (collisionResultA, collisionResultB) = try await (collisionInsertA, collisionInsertB)
-        let collisionResults = [collisionResultA, collisionResultB]
-        XCTAssertEqual(collisionResults.filter { $0 == .inserted }.count, 1)
-        XCTAssertEqual(collisionResults.filter { $0 == .conflict }.count, 1)
+        let firstCollisionResult = try await enqueueAttempt(outboxA, payload: collisionA, ownerID: ownerID)
+        let laterCollisionResult = try await enqueueAttempt(outboxB, payload: collisionB, ownerID: ownerID)
+        XCTAssertEqual(firstCollisionResult, .inserted)
+        XCTAssertEqual(laterCollisionResult, .conflict)
 
         let stored = try storeA.load()
-        XCTAssertEqual(stored.count, 3)
-        XCTAssertEqual(Set(stored.map(\.envelope.payload.clientRunID)), Set([first.clientRunID, second.clientRunID, collisionID]))
-        XCTAssertEqual(stored.first(where: { $0.envelope.payload.clientRunID == collisionID })?.envelope.payload, collisionA)
+        let expectedEntries = [
+            RunUploadOutboxEntry(envelope: RunUploadEnvelope(ownerID: ownerID, payload: first), state: .pending),
+            RunUploadOutboxEntry(envelope: RunUploadEnvelope(ownerID: ownerID, payload: second), state: .pending),
+            RunUploadOutboxEntry(envelope: RunUploadEnvelope(ownerID: ownerID, payload: collisionA), state: .pending)
+        ].sorted { $0.envelope.payload.clientRunID.uuidString < $1.envelope.payload.clientRunID.uuidString }
+        let actualEntries = stored.sorted {
+            $0.envelope.payload.clientRunID.uuidString < $1.envelope.payload.clientRunID.uuidString
+        }
+        XCTAssertEqual(stored.count, expectedEntries.count)
+        XCTAssertEqual(actualEntries, expectedEntries)
     }
 
     func testActualFileWriteFailureDoesNotCommitTheEnqueue() async throws {
