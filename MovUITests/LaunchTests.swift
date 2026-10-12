@@ -2,11 +2,16 @@ import XCTest
 import UIKit
 @MainActor final class LaunchTests:XCTestCase {
     var app=XCUIApplication()
+    private let isolatedStoreSuite="mov.ui.fixture.\(UUID().uuidString)"
     override func setUp(){continueAfterFailure=false}
-    func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
-    func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    private func makeFixtureStoreSuite(_ prefix:String)->String {
+        "\(prefix).\(UUID().uuidString)"
+    }
+    func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openMemberProfileFixture(_ extraArguments:[String]=[]){
-        app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.member-profile.\(UUID().uuidString)","-wire-reset","-wire-member-profile-fixture","-appearance","light"]+extraArguments
+        let suite=makeFixtureStoreSuite("mov.wireframe.test.member-profile")
+        app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-member-profile-fixture","-appearance","light"]+extraArguments
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:15))
         XCTAssertTrue(app.staticTexts["remoteProfileNickname"].waitForExistence(timeout:8),app.debugDescription)
@@ -278,7 +283,7 @@ import UIKit
     }
 
     func testReview55HomeGoalSelectorAccessibility3ReflowsWithoutClipping() {
-        let suite="mov.wireframe.test.review55-a11y3"
+        let suite=isolatedStoreSuite
         for compact in [false,true] {
             app.terminate()
             app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset",
@@ -308,17 +313,32 @@ import UIKit
             let edit=app.buttons["homeEditWeeklyGoal"]
             let scroll=app.scrollViews.firstMatch
             XCTAssertTrue(scroll.exists,"Home content remains scrollable at Accessibility3")
+            func waitForStableFrame(_ element:XCUIElement,timeout:Double=1.5)->Bool {
+                var previous=element.frame
+                var stableReads=0
+                let settled=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in
+                    let current=element.frame
+                    if current==previous { stableReads+=1 } else { previous=current;stableReads=0 }
+                    return stableReads>=2
+                },object:nil)
+                return XCTWaiter.wait(for:[settled],timeout:timeout) == .completed
+            }
             func alignToViewport(_ element:XCUIElement) {
-                for _ in 0..<12 {
+                for _ in 0..<16 {
+                    _ = waitForStableFrame(element)
                     let viewport=scroll.frame
                     let frame=element.frame
                     let delta:CGFloat
-                    if frame.minY < viewport.minY { delta=240 }
-                    else if frame.maxY > viewport.maxY { delta = -240 }
+                    let maximumDrag=max(1,viewport.height*0.18)
+                    let minimumEffectiveDrag=max(1,viewport.height*0.04)
+                    let viewportInset=min(8,viewport.height*0.025)
+                    if frame.minY < viewport.minY+viewportInset { delta=min(maximumDrag,max(minimumEffectiveDrag,viewport.minY+viewportInset-frame.minY)) }
+                    else if frame.maxY > viewport.maxY-viewportInset { delta = -min(maximumDrag,max(minimumEffectiveDrag,frame.maxY-viewport.maxY+viewportInset)) }
                     else { break }
                     let start=scroll.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
-                    start.press(forDuration:0.05,thenDragTo:start.withOffset(CGVector(dx:0,dy:delta)))
+                    start.press(forDuration:0.25,thenDragTo:start.withOffset(CGVector(dx:0,dy:delta)),withVelocity:.slow,thenHoldForDuration:0.05)
                 }
+                _ = waitForStableFrame(element)
             }
             XCTAssertTrue(ring.exists,app.debugDescription)
             XCTAssertTrue(actual.exists);XCTAssertTrue(target.exists)
@@ -686,7 +706,7 @@ import UIKit
         app.buttons["theme-light"].tap()
     }
     func testHomeTabAlignmentAtAccessibilityTextSize(){
-        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-reset","-wire-large"]
+        app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-wire-large"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:15))
         let frames=(0...4).map{app.buttons["tab-\($0)"].frame}
         for frame in frames.dropFirst(){XCTAssertEqual(frame.minY,frames[0].minY,accuracy:0.5);XCTAssertEqual(frame.height,frames[0].height,accuracy:1.0)}
@@ -2759,7 +2779,7 @@ extension LaunchTests {
             ("P04","변경하지 않고 돌아오기","H01"),("P05","공간 확보 후 재시도 · 예시","H01"),
             ("R09","일시정지로 돌아가기","R04"),("R10","정지된 기록 확인","R04"),("R11","기록 유지","R04"),
             ("R12","빈 세션 닫기","R11"),("S03","임시 기록 확인","H06"),("S04","기록 보기","L04"),
-            ("S05","홈으로","H00"),("L03","다시 불러오기","L01"),("C01","내 러닝 카드 보기","M01"),
+            ("S05","홈으로","H00"),("L03","다시 불러오기","L01"),("C01","tab-4","M01"),
             ("T07","카카오로 로그인","H00"),("T10","계속 사용하기","T01"),("T12","로그인 화면 보기","A01"),
             ("T13","기기 데모 기록 삭제","L02"),("T14","설정으로 돌아가기","T01"),("T16","완료 응답 확인 · 예시","T12")
         ]
@@ -3350,7 +3370,7 @@ extension LaunchTests {
 
 extension LaunchTests {
     func userOpen(_ screen:String,compact:Bool=false,captureViewport:Bool=false){
-        app.launchArguments=["-wire-fixture","-wire-reset","-wire-user-flow","-wire-screen",screen]
+        app.launchArguments=["-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-wire-user-flow","-wire-screen",screen]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if captureViewport{app.launchArguments.append("-wire-capture-viewport")}
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
@@ -3372,6 +3392,15 @@ extension LaunchTests {
         XCTAssertEqual(actual.width,expected.width,accuracy:0.5,file:file,line:line)
         XCTAssertEqual(actual.height,expected.height,accuracy:0.5,file:file,line:line)
     }
+    func assertRunFrameAfterLayout(_ element:XCUIElement,_ expected:CGRect,file:StaticString=#filePath,line:UInt=#line){
+        let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in
+            let actual=element.frame
+            return abs(actual.minX-expected.minX)<=0.5 && abs(actual.minY-expected.minY)<=0.5 &&
+                abs(actual.width-expected.width)<=0.5 && abs(actual.height-expected.height)<=0.5
+        },object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:2),.completed,"Run panel frame did not return to its fixed layout: actual=\(element.frame), expected=\(expected)",file:file,line:line)
+        assertRunFrame(element.frame,expected,file:file,line:line)
+    }
     func testFixedRunPanelUserFlow(){
         for compact in [false,true]{
             userOpen("R02",compact:compact)
@@ -3379,14 +3408,14 @@ extension LaunchTests {
             let top=handle.frame,first=primary.frame,second=secondary.frame
             XCTAssertTrue(primary.isHittable);XCTAssertTrue(secondary.isHittable)
             for i in 0..<3{
-                tap("pauseRun");XCTAssertTrue(waitHittable(app.buttons["resumeRun"]),app.debugDescription);XCTAssertTrue(waitHittable(app.buttons["finishRun"]),app.debugDescription);assertRunFrame(app.buttons["resumeRun"].frame,first);assertRunFrame(app.buttons["finishRun"].frame,second);assertRunFrame(handle.frame,top)
-                tap("finishRun");assertRunFrame(app.buttons["cancelFinish"].frame,first);assertRunFrame(app.buttons["saveRun"].frame,second);assertRunFrame(handle.frame,top)
-                XCTAssertTrue(app.buttons["saveRun"].isHittable);if i==0{capture(compact ? "Run-finish-320x568":"Run-finish")}
-                tap("cancelFinish");tap("resumeRun");assertRunFrame(primary.frame,first)
+                tap("pauseRun");XCTAssertTrue(waitHittable(app.buttons["resumeRun"]),app.debugDescription);XCTAssertTrue(waitHittable(app.buttons["finishRun"]),app.debugDescription);assertRunFrameAfterLayout(app.buttons["resumeRun"],first);assertRunFrameAfterLayout(app.buttons["finishRun"],second);assertRunFrameAfterLayout(handle,top)
+                tap("finishRun");if i==0{capture(compact ? "Run-finish-320x568":"Run-finish")};assertRunFrameAfterLayout(app.buttons["cancelFinish"],first);assertRunFrameAfterLayout(app.buttons["saveRun"],second);assertRunFrameAfterLayout(handle,top)
+                XCTAssertTrue(app.buttons["saveRun"].isHittable)
+                tap("cancelFinish");assertRunFrameAfterLayout(app.buttons["resumeRun"],first);tap("resumeRun");assertRunFrameAfterLayout(primary,first)
             }
             let point=app.coordinate(withNormalizedOffset:CGVector(dx:0,dy:0)).withOffset(CGVector(dx:first.midX,dy:top.maxY+70))
             point.press(forDuration:0.05,thenDragTo:point.withOffset(CGVector(dx:0,dy:-45)))
-            assertRunFrame(primary.frame,first);assertRunFrame(handle.frame,top)
+            assertRunFrameAfterLayout(primary,first);assertRunFrameAfterLayout(handle,top)
             handle.tap();XCTAssertEqual(handle.label,"러닝 정보 펼치기");tap("pauseRun");tap("resumeRun");handle.tap()
             let restored=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in abs(handle.frame.minY-top.minY)<0.5 && abs(primary.frame.minY-first.minY)<0.5},object:nil)
             XCTAssertEqual(XCTWaiter.wait(for:[restored],timeout:3),.completed)
@@ -3482,12 +3511,15 @@ extension LaunchTests {
     }
 
     func testReview52H00ReferenceWeekShowsSeededGoalProgress() {
-        app.launchArguments=["-wire-fixture","-wire-reset","-wire-screen","H00","-wire-capture-viewport","-appearance","light"]
+        app.launchArguments=["-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-wire-screen","H00","-wire-capture-viewport","-wire-fixed-reference-week","-appearance","light"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["10월 1일 목요일 · 가상 예시"].waitForExistence(timeout:10),app.debugDescription)
+        let dateHeader=app.staticTexts["homeWeekLabel"]
+        XCTAssertTrue(dateHeader.waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertEqual(dateHeader.label,"9.28 — 10.4 · 가상 예시","The fixed Oct 1 fixture shows its ISO Monday–Sunday reference week")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","4.82")).firstMatch.exists)
         XCTAssertTrue(app.staticTexts["24%"].exists)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","2026.09.29 · 30:08 유효 러닝 · 예시")).firstMatch.exists)
+        XCTAssertEqual(app.staticTexts["homeRecentMetadata"].label,"2026.09.29 · 07:12 시작 · 30:08 유효 러닝 · 예시")
+        capture("H00-fixed-reference-week")
     }
 
     func testReview52H01StartsInGPSWaitingState() {

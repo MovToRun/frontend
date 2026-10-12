@@ -3106,9 +3106,11 @@ struct WireframeRoot:View {
                                 Capsule().fill(W.lime).frame(width:20,height:3).matchedGeometryEffect(id:"nav",in:indicator)
                             }
                         }
-                        if tab == .home { BrandMark(size:WRootTab.homeMarkSize).accessibilityIdentifier("homeTabBrandMark") }
-                        else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
-                        else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
+                        ZStack{
+                            if tab == .home { BrandMark(size:WRootTab.homeMarkSize).accessibilityIdentifier("homeTabBrandMark") }
+                            else if tab == .points { Image("PrismPoint").resizable().renderingMode(.original).scaledToFit().frame(width:24,height:24).accessibilityHidden(true) }
+                            else if let asset=tab.assetName { AssetIcon(name:asset,size:24) }
+                        }.frame(width:WRootTab.homeMarkSize,height:WRootTab.homeMarkSize)
                         if let caption=tab.caption {
                             Text(caption).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.8)
                                 .foregroundStyle(selected ? W.ink:W.muted)
@@ -3118,7 +3120,9 @@ struct WireframeRoot:View {
                                 .hidden().accessibilityHidden(true)
                         }
                     }
-                    .padding(.top,3).frame(maxWidth:.infinity,minHeight:64).contentShape(Rectangle())
+                    .padding(.top,3)
+                    .frame(maxWidth:.infinity,minHeight:64,maxHeight:64)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.title)
