@@ -867,7 +867,9 @@ import UIKit
 
         app.buttons["communityNotification-sample-verification"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:5))
-        app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
+        let verificationBackButtons=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@","뒤로","뒤로"))
+        XCTAssertEqual(verificationBackButtons.count,1,app.debugDescription,"The outgoing notification page is inaccessible during its route transition")
+        verificationBackButtons.element.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
         XCTAssertEqual(app.buttons["communityNotification-sample-verification"].value as? String,"읽음")
         app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
 
@@ -2135,6 +2137,56 @@ import UIKit
         feed.swipeDown()
         XCTAssertTrue(waitForLayout({feedTab.isHittable},timeout:5),"Scrolling back up restores the bar")
         capture("community-scroll-bar-restored-light")
+    }
+
+    func testCommunityPrimaryTabsDarkAndShortScreensKeepHeaderAndBottomBar() {
+        launchCommunity("C01",appearance:"dark")
+        let communityTabIDs=["community-tab-feed","community-tab-boards","community-tab-home","community-tab-crew","community-tab-profile"]
+        func assertCommunityBar(_ selected:String){
+            for id in communityTabIDs {
+                let button=app.buttons[id]
+                XCTAssertTrue(button.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertTrue(button.isHittable,"\(id) remains visible on the dark community screen")
+            }
+            XCTAssertFalse(app.buttons["tab-0"].exists,"Primary community screens use only the dedicated community bar")
+            XCTAssertTrue(app.buttons[selected].isHittable)
+        }
+
+        XCTAssertTrue(app.staticTexts["커뮤니티"].exists)
+        XCTAssertTrue(app.buttons["communitySearch"].isHittable)
+        XCTAssertTrue(app.buttons["communitySettings"].isHittable)
+        assertCommunityBar("community-tab-feed")
+        capture("community-dark-C01-feed")
+
+        app.buttons["community-tab-boards"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["게시판"].exists)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        assertCommunityBar("community-tab-boards")
+        capture("community-dark-C02-boards")
+
+        app.buttons["community-tab-crew"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["크루"].exists)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        assertCommunityBar("community-tab-crew")
+        let crewScroll=app.scrollViews["communityCrewOverviewScroll"]
+        XCTAssertTrue(crewScroll.waitForExistence(timeout:5),app.debugDescription)
+        crewScroll.swipeUp()
+        XCTAssertTrue(app.buttons["community-tab-crew"].isHittable,"A short crew screen keeps its bar visible after a no-op upward swipe")
+        capture("community-short-dark-C15-crew")
+
+        app.buttons["community-tab-profile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["내 정보"].exists)
+        XCTAssertTrue(app.buttons["communityOwnProfileSettings"].isHittable)
+        assertCommunityBar("community-tab-profile")
+        XCTAssertTrue(app.staticTexts["communityProfilePostsEmpty"].exists,"The fixture is the short empty-post profile")
+        let profileScroll=app.scrollViews["communityOwnProfileScroll"]
+        XCTAssertTrue(profileScroll.waitForExistence(timeout:5),app.debugDescription)
+        profileScroll.swipeUp()
+        XCTAssertTrue(app.buttons["community-tab-profile"].isHittable,"A short own-profile screen keeps its bar visible after a no-op upward swipe")
+        capture("community-short-dark-C08-profile")
     }
 
     func testCommunityBoardRouteAndLocalPostPreviewPublish() {

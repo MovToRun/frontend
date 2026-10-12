@@ -80,6 +80,7 @@ struct WPage<Content:View,Actions:View>:View {
     var back:(()->Void)?
     var trailing:AnyView=AnyView(EmptyView())
     var onCommunityScrollOffset:((CGFloat)->Void)?=nil
+    var scrollAccessibilityID:String?=nil
     @ViewBuilder var content:Content
     @ViewBuilder var actions:Actions
     var body:some View {
@@ -96,8 +97,15 @@ struct WPage<Content:View,Actions:View>:View {
             .wObserveCommunityScrollOffset{onCommunityScrollOffset?($0)}
             .scrollDismissesKeyboard(.interactively)
             .modifier(WAuthBodyMotion())
+            .modifier(WOptionalAccessibilityIdentifier(identifier:scrollAccessibilityID))
             if Actions.self != EmptyView.self { VStack(spacing:10){actions}.padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)} }
         }.background(W.paper)
+    }
+}
+private struct WOptionalAccessibilityIdentifier:ViewModifier {
+    let identifier:String?
+    @ViewBuilder func body(content:Content)->some View {
+        if let identifier{content.accessibilityIdentifier(identifier)}else{content}
     }
 }
 private struct WCommunityScrollOffsetPreferenceKey:PreferenceKey {
@@ -129,6 +137,10 @@ private struct WCommunityScrollObserver:ViewModifier {
             content.wOnCommunityScrollOffset(action)
         }
     }
+}
+private struct WOutgoingRouteAccessibility:ViewModifier {
+    let hidden:Bool
+    func body(content:Content)->some View {content.accessibilityHidden(hidden)}
 }
 struct WHeader:View {
     var title:String
@@ -2758,6 +2770,13 @@ struct WireframeRoot:View {
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C15" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
+    var routeScreenTransition:AnyTransition {
+        guard !isAccountScreen else{return .identity}
+        let insertion:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .trailing:.leading)
+        let removal:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .leading:.trailing)
+        let hideOutgoing=AnyTransition.modifier(active:WOutgoingRouteAccessibility(hidden:true),identity:WOutgoingRouteAccessibility(hidden:false))
+        return .asymmetric(insertion:insertion,removal:removal.combined(with:hideOutgoing))
+    }
     var body:some View {
         rootCommunityManageUpdates.alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
             Button("계속 편집",role:.cancel){clearCommunityDiscardDestinations()}
@@ -2827,14 +2846,14 @@ struct WireframeRoot:View {
                     VStack(spacing:0){
                         screenView.id(ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
                             .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
-                            .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                            .transition(routeScreenTransition)
                             .frame(maxHeight:.infinity)
                         nav
                     }.zIndex(10)
                 }else{
                     screenView.id(["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen) ? "run-map":ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
                         .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
-                        .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                        .transition(routeScreenTransition)
                 }
             }
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}

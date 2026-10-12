@@ -1647,7 +1647,7 @@ extension WireframeRoot {
     }
 
     var communityCrewOverview:some View {
-        WPage(title:"크루",back:back,onCommunityScrollOffset:handleCommunityScrollOffset){communityCrewOverviewContent}actions:{}
+        WPage(title:"크루",back:back,onCommunityScrollOffset:handleCommunityScrollOffset,scrollAccessibilityID:"communityCrewOverviewScroll"){communityCrewOverviewContent}actions:{}
             .accessibilityIdentifier("communityCrewOverview")
     }
     var communityCrewOverviewContent:some View {
@@ -2482,7 +2482,7 @@ extension WireframeRoot {
                 HStack(spacing:10){Button("저장하기",action:saveCommunityProfileEdit).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityProfileSave");Button("취소"){requestCommunityProfileExit(destination:"stay")}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEditCancel")}.padding(.horizontal,20).padding(.vertical,12+WCommunityBottomTab.barHeight+8)
             } else {
                 ScrollView{WCommunityScrollOffsetProbe(coordinateSpace:"community-own-profile-scroll");VStack(alignment:.leading,spacing:18){communityRunnerCard(communityRunner(ui.communityViewerMemberID),photo:communityRunnerPhoto(ui.communityViewerMemberID),zoomable:false);let posts=communityProfilePosts(for:ui.communityViewerMemberID);communityProfileMetrics(ui.communityViewerMemberID,posts:posts);Button("내 정보 수정"){beginCommunityProfileEdit()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityProfileEdit");Text("작성한 글").font(W.font(17,.semibold));if posts.isEmpty{Text("아직 작성한 글이 없어요").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityProfilePostsEmpty")}else{ForEach(posts){post in communityPostCard(post)}}}.padding(.horizontal,22).padding(.top,16).padding(.bottom,WCommunityBottomTab.barHeight+24)}
-                    .coordinateSpace(name:"community-own-profile-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset)
+                    .coordinateSpace(name:"community-own-profile-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset).accessibilityIdentifier("communityOwnProfileScroll")
             }
         }.background(W.paper).accessibilityElement(children:.contain).accessibilityIdentifier("communityOwnProfile")
     }
