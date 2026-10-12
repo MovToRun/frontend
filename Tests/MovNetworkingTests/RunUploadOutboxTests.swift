@@ -192,6 +192,30 @@ private enum LocalEnqueueAttempt: Equatable, Sendable {
     case conflict
 }
 
+private actor AsyncStartBarrier {
+    private let participantCount: Int
+    private var arrivals = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(participantCount: Int) {
+        self.participantCount = participantCount
+    }
+
+    func arriveAndWait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            arrivals += 1
+            if arrivals == participantCount {
+                let readyWaiters = waiters
+                waiters.removeAll(keepingCapacity: false)
+                readyWaiters.forEach { $0.resume() }
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+            }
+        }
+    }
+}
+
 private func enqueueAttempt(
     _ outbox: RunUploadOutbox,
     payload: RunUploadPayload,
@@ -696,6 +720,49 @@ final class RunUploadOutboxTests: XCTestCase {
         }
         XCTAssertEqual(stored.count, expectedEntries.count)
         XCTAssertEqual(actualEntries, expectedEntries)
+    }
+
+    func testConcurrentDuplicateIDConflictAcrossSeparateOutboxesPreservesTheWinner() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("shared-outbox.json")
+        let storeA = FileRunUploadOutboxPersistence(fileURL: fileURL)
+        let storeB = FileRunUploadOutboxPersistence(fileURL: fileURL)
+        let outboxA = try makeOutbox(storeA, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
+        let outboxB = try makeOutbox(storeB, session: MutableUploadSessionProvider(userA), uploader: RecordingRunUploader())
+        let ownerID = userA.ownerID
+        let collisionID = UUID()
+        let payloadA = payload(collisionID)
+        let payloadB = RunUploadPayload(
+            clientRunID: collisionID,
+            startedAt: payloadA.startedAt,
+            endedAt: payloadA.endedAt,
+            movingSeconds: payloadA.movingSeconds,
+            distanceMeters: payloadA.distanceMeters + 1,
+            points: payloadA.points,
+            pauses: payloadA.pauses
+        )
+        let startBarrier = AsyncStartBarrier(participantCount: 2)
+
+        async let resultA: LocalEnqueueAttempt = {
+            await startBarrier.arriveAndWait()
+            return try await enqueueAttempt(outboxA, payload: payloadA, ownerID: ownerID)
+        }()
+        async let resultB: LocalEnqueueAttempt = {
+            await startBarrier.arriveAndWait()
+            return try await enqueueAttempt(outboxB, payload: payloadB, ownerID: ownerID)
+        }()
+        let (attemptA, attemptB) = try await (resultA, resultB)
+        let attempts = [attemptA, attemptB]
+        XCTAssertEqual(attempts.filter { $0 == .inserted }.count, 1)
+        XCTAssertEqual(attempts.filter { $0 == .conflict }.count, 1)
+
+        let winningPayload = attemptA == .inserted ? payloadA : payloadB
+        let expectedEntry = RunUploadOutboxEntry(
+            envelope: RunUploadEnvelope(ownerID: ownerID, payload: winningPayload),
+            state: .pending
+        )
+        XCTAssertEqual(try storeA.load(), [expectedEntry])
     }
 
     func testActualFileWriteFailureDoesNotCommitTheEnqueue() async throws {
