@@ -85,9 +85,166 @@ struct AuthSessionSnapshot: Equatable, Sendable {
 
 /// Implementations must replace this complete snapshot atomically. In particular, a
 /// refresh token and its retry request ID may never be persisted as separate writes.
+/// `mutationCoordinator` must be the same actor for every client sharing this store.
 protocol AuthSessionStoring: Sendable {
+    var mutationCoordinator: AuthSessionMutationCoordinator { get }
     func loadSnapshot() throws -> AuthSessionSnapshot?
     func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws
+}
+
+/// Serializes ownership changes and shares a single refresh task across every client
+/// injected with one store. The store owns this coordinator for its full lifetime.
+actor AuthSessionMutationCoordinator {
+    private var mutationVersion: UInt64 = 0
+    private var activeLoginID: UUID?
+    private var activeLogoutID: UUID?
+    private var refreshInFlight: (id: UUID, task: Task<AuthSessionSnapshot, Error>)?
+
+    func beginLogin() -> UUID {
+        mutationVersion &+= 1
+        let lease = UUID()
+        activeLoginID = lease
+        activeLogoutID = nil
+        refreshInFlight = nil
+        return lease
+    }
+
+    func commitLogin(_ snapshot: AuthSessionSnapshot, lease: UUID, store: any AuthSessionStoring) throws {
+        guard activeLoginID == lease else { throw AuthSessionFailure.sessionChanged }
+        do {
+            try store.replaceAtomically(with: snapshot)
+        } catch {
+            activeLoginID = nil
+            throw AuthSessionFailure.storageUnavailable
+        }
+        activeLoginID = nil
+        mutationVersion &+= 1
+    }
+
+    func finishLogin(lease: UUID) {
+        if activeLoginID == lease { activeLoginID = nil }
+    }
+
+    func beginLogout() -> UUID {
+        mutationVersion &+= 1
+        let lease = UUID()
+        activeLoginID = nil
+        activeLogoutID = lease
+        refreshInFlight = nil
+        return lease
+    }
+
+    func commitLogout(lease: UUID, expected: AuthSessionSnapshot, store: any AuthSessionStoring) throws {
+        guard activeLogoutID == lease else { throw SessionLogoutFailure.sessionChanged }
+        let current: AuthSessionSnapshot?
+        do {
+            current = try store.loadSnapshot()
+        } catch {
+            throw SessionLogoutFailure.storageUnavailable
+        }
+        guard current == expected else { throw SessionLogoutFailure.sessionChanged }
+        do {
+            try store.replaceAtomically(with: nil)
+        } catch {
+            throw SessionLogoutFailure.storageUnavailable
+        }
+        activeLogoutID = nil
+        mutationVersion &+= 1
+    }
+
+    func finishLogout(lease: UUID) {
+        if activeLogoutID == lease { activeLogoutID = nil }
+    }
+
+    func runRefreshSingleFlight(
+        _ operation: @escaping @Sendable (UInt64) async throws -> AuthSessionSnapshot
+    ) async throws -> AuthSessionSnapshot {
+        guard activeLoginID == nil, activeLogoutID == nil else { throw AuthSessionFailure.sessionChanged }
+        if let refreshInFlight { return try await refreshInFlight.task.value }
+
+        let operationID = UUID()
+        let version = mutationVersion
+        let task = Task { try await operation(version) }
+        refreshInFlight = (operationID, task)
+        do {
+            let result = try await task.value
+            finishRefresh(operationID: operationID)
+            return result
+        } catch {
+            finishRefresh(operationID: operationID)
+            throw error
+        }
+    }
+
+    func prepareRefresh(
+        expected: AuthSessionSnapshot,
+        pending: AuthSessionSnapshot,
+        version: UInt64,
+        store: any AuthSessionStoring
+    ) throws -> AuthSessionSnapshot {
+        try requireCurrentRefresh(version: version)
+        let current = try loadSnapshot(from: store)
+        guard current == expected else { throw AuthSessionFailure.sessionChanged }
+        guard expected.refreshRequestID == nil else { return expected }
+        do {
+            try store.replaceAtomically(with: pending)
+        } catch {
+            throw AuthSessionFailure.storageUnavailable
+        }
+        return pending
+    }
+
+    func commitRefresh(
+        _ snapshot: AuthSessionSnapshot,
+        expected: AuthSessionSnapshot,
+        version: UInt64,
+        store: any AuthSessionStoring
+    ) throws {
+        try requireCurrentRefresh(version: version)
+        guard snapshot.memberID == expected.memberID else { throw AuthSessionFailure.memberIdentityChanged }
+        let current = try loadSnapshot(from: store)
+        guard current == expected else { throw AuthSessionFailure.sessionChanged }
+        do {
+            try store.replaceAtomically(with: snapshot)
+        } catch {
+            throw AuthSessionFailure.storageUnavailable
+        }
+        mutationVersion &+= 1
+    }
+
+    func clearExpiredRefresh(
+        expected: AuthSessionSnapshot,
+        version: UInt64,
+        store: any AuthSessionStoring
+    ) throws {
+        try requireCurrentRefresh(version: version)
+        let current = try loadSnapshot(from: store)
+        guard current == expected else { throw AuthSessionFailure.sessionChanged }
+        do {
+            try store.replaceAtomically(with: nil)
+        } catch {
+            throw AuthSessionFailure.storageUnavailable
+        }
+        mutationVersion &+= 1
+    }
+
+    private func requireCurrentRefresh(version: UInt64) throws {
+        guard mutationVersion == version, activeLoginID == nil, activeLogoutID == nil else {
+            throw AuthSessionFailure.sessionChanged
+        }
+    }
+
+    private func loadSnapshot(from store: any AuthSessionStoring) throws -> AuthSessionSnapshot? {
+        do {
+            return try store.loadSnapshot()
+        } catch {
+            throw AuthSessionFailure.storageUnavailable
+        }
+    }
+
+    private func finishRefresh(operationID: UUID) {
+        if refreshInFlight?.id == operationID { refreshInFlight = nil }
+    }
 }
 
 private struct AuthSessionProblem: Decodable {
@@ -120,10 +277,6 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
     private let apiClient: any APIResponseSending
     private let sessionStore: (any AuthSessionStoring)?
     private let legacyTokenProvider: (any AccessTokenProviding)?
-    private var refreshInFlight: Task<AuthSessionSnapshot, Error>?
-    /// Changes only when a login or logout invalidates/replaces the server session.
-    /// A refresh response that began under an older generation cannot restore it.
-    private var sessionGeneration: UInt64 = 0
 
     init(apiClient: any APIResponseSending, sessionStore: any AuthSessionStoring) {
         self.apiClient = apiClient
@@ -148,41 +301,38 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             throw AuthSessionFailure.invalidResponse
         }
 
-        let response: APIClientResponse
+        let coordinator = store.mutationCoordinator
+        let lease = await coordinator.beginLogin()
         do {
-            response = try await apiClient.sendResponse(
+            let response = try await apiClient.sendResponse(
                 path: "auth/login",
                 method: "POST",
                 body: body,
                 headers: Self.jsonHeaders,
                 queryItems: []
             )
+            guard response.statusCode == 200 else { throw Self.mapResponseFailure(response, isLogin: true) }
+
+            let snapshot = try Self.decodeSession(response.data, refreshRequestID: nil)
+            try await coordinator.commitLogin(snapshot, lease: lease, store: store)
+            return snapshot
+        } catch let failure as AuthSessionFailure {
+            await coordinator.finishLogin(lease: lease)
+            throw failure
         } catch {
+            await coordinator.finishLogin(lease: lease)
             throw Self.mapTransportFailure(error)
         }
-        guard response.statusCode == 200 else { throw Self.mapResponseFailure(response, isLogin: true) }
-
-        let snapshot = try Self.decodeSession(response.data, refreshRequestID: nil)
-        do {
-            try store.replaceAtomically(with: snapshot)
-        } catch {
-            throw AuthSessionFailure.storageUnavailable
-        }
-        sessionGeneration &+= 1
-        return snapshot
     }
 
-    /// All callers in this actor share one network rotation. If a response is lost,
-    /// the stored old refresh token and request ID remain the exact retry pair.
+    /// All clients that share the injected store also share its coordinator and one
+    /// network rotation. A lost response retains the exact saved token/request ID pair.
     func refresh() async throws -> AuthSessionSnapshot {
-        if let refreshInFlight {
-            return try await refreshInFlight.value
+        let store = try requiredStore()
+        let coordinator = store.mutationCoordinator
+        return try await coordinator.runRefreshSingleFlight { version in
+            try await self.performRefresh(store: store, coordinator: coordinator, startingVersion: version)
         }
-
-        let task = Task { try await self.performRefresh() }
-        refreshInFlight = task
-        defer { refreshInFlight = nil }
-        return try await task.value
     }
 
     func accessToken() async throws -> String? {
@@ -197,22 +347,67 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
     }
 
     func logout() async throws {
-        let startingGeneration = sessionGeneration
-        let token: String?
-        if let sessionStore {
+        guard let sessionStore else {
+            try await logoutUsingLegacyTokenProvider()
+            return
+        }
+
+        let coordinator = sessionStore.mutationCoordinator
+        let lease = await coordinator.beginLogout()
+        do {
+            let session: AuthSessionSnapshot?
             do {
-                token = try sessionStore.loadSnapshot()?.accessToken
+                session = try sessionStore.loadSnapshot()
             } catch {
                 throw SessionLogoutFailure.storageUnavailable
             }
-        } else {
+            guard let session else { throw SessionLogoutFailure.accessTokenUnavailable }
+            let token = session.accessToken
+            guard !token.isEmpty,
+                  token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+                throw SessionLogoutFailure.accessTokenUnavailable
+            }
+
+            let response: APIClientResponse
             do {
-                token = try await legacyTokenProvider?.accessToken()
+                response = try await apiClient.sendResponse(
+                    path: "auth/logout",
+                    method: "POST",
+                    body: nil,
+                    headers: ["Authorization": "Bearer \(token)", "Accept": "application/json", "Cache-Control": "no-store"],
+                    queryItems: []
+                )
+            } catch let error as APIClientError {
+                throw Self.mapLogoutFailure(error)
             } catch is CancellationError {
                 throw SessionLogoutFailure.cancelled
             } catch {
-                throw SessionLogoutFailure.accessTokenUnavailable
+                throw SessionLogoutFailure.invalidResponse
             }
+
+            switch response.statusCode {
+            case 204:
+                try await coordinator.commitLogout(lease: lease, expected: session, store: sessionStore)
+            case 401:
+                try await coordinator.commitLogout(lease: lease, expected: session, store: sessionStore)
+                throw SessionLogoutFailure.unauthenticated
+            default:
+                throw Self.mapLogoutResponseFailure(response)
+            }
+        } catch {
+            await coordinator.finishLogout(lease: lease)
+            throw error
+        }
+    }
+
+    private func logoutUsingLegacyTokenProvider() async throws {
+        let token: String?
+        do {
+            token = try await legacyTokenProvider?.accessToken()
+        } catch is CancellationError {
+            throw SessionLogoutFailure.cancelled
+        } catch {
+            throw SessionLogoutFailure.accessTokenUnavailable
         }
         guard let token, !token.isEmpty,
               token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
@@ -238,17 +433,19 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
 
         switch response.statusCode {
         case 204:
-            try clearSessionAfterLogout(startingGeneration: startingGeneration)
+            return
         case 401:
-            try clearSessionAfterLogout(startingGeneration: startingGeneration)
             throw SessionLogoutFailure.unauthenticated
         default:
             throw Self.mapLogoutResponseFailure(response)
         }
     }
 
-    private func performRefresh() async throws -> AuthSessionSnapshot {
-        let store = try requiredStore()
+    private func performRefresh(
+        store: any AuthSessionStoring,
+        coordinator: AuthSessionMutationCoordinator,
+        startingVersion: UInt64
+    ) async throws -> AuthSessionSnapshot {
         let original: AuthSessionSnapshot?
         do {
             original = try store.loadSnapshot()
@@ -256,7 +453,6 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             throw AuthSessionFailure.storageUnavailable
         }
         guard let original else { throw AuthSessionFailure.sessionUnavailable }
-        let startingGeneration = sessionGeneration
         let requestID = original.refreshRequestID ?? UUID()
         let pendingSnapshot = try AuthSessionSnapshot(
             accessToken: original.accessToken,
@@ -264,18 +460,16 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             memberID: original.memberID,
             refreshRequestID: requestID
         )
-
-        if original.refreshRequestID == nil {
-            do {
-                try store.replaceAtomically(with: pendingSnapshot)
-            } catch {
-                throw AuthSessionFailure.storageUnavailable
-            }
-        }
+        let pending = try await coordinator.prepareRefresh(
+            expected: original,
+            pending: pendingSnapshot,
+            version: startingVersion,
+            store: store
+        )
 
         let body: Data
         do {
-            body = try JSONEncoder().encode(AuthRefreshRequest(refreshToken: original.refreshToken, requestId: requestID))
+            body = try JSONEncoder().encode(AuthRefreshRequest(refreshToken: pending.refreshToken, requestId: requestID))
         } catch {
             throw AuthSessionFailure.invalidResponse
         }
@@ -295,12 +489,7 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
         }
 
         guard response.statusCode != 401 else {
-            try clearExpiredSession(
-                store: store,
-                startingGeneration: startingGeneration,
-                refreshToken: original.refreshToken,
-                requestID: requestID
-            )
+            try await coordinator.clearExpiredRefresh(expected: pending, version: startingVersion, store: store)
             throw AuthSessionFailure.unauthenticated
         }
         guard response.statusCode == 200 else { throw Self.mapResponseFailure(response, isLogin: false) }
@@ -310,66 +499,16 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             refreshRequestID: nil,
             allowsRemainingRefreshTTL: original.refreshRequestID != nil
         )
-        guard received.memberID == original.memberID else { throw AuthSessionFailure.memberIdentityChanged }
-        guard sessionGeneration == startingGeneration,
-              let current = try loadCurrentSnapshot(from: store),
-              current.refreshToken == original.refreshToken,
-              current.refreshRequestID == requestID else {
-            throw AuthSessionFailure.sessionChanged
-        }
-
-        do {
-            // The server response is accepted only if this single atomic replacement
-            // succeeds; on failure the old refresh token + retry ID remain recoverable.
-            try store.replaceAtomically(with: received)
-        } catch {
-            throw AuthSessionFailure.storageUnavailable
-        }
+        guard received.memberID == pending.memberID else { throw AuthSessionFailure.memberIdentityChanged }
+        // The store coordinator checks ownership and atomically replaces the complete
+        // snapshot; a server-success/local-write failure keeps the recovery pair.
+        try await coordinator.commitRefresh(received, expected: pending, version: startingVersion, store: store)
         return received
     }
 
     private func requiredStore() throws -> any AuthSessionStoring {
         guard let sessionStore else { throw AuthSessionFailure.sessionUnavailable }
         return sessionStore
-    }
-
-    private func loadCurrentSnapshot(from store: any AuthSessionStoring) throws -> AuthSessionSnapshot? {
-        do {
-            return try store.loadSnapshot()
-        } catch {
-            throw AuthSessionFailure.storageUnavailable
-        }
-    }
-
-    private func clearExpiredSession(
-        store: any AuthSessionStoring,
-        startingGeneration: UInt64,
-        refreshToken: String,
-        requestID: UUID
-    ) throws {
-        guard sessionGeneration == startingGeneration,
-              let current = try loadCurrentSnapshot(from: store),
-              current.refreshToken == refreshToken,
-              current.refreshRequestID == requestID else {
-            throw AuthSessionFailure.sessionChanged
-        }
-        do {
-            try store.replaceAtomically(with: nil)
-        } catch {
-            throw AuthSessionFailure.storageUnavailable
-        }
-        sessionGeneration &+= 1
-    }
-
-    private func clearSessionAfterLogout(startingGeneration: UInt64) throws {
-        guard let sessionStore else { return }
-        guard sessionGeneration == startingGeneration else { throw SessionLogoutFailure.sessionChanged }
-        do {
-            try sessionStore.replaceAtomically(with: nil)
-        } catch {
-            throw SessionLogoutFailure.storageUnavailable
-        }
-        sessionGeneration &+= 1
     }
 
     private static let jsonHeaders = [
@@ -389,10 +528,13 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
         } catch {
             throw AuthSessionFailure.invalidResponse
         }
+        // Redis PTTL is converted with Duration.toSeconds, so an exact replay may
+        // report zero while less than one second remains. Accept only that replay
+        // value verbatim; do not extend it or manufacture a replacement token.
         guard response.tokenType == "Bearer",
               response.accessExpiresInSeconds == 900,
               (response.refreshExpiresInSeconds == 604_800
-                || (allowsRemainingRefreshTTL && (1...604_800).contains(response.refreshExpiresInSeconds))),
+                || (allowsRemainingRefreshTTL && (0...604_800).contains(response.refreshExpiresInSeconds))),
               let memberID = memberIDFromTrustedServerToken(response.accessToken) else {
             throw AuthSessionFailure.invalidResponse
         }

@@ -2168,6 +2168,7 @@ private enum AuthSessionFixtureStoreError: Error {
 }
 
 private final class AuthSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
     private let lock = NSLock()
     private var snapshot: AuthSessionSnapshot?
     private let failReplacementAt: Int?
@@ -2336,6 +2337,108 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertEqual((body["deviceId"] as? String)?.lowercased(), AuthSessionFixtures.deviceID.uuidString.lowercased())
     }
 
+    func testLatestLoginWinsWhenSameClientResponsesArriveInReverseAccountOrder() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([
+            .hold,
+            .response(AuthSessionFixtures.tokenResponse(
+                memberID: "42",
+                accessToken: AuthSessionFixtures.serverToken(memberID: "42", tokenNonce: "account-42"),
+                refreshToken: "account-42-refresh"
+            ))
+        ])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let earlierLogin = Task {
+            try await client.login(email: "member-41@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        let laterLogin = Task {
+            try await client.login(email: "member-42@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+
+        await transport.waitForRequests(2)
+        let acceptedLater = try await laterLogin.value
+        XCTAssertEqual(acceptedLater.memberID, "42")
+        XCTAssertEqual(try store.loadSnapshot()?.memberID, "42")
+
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "account-41"),
+            refreshToken: "account-41-refresh"
+        ))
+        do {
+            _ = try await earlierLogin.value
+            XCTFail("An older login response cannot replace a newer account session")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        XCTAssertEqual(try store.loadSnapshot()?.memberID, "42")
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, "account-42-refresh")
+    }
+
+    func testLatestSameMemberSameDeviceLoginWinsWhenResponsesArriveInReverseOrder() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([
+            .hold,
+            .response(AuthSessionFixtures.tokenResponse(
+                memberID: "41",
+                accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-newer"),
+                refreshToken: "same-member-newer-refresh"
+            ))
+        ])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let earlierLogin = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        let laterLogin = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+
+        await transport.waitForRequests(2)
+        _ = try await laterLogin.value
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-older"),
+            refreshToken: "same-member-older-refresh"
+        ))
+        do {
+            _ = try await earlierLogin.value
+            XCTFail("A same-account login still has an ordering owner")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        XCTAssertEqual(try store.loadSnapshot()?.memberID, "41")
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, "same-member-newer-refresh")
+        XCTAssertEqual(try store.loadSnapshot()?.accessToken, AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "same-member-newer"))
+    }
+
+    func testLogoutDuringPendingLoginInvalidatesItsLateServerSuccess() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.hold])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+
+        do {
+            try await client.logout()
+            XCTFail("Logging out while no session is stored still cancels the pending login owner")
+        } catch let failure as SessionLogoutFailure {
+            XCTAssertEqual(failure, .accessTokenUnavailable)
+        }
+
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "late-login"))
+        do {
+            _ = try await login.value
+            XCTFail("A login response received after logout cannot create a session")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
     func testRefreshUsesServerIssuedTokensAndAtomicallyRotatesSnapshot() async throws {
         let initial = try AuthSessionFixtures.session()
         let store = AuthSessionFixtureStore(snapshot: initial)
@@ -2400,6 +2503,69 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertEqual(retryBody["refreshToken"] as? String, afterLostResponse.refreshToken)
         XCTAssertEqual(firstBody["requestId"] as? String, retryID.uuidString)
         XCTAssertEqual(retryBody["requestId"] as? String, retryID.uuidString)
+    }
+
+    func testExactRetryAcceptsZeroSecondRemainingTTLWithoutExtendingRefreshLifetime() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let originalClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.failure(.transport(.timedOut))]),
+            sessionStore: store
+        )
+        do {
+            _ = try await originalClient.refresh()
+            XCTFail("The first response is intentionally lost")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .transport(.timedOut))
+        }
+        let pending = try XCTUnwrap(try store.loadSnapshot())
+        let originalRequestID = try XCTUnwrap(pending.refreshRequestID)
+
+        let retryTransport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "near-expiry-server-token"),
+            refreshToken: "server-successor-under-one-second",
+            refreshExpiresInSeconds: 0
+        ))])
+        let recovered = try await AuthSessionClient(apiClient: retryTransport, sessionStore: store).refresh()
+        XCTAssertEqual(recovered.accessToken, AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "near-expiry-server-token"))
+        XCTAssertEqual(recovered.refreshToken, "server-successor-under-one-second")
+        XCTAssertNil(recovered.refreshRequestID)
+        let retryRequests = await retryTransport.requests()
+        let exactRetryBody = try AuthSessionFixtures.jsonBody(try XCTUnwrap(retryRequests.first))
+        XCTAssertEqual(exactRetryBody["refreshToken"] as? String, pending.refreshToken)
+        XCTAssertEqual(exactRetryBody["requestId"] as? String, originalRequestID.uuidString)
+
+        let expiredTransport = AuthSessionFixtureTransport([.response(APIClientResponse(statusCode: 401, data: Data(), requestID: "expired"))])
+        do {
+            _ = try await AuthSessionClient(apiClient: expiredTransport, sessionStore: store).refresh()
+            XCTFail("The server remains authoritative when the returned refresh token has expired")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+        let expiredRequests = await expiredTransport.requests()
+        let expiredRequest = try XCTUnwrap(expiredRequests.first)
+        let expiredBody = try AuthSessionFixtures.jsonBody(expiredRequest)
+        XCTAssertEqual(expiredBody["refreshToken"] as? String, "server-successor-under-one-second")
+        XCTAssertNil(try store.loadSnapshot())
+
+        let freshStore = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let freshClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+                memberID: "41",
+                refreshToken: "invalid-fresh-response",
+                refreshExpiresInSeconds: 0
+            ))]),
+            sessionStore: freshStore
+        )
+        do {
+            _ = try await freshClient.refresh()
+            XCTFail("A normal rotation must report the full seven-day lifetime")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .invalidResponse)
+        }
+        let retained = try XCTUnwrap(try freshStore.loadSnapshot())
+        XCTAssertEqual(retained.refreshToken, "previous-refresh")
+        XCTAssertNotNil(retained.refreshRequestID)
     }
 
     func testServerSuccessWithStorageFailureKeepsOldRefreshAndRetryID() async throws {
@@ -2472,6 +2638,30 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertEqual(firstResult, secondResult)
         let requests = await transport.requests()
         XCTAssertEqual(requests.count, 1)
+    }
+
+    func testRefreshSingleFlightIsSharedByClientsUsingTheSameStore() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let firstTransport = AuthSessionFixtureTransport([.hold])
+        let secondTransport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "must-not-be-used"))])
+        let firstClient = AuthSessionClient(apiClient: firstTransport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: secondTransport, sessionStore: store)
+        let first = Task { try await firstClient.refresh() }
+        await firstTransport.waitForRequests(1)
+        let second = Task { try await secondClient.refresh() }
+        try await Task.sleep(for: .milliseconds(30))
+
+        let competingRequests = await secondTransport.requests()
+        XCTAssertTrue(competingRequests.isEmpty, "Clients sharing one store also share its refresh coordinator")
+        await firstTransport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "shared-refresh-result"))
+        let firstResult = try await first.value
+        let secondResult = try await second.value
+        XCTAssertEqual(firstResult, secondResult)
+        XCTAssertEqual(firstResult.refreshToken, "shared-refresh-result")
+        let firstRequests = await firstTransport.requests()
+        let secondRequests = await secondTransport.requests()
+        XCTAssertEqual(firstRequests.count, 1)
+        XCTAssertEqual(secondRequests.count, 0)
     }
 
     func testRefreshMemberIDChangeIsRejectedAndNotStored() async throws {
