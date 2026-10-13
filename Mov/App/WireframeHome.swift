@@ -2746,7 +2746,11 @@ extension WireframeRoot {
                     HStack(spacing:8){Text(parent.isDeleted ? "삭제된 댓글입니다":"\(parent.author)에게 답글 · \(parent.text)").font(W.font(11)).foregroundStyle(W.muted).lineLimit(1);Spacer();Button("취소"){ui.communityReplyToID=nil}.font(W.font(11)).accessibilityIdentifier("communityReplyCancel")}
                         .accessibilityIdentifier("communityReplyComposerTarget")
                 }
-                TextField("댓글을 남겨 보세요",text:Binding(get:{ui.communityComment},set:{ui.communityComment=WCommunityTextLimit.apply($0,limit:WCommunityTextLimit.comment)})).font(W.font(14)).padding(14).frame(minHeight:50).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityCommentInput").submitLabel(.send).onSubmit{submitCommunityComment()}
+                TextField("댓글을 남겨 보세요",text:Binding(get:{ui.communityComment},set:{ui.communityComment=WCommunityTextLimit.apply($0,limit:WCommunityTextLimit.comment)}),axis:.vertical)
+                    .font(W.font(14)).lineLimit(1...8).padding(14)
+                    .frame(maxWidth:.infinity,minHeight:50,alignment:.leading)
+                    .background(W.soft,in:RoundedRectangle(cornerRadius:10))
+                    .accessibilityIdentifier("communityCommentInput").submitLabel(.send).onSubmit{submitCommunityComment()}
                 if !ui.communityError.isEmpty{WText(text:ui.communityError,small:true)}
                 Button(ui.communityReplyToID == nil ? "댓글 등록":"답글 등록"){submitCommunityComment()}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityComment.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty).accessibilityIdentifier("communityCommentSubmit")
             }.onAppear{recordCommunityDetailView(post)}
