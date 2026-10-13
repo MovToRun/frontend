@@ -2708,12 +2708,23 @@ extension WireframeRoot {
     }
 
     var communityBoards:some View {
-        WPage(title:"게시판",back:back,onCommunityScrollOffset:handleCommunityScrollOffset){
-            Text("게시판 바로가기").font(W.font(15,.semibold))
-            LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){ForEach(["러닝 질문","러닝 인증","대회 정보·후기","크루 모집"],id:\.self){board in Button{ui.communityBoard=board;go("C03")}label:{VStack(alignment:.leading,spacing:8){Image(systemName:board=="러닝 질문" ? "bubble.left.and.bubble.right":"figure.run").font(.system(size:20));Text(board).font(W.font(12,.medium))}.frame(maxWidth:.infinity,minHeight:78,alignment:.leading).padding(.horizontal,14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityBoardShortcut-\(board)")}}
-            HStack{Text("새로 올라온 이야기").font(W.font(15,.semibold));Spacer();Button("전체 게시판 보기"){go("C27")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityBrowseAllBoards")}.padding(.top,14)
-            ForEach(communityPublicVisiblePosts){post in communityPostCard(post)}
-        }actions:{}
+        VStack(spacing:0){
+            communityFeedHeader
+            ScrollView {
+                WCommunityScrollOffsetProbe(coordinateSpace:"community-boards-scroll")
+                VStack(alignment:.leading,spacing:18){
+                    Text("게시판").font(W.font(18,.semibold)).accessibilityIdentifier("communityBoardsTitle")
+                    Text("게시판 바로가기").font(W.font(15,.semibold))
+                    LazyVGrid(columns:[GridItem(.flexible()),GridItem(.flexible())],spacing:12){ForEach(["러닝 질문","러닝 인증","대회 정보·후기","크루 모집"],id:\.self){board in Button{ui.communityBoard=board;go("C03")}label:{VStack(alignment:.leading,spacing:8){Image(systemName:board=="러닝 질문" ? "bubble.left.and.bubble.right":"figure.run").font(.system(size:20));Text(board).font(W.font(12,.medium))}.frame(maxWidth:.infinity,minHeight:78,alignment:.leading).padding(.horizontal,14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityBoardShortcut-\(board)")}}
+                    HStack{Text("새로 올라온 이야기").font(W.font(15,.semibold));Spacer();Button("전체 게시판 보기"){go("C27")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityBrowseAllBoards")}.padding(.top,14)
+                    ForEach(communityPublicVisiblePosts){post in communityPostCard(post)}
+                }.frame(maxWidth:.infinity,alignment:.leading).padding(24).padding(.bottom,WCommunityBottomTab.barHeight+24)
+            }
+            .coordinateSpace(name:"community-boards-scroll")
+            .wObserveCommunityScrollOffset(handleCommunityScrollOffset)
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("communityBoardsScroll")
+        }.background(W.paper)
     }
     var communityAllBoards:some View {WPage(title:"전체 게시판",back:back){ForEach(WCommunityFixtures.boards,id:\.self){board in WRow(title:board,action:{ui.communityBoard=board;go("C03")},height:58,arrow:true).accessibilityIdentifier("communityBoard-\(board)")}}actions:{}}
     var communityBoardPosts:some View {let posts=communityVisiblePosts.filter{$0.board==ui.communityBoard};return WPage(title:ui.communityBoard,back:back){Text("\(posts.count)개 이야기").font(W.font(12)).foregroundStyle(W.muted);ForEach(posts){post in communityPostCard(post)}}actions:{Button("글쓰기"){beginCommunityCompose(board:ui.communityBoard)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityBoardCompose")}}
