@@ -1,23 +1,35 @@
 # F003 community header evidence
 
-## Header and route captures
+## Baseline and cause
 
-`C01-light-header.png` and `C01-dark-header.png` were exported from the focused iPhone 17 Pro UI run on simulator `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`. They show the C01 header with the all-boards action at left, the Mov mark centered, search at right, and no feed title or settings gear. The same run passed the dedicated-tab navigation test, which checked the safe-area position, header action separation, all-boards and search routes, C08 profile settings, C06 liked posts, and the central H00 home tab.
+The iPhone 17 Pro simulator (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`) initially had `com.movtorun.mov` version `1.0` (build `1`). The bundle does not embed a Git SHA, so its version alone cannot identify the source revision. The source used for this review is the verified current `main`: commit `876a2debc72136b0aa897428f9ecde6e0cb4d383`, tree `46fa6fb1300e57d87869d069b15c93397c710e3e`. The earlier supplied `db35b93260fa1c769c5a1ce4c28a8a10aa5e8a64` resolves to tree `20043ea3b8bb7f74f3b1b6c7f9f9fb58f42e41d4` and is not the current `main` tree.
 
-The first focused batch passed 4 of 5 UI tests:
+At that `main` revision, C01 used the generic root `WHeader` with the title “커뮤니티” and a search-plus-settings trailing group. The Review 55 C01 wireframe instead shows the all-boards grid at left, Mov centered, and search at right; community settings belong inside the own-profile screen. That mismatch accounts for the title/icon crowding and the misplaced settings action.
 
-- Passed: `testCommunityDedicatedNavigationKeepsHomeCenteredAndSettingsOnProfile`
-- Passed: `testCommunityPrimaryTabsDarkAndShortScreensKeepHeaderAndBottomBar`
-- Passed: `testCommunityBoardRouteAndLocalPostPreviewPublish`
-- Passed: `testCommunitySettingsLikedPostsRespectLikesAndBlockedMembers`
-- Failed: `testCommunityNotificationProfileEntryRoutesAndBackContext`
+The dedicated five-item community bar and feed scroll hide/restore behavior were already present in PRs #65 and #66 at the verified `main` revision. The focused final run confirms those behaviors on the selected simulator. Because the installed app bundle has no source SHA, this review cannot prove whether an earlier `1.0` (build `1`) install contained those commits.
 
-The notification test reached C01 from C24 but did not return to C24 after tapping the notification-context back control. The captured accessibility frame for the custom chevron was only its thin stroke. The header now gives that control a 44×44 hit shape and uses one leading button for the two route contexts.
+## Change
 
-After that change, focused retests failed before reaching C01 because the candidate app process terminated with `SIGSEGV` while SwiftUI copied a `StrokeShapeView` during `WireframeRoot.rootLayers` construction. The latest candidate build compiled, but the revised back action was not verified. The same iPhone 17 Pro simulator was updated to the previously verified PR66 build afterward; it was not reset, cloned, or deleted.
+The C01 feed header now follows the existing C01 wireframe: a 44×44 all-boards action at left, the centered Mov mark, and search at right. When the feed is opened from C24 notifications, the left action becomes a 44×44 back control that returns to C24. The header keeps the existing safe-area canvas and divider. The view is a small standalone component to keep the root community view composition stable.
 
-## Screens and prior scroll baseline
+## Final simulator verification
 
-The C02, C08, C15, C28, C06, and H00 captures are from the same successful focused UI run. They document boards, own profile, crew, settings, liked posts, and the central home route.
+`xcodebuild test` passed 6 of 6 selected UI tests on iPhone 17 Pro, iOS 26.3.1, using the existing simulator only. The run used a unique `-wire-test-store-suite` fixture and did not reset the simulator or re-enter the previous Korean IME test text.
 
-`PR66-community-bar-hidden.png` and `PR66-community-bar-restored.png` are carried forward from the independent PR66 verification on the same simulator and UDID. They are reference evidence for the existing down-scroll hide and up-scroll restore behavior; F003 does not change the scroll or floating-action implementation.
+- `testCommunityDedicatedNavigationKeepsHomeCenteredAndSettingsOnProfile`: repeated transitions among feed, boards, crew, profile, likes in profile settings, and the central Mov home; C01 all-boards and search routes; no feed title/gear; safe-area and control hit targets.
+- `testCommunityBottomBarHidesOnDownScrollAndFloatsMoveWithIt`: hides on downward scroll, restores on upward scroll, and keeps both floating actions aligned with the bar.
+- `testCommunityPrimaryTabsDarkAndShortScreensKeepHeaderAndBottomBar`: dark appearance, all four community destinations, and short-screen layouts.
+- `testCommunityCanvasFillsTopAndBottomSafeAreasInLightAndDark`: light and dark top/bottom safe-area fill.
+- `testCommunityNotificationProfileEntryRoutesAndBackContext`: returns from the feed to the notification list at C24.
+- `testCommunitySettingsLikedPostsRespectLikesAndBlockedMembers`: liked posts and block controls remain within C28 profile settings.
+
+The full result bundle is `/tmp/MovToRun-F003-Final.xcresult`. Its attachments were exported into `/tmp/MovToRun-F003-Attachments`; the PNGs in this directory are from that final run. The older `PR66-community-bar-*` images remain only as historical reference captures.
+
+## Captures
+
+- `C01-light-header.png`, `C01-dark-header.png`: feed header and dedicated community tabs.
+- `C01-light-safe-area.png`, `C01-dark-safe-area.png`: safe-area canvas in both appearances.
+- `C01-bottom-bar-hidden-light.png`, `C01-bottom-bar-restored-light.png`: current down-scroll and up-scroll behavior.
+- `C02-light-boards.png`, `C15-light-crew.png`, `C08-light-profile.png`: primary community destinations.
+- `C28-light-settings.png`, `C06-light-liked-posts.png`: profile settings and its liked-posts destination.
+- `H00-central-home.png`: center Mov tab returns to the home screen.
