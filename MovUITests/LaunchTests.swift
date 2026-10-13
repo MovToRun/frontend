@@ -881,6 +881,14 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
+    private func openCommunitySettingsFromProfile() {
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["community-tab-profile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["communityOwnProfileSettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),app.debugDescription)
+    }
+
     func launchCommunityNotifications(screen:String="C01",scenario:String){
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-notifications-\(UUID().uuidString)","-wire-reset","-appearance","light",scenario]
         app.launch()
@@ -1651,7 +1659,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         app.buttons["communityDetailLike"].tap()
         app.buttons["뒤로"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["communityVerificationRow"].exists,"Settings keeps the existing account verification entry")
         app.buttons["communityLikedPostsRow"].tap()
@@ -1665,7 +1673,7 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityLikedPostsRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from liked posts")
@@ -1683,7 +1691,7 @@ import UIKit
         app.buttons["communityHot-p1"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         app.buttons["뒤로"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
         app.buttons["communityActivityRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
@@ -1698,7 +1706,7 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityActivityRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from recent activity")
@@ -1987,7 +1995,7 @@ import UIKit
         app.buttons["communityModerationConfirm"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Blocking a post author hides that author's post in the feed")
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
         app.buttons["communityBlockedUsersRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C42"].waitForExistence(timeout:5))
@@ -2037,9 +2045,9 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        XCTAssertTrue(app.buttons["communitySettings"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
         XCTAssertFalse(app.buttons["communityHot-p1"].exists)
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityBlockedUsersRow"].tap()
         XCTAssertTrue(app.staticTexts["차단한 사용자"].firstMatch.waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["익명으로 차단한 사용자예요"].exists)
@@ -2226,14 +2234,31 @@ import UIKit
         XCTAssertEqual(home.label,"홈")
         XCTAssertEqual(home.frame.midX,app.frame.midX,accuracy:2,"Mov home stays in the center slot")
 
-        let headerMarks=app.images.matching(identifier:"rootHeaderBrandMark").allElementsBoundByIndex
-        let mark=headerMarks.first{$0.frame.minX>=0 && $0.frame.minY>=50 && $0.frame.maxX<=app.frame.maxX}
+        let allBoards=app.buttons["communityAllBoards"]
+        let mark=app.images["communityHeaderBrandMark"]
         let search=app.buttons["communitySearch"]
         let settings=app.buttons["communitySettings"]
-        XCTAssertNotNil(mark,app.debugDescription)
+        XCTAssertTrue(allBoards.isHittable,app.debugDescription)
+        XCTAssertTrue(mark.exists,app.debugDescription)
         XCTAssertGreaterThanOrEqual(search.frame.minY,50,"The header starts below the iPhone safe area")
-        if let mark {XCTAssertFalse(mark.frame.intersects(search.frame),"The header mark and search icon do not overlap")}
-        XCTAssertFalse(search.frame.intersects(settings.frame),"Header actions have separate hit targets")
+        XCTAssertEqual(mark.frame.midX,app.frame.midX,accuracy:2,"The Mov mark stays centered in the feed header")
+        XCTAssertLessThan(allBoards.frame.maxX,mark.frame.minX,"The all-boards action stays left of the centered mark")
+        XCTAssertLessThan(mark.frame.maxX,search.frame.minX,"The search action stays right of the centered mark")
+        XCTAssertFalse(allBoards.frame.intersects(search.frame),"Header actions have separate hit targets")
+        XCTAssertFalse(settings.exists,"Community settings stay on the own-profile route")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label == %@","커뮤니티")).firstMatch.exists,"The C01 header omits the Community title")
+        capture("community-C01-light-header")
+
+        allBoards.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable,"All boards has a working back route")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
+        search.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.textFields["communitySearchField"].exists)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
 
         for (tab,screen) in [(boards,"C02"),(feed,"C01"),(crew,"C15"),(feed,"C01"),(profile,"C08"),(feed,"C01")] {
             XCTAssertTrue(tab.isHittable,app.debugDescription)
@@ -2305,11 +2330,15 @@ import UIKit
             XCTAssertTrue(app.buttons[selected].isHittable)
         }
 
-        XCTAssertTrue(app.staticTexts["커뮤니티"].exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label == %@","커뮤니티")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["communityAllBoards"].isHittable)
         XCTAssertTrue(app.buttons["communitySearch"].isHittable)
-        XCTAssertTrue(app.buttons["communitySettings"].isHittable)
+        XCTAssertFalse(app.buttons["communitySettings"].exists)
+        let headerMark=app.images["communityHeaderBrandMark"]
+        XCTAssertTrue(headerMark.exists,app.debugDescription)
+        XCTAssertEqual(headerMark.frame.midX,app.frame.midX,accuracy:2,"The dark feed keeps the Mov mark centered")
         assertCommunityBar("community-tab-feed")
-        capture("community-dark-C01-feed")
+        capture("community-dark-C01-feed-header")
 
         app.buttons["community-tab-boards"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))

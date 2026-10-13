@@ -1355,15 +1355,22 @@ extension WireframeRoot {
         VStack(spacing:0){communityFeedHeader;communityFeedScroll}.background(W.paper)
     }
     var communityFeedHeader:some View {
-        let actions=AnyView(communityFeedHeaderActions)
-        if ui.path.last=="C24" { return WHeader(title:"커뮤니티",back:back,backIdentifier:"communityNotificationBackFromFeed",root:true,showRootMark:false,trailing:actions) }
-        return WHeader(title:"커뮤니티",root:true,showRootMark:true,trailing:actions)
-    }
-    var communityFeedHeaderActions:some View {
         HStack(spacing:0){
-            Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
-            Button{go("C28")}label:{Image(systemName:"gearshape").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 설정").accessibilityIdentifier("communitySettings")
+            Button{ui.path.last=="C24" ? back():go("C27")}label:{
+                Image(systemName:ui.path.last=="C24" ? "chevron.left":"square.grid.2x2")
+                    .font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel(ui.path.last=="C24" ? "뒤로":"전체 게시판")
+                .accessibilityIdentifier(ui.path.last=="C24" ? "communityNotificationBackFromFeed":"communityAllBoards")
+            Spacer(minLength:0)
+            BrandMark(size:28).frame(width:44,height:44).accessibilityIdentifier("communityHeaderBrandMark")
+            Spacer(minLength:0)
+            Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}
+                .buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
         }
+        .padding(.horizontal,16).frame(height:64)
+        .background(W.paper.ignoresSafeArea(edges:.top))
+        .overlay(alignment:.bottom){W.line.frame(height:1)}
     }
     var communityFeedScroll:some View {
         ScrollViewReader{proxy in
