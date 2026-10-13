@@ -2815,9 +2815,11 @@ struct WireframeRoot:View {
             }
     }
     var rootStyledLayers:some View {
-        rootLayers.background(W.paper).foregroundStyle(W.ink).tint(W.ink)
+        rootLayers.foregroundStyle(W.ink).tint(W.ink)
             .preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme)
             .clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
+            // Keep the theme-aware canvas outside the route clip; only the content is clipped.
+            .background { W.paper.ignoresSafeArea(.container,edges:.all) }
     }
     var rootLayers:some View {
         ZStack {

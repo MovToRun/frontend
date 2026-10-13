@@ -21,6 +21,14 @@ import UIKit
         let visible=app.scrollViews.allElementsBoundByIndex.first{$0.isHittable && $0.frame.minX>=0}
         visible?.swipeUp()
     }
+    private func pasteText(_ value:String,into element:XCUIElement){
+        UIPasteboard.general.string=value
+        element.tap()
+        element.press(forDuration:0.8)
+        let paste=app.descendants(matching:.any).matching(NSPredicate(format:"label == %@ OR label == %@","붙여넣기","Paste")).firstMatch
+        XCTAssertTrue(paste.waitForExistence(timeout:5),app.debugDescription)
+        paste.tap()
+    }
     private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{scrollCurrentScreen()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
@@ -168,6 +176,23 @@ import UIKit
         return pixels.withUnsafeBufferPointer{bytes in
             stride(from:0,to:bytes.count,by:4).contains{index in bytes[index]<80 && bytes[index+1]<90 && bytes[index+2]<80 && bytes[index+3]>200}
         }
+    }
+    func matchesRGB(in image:UIImage,rect:CGRect,expected:(Int,Int,Int),tolerance:Int=20)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        let totals=pixels.withUnsafeBufferPointer{bytes in
+            stride(from:0,to:bytes.count,by:4).reduce((0,0,0,0)){sum,index in (sum.0+Int(bytes[index]),sum.1+Int(bytes[index+1]),sum.2+Int(bytes[index+2]),sum.3+1)}
+        }
+        guard totals.3>0 else{return false}
+        return abs(totals.0/totals.3-expected.0)<=tolerance && abs(totals.1/totals.3-expected.1)<=tolerance && abs(totals.2/totals.3-expected.2)<=tolerance
     }
     func containsDarkVariantFacetPixel(in image:UIImage, rect:CGRect)->Bool {
         guard let source=image.cgImage else{return false}
@@ -1832,6 +1857,123 @@ import UIKit
         let registeredComment=app.staticTexts.matching(NSPredicate(format:"label == %@",String(repeating:"x",count:300))).firstMatch
         XCTAssertTrue(registeredComment.waitForExistence(timeout:5),"The overlong entry is locally capped at 300 characters")
         XCTAssertTrue(app.staticTexts["댓글 2"].exists)
+    }
+
+    func testCommunityCommentComposerWrapsThreeHundredUnbrokenCharactersAndClearsAfterSend() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+
+        let input=app.textFields["communityCommentInput"]
+        let submit=app.buttons["communityCommentSubmit"]
+        XCTAssertTrue(input.waitForExistence(timeout:5),app.debugDescription)
+        let initialFrame=input.frame
+        let prefix=String(repeating:"한",count:299)
+        pasteText(prefix,into:input)
+
+        let keyboard=app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(waitForLayout({input.frame.height>initialFrame.height},timeout:5),app.debugDescription)
+        let eightLineHeightBudget=8*UIFont.systemFont(ofSize:14).lineHeight+40
+        XCTAssertLessThanOrEqual(input.frame.height,eightLineHeightBudget,"The composer caps its visible height at eight lines and scrolls within the field")
+        input.typeText("끝")
+        let text=prefix+"끝"
+        XCTAssertEqual(input.value as? String,text,"Display wrapping must not insert newlines into the comment value")
+        XCTAssertLessThanOrEqual(input.frame.maxX,app.frame.maxX-12,"The field stays within the available width")
+        XCTAssertTrue(waitHittable(submit,timeout:5),app.debugDescription)
+        XCTAssertLessThan(submit.frame.maxY,keyboard.frame.minY,"The send button remains above the open keyboard")
+        capture("community-comment-300-unbroken-keyboard")
+
+        submit.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",text)).firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(waitForLayout({
+            let value=input.value as? String ?? ""
+            return value.isEmpty || value=="댓글을 남겨 보세요"
+        },timeout:5),app.debugDescription)
+    }
+
+    func testCommunityCanvasFillsTopAndBottomSafeAreasInLightAndDark() {
+        for (appearance,expected) in [("light",(255,255,255)),("dark",(25,25,25))] {
+            if app.state != .notRunning { app.terminate() }
+            launchCommunity("C01",appearance:appearance)
+            let screenshot=app.screenshot().image
+            let topSafeArea=CGRect(x:8,y:8,width:12,height:12)
+            let bottomSafeArea=CGRect(x:8,y:screenshot.size.height-20,width:12,height:12)
+            XCTAssertTrue(matchesRGB(in:screenshot,rect:topSafeArea,expected:expected),"The \(appearance) canvas color reaches the status-bar safe area")
+            XCTAssertTrue(matchesRGB(in:screenshot,rect:bottomSafeArea,expected:expected),"The \(appearance) canvas color reaches the home-indicator safe area")
+            capture("community-safe-area-\(appearance)")
+        }
+    }
+
+    func testCommunityCommentComposerPreservesMultilinePasteAndLongURL() {
+        launchCommunity("C01")
+        app.buttons["communityHot-p1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+
+        let input=app.textFields["communityCommentInput"]
+        let submit=app.buttons["communityCommentSubmit"]
+        XCTAssertTrue(input.waitForExistence(timeout:5),app.debugDescription)
+        let initialFrame=input.frame
+        let longEnglish=String(repeating:"Runner",count:22)
+        let longURL="https://example.com/"+String(repeating:"path/",count:14)
+        let pastedText="첫 줄\n\(longEnglish)\n\(longURL)\n마지막 줄"
+        XCTAssertLessThanOrEqual(pastedText.count,300)
+        pasteText(pastedText,into:input)
+
+        let keyboard=app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(waitForLayout({input.frame.height>initialFrame.height},timeout:5),app.debugDescription)
+        XCTAssertEqual(input.value as? String,pastedText,"Only the pasted line breaks belong in the stored value")
+        XCTAssertLessThanOrEqual(input.frame.maxX,app.frame.maxX-12)
+        XCTAssertTrue(waitHittable(submit,timeout:5),app.debugDescription)
+        XCTAssertLessThan(submit.frame.maxY,keyboard.frame.minY)
+        capture("community-comment-multiline-url-paste")
+
+        submit.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",pastedText)).firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(waitForLayout({
+            let value=input.value as? String ?? ""
+            return value.isEmpty || value=="댓글을 남겨 보세요"
+        },timeout:5),app.debugDescription)
+    }
+
+    func testCommunityCrewReplyComposerKeepsTargetWhileGrowingAndResetsAfterSend() {
+        launchCommunity("C19",viewerID:"fixture-member-ga-on",crewID:"river",crewBoardID:"river-board-2")
+        let post=app.buttons["communityCrewPost-river-run-1"]
+        XCTAssertTrue(post.waitForExistence(timeout:5),app.debugDescription)
+        post.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["communityDetailCrewContext"].exists)
+        app.buttons["communityReply-river-comment-1"].tap()
+
+        let target=app.staticTexts["communityReplyComposerTarget"]
+        XCTAssertTrue(target.waitForExistence(timeout:3),app.debugDescription)
+        XCTAssertTrue(target.label.contains("노을러너에게 답글"),target.label)
+        let input=app.textFields["communityCommentInput"]
+        XCTAssertTrue(input.waitForExistence(timeout:5),app.debugDescription)
+        let initialFrame=input.frame
+        let text=Array(repeating:"crew reply",count:20).joined(separator:" ")
+        input.tap()
+        input.typeText(text)
+        XCTAssertTrue(waitForLayout({input.frame.height>initialFrame.height},timeout:5),app.debugDescription)
+        XCTAssertEqual(input.value as? String,text)
+        XCTAssertTrue(target.exists,"Growing the input keeps the reply target visible")
+
+        let submit=app.buttons["communityCommentSubmit"]
+        let keyboard=app.keyboards.firstMatch
+        XCTAssertEqual(submit.label,"답글 등록")
+        XCTAssertTrue(keyboard.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(waitHittable(submit,timeout:5),app.debugDescription)
+        XCTAssertLessThan(submit.frame.maxY,keyboard.frame.minY)
+        capture("crew-reply-long-input-keyboard")
+
+        submit.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",text)).firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(waitForLayout({!target.exists},timeout:5),app.debugDescription)
+        XCTAssertTrue(waitForLayout({
+            let value=input.value as? String ?? ""
+            return value.isEmpty || value=="댓글을 남겨 보세요"
+        },timeout:5),app.debugDescription)
     }
 
     func testCommunityPostBlockHidesContentAndSettingsCanUnblock() {
