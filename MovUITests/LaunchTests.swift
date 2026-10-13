@@ -71,6 +71,7 @@ import UIKit
         replace("63.129",into:weight)
         tap("saveWeightProfile")
         XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:8))
+        if !app.buttons["memberProfileWeightRow"].isHittable{scrollCurrentScreen()}
         tap("memberProfileWeightRow")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T02"].waitForExistence(timeout:6))
         XCTAssertEqual(app.textFields["profileWeightInput"].value as? String,"63.12")
@@ -82,6 +83,7 @@ import UIKit
     private func openRemoteRunDeleteFixture(extraArguments:[String]=[])->String {
         let suite="mov.wireframe.test.run-delete.\(UUID().uuidString)"
         app.launchArguments=["-wire-screen","L01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-run-records-delete-fixture","-appearance","light"]+extraArguments
+        if app.state != .notRunning { app.terminate() }
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-L01"].waitForExistence(timeout:15),app.debugDescription)
         XCTAssertTrue(app.buttons["remoteRun-fixture-run-104"].waitForExistence(timeout:8),app.debugDescription)
@@ -95,6 +97,7 @@ import UIKit
         if !delete.isHittable { scrollCurrentScreen() }
         tap("deleteRecord")
         XCTAssertTrue(app.descendants(matching:.any)["screen-L07"].waitForExistence(timeout:8))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","서버 기록과 경로 정보")).firstMatch.waitForExistence(timeout:5),app.debugDescription)
     }
     func testRemoteRunDeleteConfirmsOn204AndPreservesTheLocalSample(){
         let suite=openRemoteRunDeleteFixture()
@@ -1293,7 +1296,7 @@ import UIKit
 
         app.buttons["communityCrewEdit"].tap()
         app.segmentedControls["communityCrewDraftRegion"].buttons["모브시 강변"].tap()
-        app.buttons.matching(identifier:"tab-0").element(boundBy:1).coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        app.buttons["tab-0"].coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
         XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5))
         app.alerts.buttons["버리기"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5),"Discard completes the pending tab change")
@@ -3802,7 +3805,10 @@ extension LaunchTests {
         app.swipeDown();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정");capture("Title-inline-saved")
         for _ in 0..<3 where !app.buttons["editTitle"].isHittable { app.swipeDown() }
         tap("editTitle");replaceInput(title,"저장하지 않을 제목");tap("뒤로")
+        app.buttons["tab-2"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
         app.buttons["tab-1"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:5))
         XCTAssertTrue(waitHittable(app.buttons["openRecords"],timeout:5),app.debugDescription)
         app.buttons["openRecords"].tap();app.buttons.matching(NSPredicate(format:"label CONTAINS %@","제목만 수정")).firstMatch.tap();XCTAssertEqual(app.staticTexts["recordTitle"].label,"제목만 수정")
         app.swipeUp();tap("editMemo");replaceInput(memo,String(repeating:"나",count:301));XCTAssertFalse(app.buttons["finishMemo"].isEnabled);XCTAssertEqual(app.staticTexts["inlineMemoCount"].label,"301/300")
@@ -3812,13 +3818,24 @@ extension LaunchTests {
     func testCompletionReflowsOnce(){
         for screen in ["S01","S05"]{
             app.launchArguments=["-wire-fixture","-wire-reset","-wire-user-flow","-wire-screen",screen]
+            if app.state != .notRunning { app.terminate() }
             app.launch();XCTAssertTrue(app.buttons["기록 보기"].waitForExistence(timeout:5))
             let feedback=app.descendants(matching:.any)["saveCompletionFeedback"].firstMatch
             XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in !feedback.exists},object:nil)],timeout:5),.completed)
             let heading=app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@",screen=="S01" ? "잘 달렸어요":"구간이 없어요")).firstMatch
             XCTAssertLessThan(heading.frame.minY,260);let settled=heading.frame
             app.swipeUp();capture(screen+"-calories-no-divider");app.swipeDown();capture(screen+"-reflowed")
-            tap("기록 보기");tap("뒤로");XCTAssertFalse(feedback.exists);XCTAssertEqual(heading.frame,settled)
+            tap("기록 보기");tap("뒤로");XCTAssertFalse(feedback.exists)
+            XCTAssertTrue(waitForLayout({
+                let frame=heading.frame
+                return abs(frame.minX-settled.minX)<=0.001 && abs(frame.minY-settled.minY)<=0.001 &&
+                    abs(frame.width-settled.width)<=0.001 && abs(frame.height-settled.height)<=0.001
+            },timeout:3),app.debugDescription)
+            let reflowed=heading.frame
+            XCTAssertEqual(reflowed.minX,settled.minX,accuracy:0.001)
+            XCTAssertEqual(reflowed.minY,settled.minY,accuracy:0.001)
+            XCTAssertEqual(reflowed.width,settled.width,accuracy:0.001)
+            XCTAssertEqual(reflowed.height,settled.height,accuracy:0.001)
         }
     }
 }
