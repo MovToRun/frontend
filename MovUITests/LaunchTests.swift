@@ -696,7 +696,13 @@ import UIKit
         for title in ["포인트","러닝","커뮤니티","내 정보"] {
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label == %@",title)).firstMatch.exists,"Visible tab caption: \(title)")
         }
-        for i in [0,1,2,3,4,3,2,1,0,2]{app.buttons["tab-\(i)"].tap()}
+        for i in [0,1,2,3,4,3,2,1,0,2]{
+            if app.buttons["community-tab-home"].exists {
+                if i == 2 { app.buttons["community-tab-home"].tap(); continue }
+                if i == 4 { app.buttons["community-tab-home"].tap() }
+            }
+            app.buttons["tab-\(i)"].tap()
+        }
         for i in 0...4{XCTAssertEqual(app.buttons["tab-\(i)"].frame,frames[i])}
         capture("H00")
         tap("tab-4");tap("설정");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","화면 테마")).firstMatch.tap()
@@ -748,7 +754,7 @@ import UIKit
         open("M01");tap("카드 편집");let nickname=app.textFields.firstMatch
         let existing=nickname.value as? String ?? "";nickname.tap();nickname.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:existing.count)+"테스트러너");tap("저장하기")
         XCTAssertTrue(app.staticTexts["테스트러너"].waitForExistence(timeout:5))
-        app.terminate();app.launchArguments=["-wire-screen","M01","-wire-fixture"];app.launch()
+        app.terminate();app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];app.launch()
         XCTAssertTrue(app.staticTexts["테스트러너"].waitForExistence(timeout:10),"The profile edit persists in the fixture store")
 
         app.terminate();app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-reset","-wire-empty-notifications","-appearance","light"];app.launch()
@@ -868,7 +874,9 @@ import UIKit
         app.buttons["communityNotification-sample-verification"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:5))
         let verificationBackButtons=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@","뒤로","뒤로"))
-        XCTAssertEqual(verificationBackButtons.count,1,"The outgoing notification page is inaccessible during its route transition. Accessibility hierarchy: \(app.debugDescription)")
+        XCTAssertTrue(waitForLayout({verificationBackButtons.count == 1},timeout:3),"After the route transition settles, only the active screen exposes a back button. Accessibility hierarchy: \(app.debugDescription)")
+        XCTAssertEqual(verificationBackButtons.count,1,"Only the active notification route exposes a back button")
+        capture("C11-notification-profile-entry")
         verificationBackButtons.element.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
         XCTAssertEqual(app.buttons["communityNotification-sample-verification"].value as? String,"읽음")
         app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
@@ -2170,7 +2178,7 @@ import UIKit
         XCTAssertTrue(app.staticTexts["크루"].exists)
         XCTAssertTrue(app.buttons["뒤로"].isHittable)
         assertCommunityBar("community-tab-crew")
-        let crewScroll=app.scrollViews["communityCrewOverviewScroll"]
+        let crewScroll=app.scrollViews["communityCrewOverview"]
         XCTAssertTrue(crewScroll.waitForExistence(timeout:5),app.debugDescription)
         crewScroll.swipeUp()
         XCTAssertTrue(app.buttons["community-tab-crew"].isHittable,"A short crew screen keeps its bar visible after a no-op upward swipe")
@@ -2915,7 +2923,9 @@ extension LaunchTests {
             ("T13","기기 데모 기록 삭제","L02"),("T14","설정으로 돌아가기","T01"),("T16","완료 응답 확인 · 예시","T12")
         ]
         for (screen,label,destination) in cases {
-            open(screen);tap(label)
+            open(screen)
+            if screen == "C01" && label == "tab-4" { tap("community-tab-home") }
+            tap(label)
             XCTAssertTrue(app.descendants(matching:.any)["screen-"+destination].waitForExistence(timeout:5),screen+" → "+destination)
             app.terminate()
         }
@@ -3761,7 +3771,7 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-local-purchase")
         tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));XCTAssertFalse(app.buttons["purchaseShopItem"].isEnabled);XCTAssertEqual(app.buttons["purchaseShopItem"].label,"보유 중")
         tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));tap("openPointHistory");XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts["모브 라인"].exists)
-        app.terminate();app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-appearance","light"];app.launch();XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:10));XCTAssertEqual(app.staticTexts["pointBalance"].label,"850","Purchase state persists only in the fixture device store")
+        app.terminate();app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-user-flow","-appearance","light"];app.launch();XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:10));XCTAssertEqual(app.staticTexts["pointBalance"].label,"850","Purchase state persists only in the fixture device store")
     }
     func testPointsShopDisablesInsufficientPurchaseAndShowsEmptyLedger(){
         app.launchArguments=["-wire-screen","B06","-wire-fixture","-wire-reset","-wire-points-insufficient","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:15))

@@ -1647,7 +1647,7 @@ extension WireframeRoot {
     }
 
     var communityCrewOverview:some View {
-        WPage(title:"크루",back:back,onCommunityScrollOffset:handleCommunityScrollOffset,scrollAccessibilityID:"communityCrewOverviewScroll"){communityCrewOverviewContent}actions:{}
+        WPage(title:"크루",back:back,onCommunityScrollOffset:handleCommunityScrollOffset){communityCrewOverviewContent}actions:{}
             .accessibilityIdentifier("communityCrewOverview")
     }
     var communityCrewOverviewContent:some View {

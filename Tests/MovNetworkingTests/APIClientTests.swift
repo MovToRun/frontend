@@ -68,6 +68,9 @@ private actor SequencedMemberProfileFetcher: MemberProfileFetching {
 }
 
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let defaultScope = "default"
+    static let scopeHeader = "X-MovToRun-Mock-URLProtocol-Scope"
+
     private enum Outcome: Sendable {
         case response(Int, Data, [String: String])
         case failure(URLError.Code)
@@ -77,86 +80,100 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     private final class Store: @unchecked Sendable {
         static let shared = Store()
         private let lock = NSLock()
-        private var outcomes: [Outcome] = []
-        private var requests: [URLRequest] = []
-        private var pendingProtocols: [MockURLProtocol] = []
+        private struct PendingRequest {
+            let scope: String
+            let protocolInstance: MockURLProtocol
+        }
+        private var outcomesByScope: [String: [Outcome]] = [:]
+        private var requestsByScope: [String: [URLRequest]] = [:]
+        private var pendingProtocols: [PendingRequest] = []
 
-        func configure(_ outcomes: [Outcome]) {
+        func configure(_ outcomes: [Outcome], in scope: String) {
             lock.lock(); defer { lock.unlock() }
-            self.outcomes = outcomes
-            requests = []
+            outcomesByScope[scope] = outcomes
+            requestsByScope[scope] = []
         }
 
         func take(for request: URLRequest) -> Outcome {
+            let scope = MockURLProtocol.scope(for: request)
             lock.lock(); defer { lock.unlock() }
-            requests.append(request)
-            guard !outcomes.isEmpty else { return .failure(.unknown) }
-            return outcomes.removeFirst()
+            requestsByScope[scope, default: []].append(request)
+            guard var outcomes = outcomesByScope[scope], !outcomes.isEmpty else { return .failure(.unknown) }
+            let outcome = outcomes.removeFirst()
+            outcomesByScope[scope] = outcomes
+            return outcome
         }
 
-        func recordedRequests() -> [URLRequest] {
+        func recordedRequests(in scope: String) -> [URLRequest] {
             lock.lock(); defer { lock.unlock() }
-            return requests
+            return requestsByScope[scope, default: []]
         }
 
-        func addPending(_ protocolInstance: MockURLProtocol) {
+        func addPending(_ protocolInstance: MockURLProtocol, in scope: String) {
             lock.lock(); defer { lock.unlock() }
-            pendingProtocols.append(protocolInstance)
+            pendingProtocols.append(PendingRequest(scope: scope, protocolInstance: protocolInstance))
         }
 
         func removePending(_ protocolInstance: MockURLProtocol) {
             lock.lock(); defer { lock.unlock() }
-            pendingProtocols.removeAll { $0 === protocolInstance }
+            pendingProtocols.removeAll { $0.protocolInstance === protocolInstance }
         }
 
-        func takePending() -> MockURLProtocol? {
+        func takePending(in scope: String) -> MockURLProtocol? {
             lock.lock(); defer { lock.unlock() }
-            guard !pendingProtocols.isEmpty else { return nil }
-            return pendingProtocols.removeFirst()
+            guard let index = pendingProtocols.firstIndex(where: { $0.scope == scope }) else { return nil }
+            return pendingProtocols.remove(at: index).protocolInstance
         }
 
-        func pendingCount() -> Int {
+        func pendingCount(in scope: String) -> Int {
             lock.lock(); defer { lock.unlock() }
-            return pendingProtocols.count
+            return pendingProtocols.filter { $0.scope == scope }.count
         }
     }
 
-    static func respond(statusCode: Int, data: Data = Data(), headers: [String: String] = [:]) {
-        Store.shared.configure([.response(statusCode, data, headers)])
+    private static func scope(for request: URLRequest) -> String {
+        request.value(forHTTPHeaderField: scopeHeader) ?? defaultScope
     }
-    static func respondSequence(_ responses: [(Int, Data)]) {
-        Store.shared.configure(responses.map { .response($0.0, $0.1, [:]) })
+
+    static func respond(statusCode: Int, data: Data = Data(), headers: [String: String] = [:], in scope: String = defaultScope) {
+        Store.shared.configure([.response(statusCode, data, headers)], in: scope)
     }
-    static func holdFirstThenRespondSequence(_ responses: [(Int, Data)]) {
-        Store.shared.configure([.pending] + responses.map { .response($0.0, $0.1, [:]) })
+    static func respondSequence(_ responses: [(Int, Data)], in scope: String = defaultScope) {
+        Store.shared.configure(responses.map { .response($0.0, $0.1, [:]) }, in: scope)
     }
-    static func suspendNext() { Store.shared.configure([.pending]) }
+    static func holdFirstThenRespondSequence(_ responses: [(Int, Data)], in scope: String = defaultScope) {
+        Store.shared.configure([.pending] + responses.map { .response($0.0, $0.1, [:]) }, in: scope)
+    }
+    static func suspendNext(in scope: String = defaultScope) { Store.shared.configure([.pending], in: scope) }
     @discardableResult
-    static func resumeNextPending(statusCode: Int, data: Data = Data(), headers: [String: String] = [:]) -> Bool {
-        guard let protocolInstance = Store.shared.takePending() else { return false }
+    static func resumeNextPending(statusCode: Int, data: Data = Data(), headers: [String: String] = [:], in scope: String = defaultScope) -> Bool {
+        guard let protocolInstance = Store.shared.takePending(in: scope) else { return false }
         protocolInstance.deliver(statusCode: statusCode, data: data, headers: headers)
         return true
     }
-    static func fail(with error: URLError.Code) { Store.shared.configure([.failure(error)]) }
-    static func failThenRespond(with error: URLError.Code, statusCode: Int, data: Data) {
-        Store.shared.configure([.failure(error), .response(statusCode, data, [:])])
+    static func fail(with error: URLError.Code, in scope: String = defaultScope) { Store.shared.configure([.failure(error)], in: scope) }
+    static func failThenRespond(with error: URLError.Code, statusCode: Int, data: Data, in scope: String = defaultScope) {
+        Store.shared.configure([.failure(error), .response(statusCode, data, [:])], in: scope)
     }
-    static func cancel() { Store.shared.configure([.failure(.cancelled)]) }
-    static func reset() { Store.shared.configure([]) }
-    static var requests: [URLRequest] { Store.shared.recordedRequests() }
-    static var pendingCount: Int { Store.shared.pendingCount() }
+    static func cancel(in scope: String = defaultScope) { Store.shared.configure([.failure(.cancelled)], in: scope) }
+    static func reset(in scope: String = defaultScope) { Store.shared.configure([], in: scope) }
+    static var requests: [URLRequest] { Store.shared.recordedRequests(in: defaultScope) }
+    static func requests(in scope: String) -> [URLRequest] { Store.shared.recordedRequests(in: scope) }
+    static var pendingCount: Int { Store.shared.pendingCount(in: defaultScope) }
+    static func pendingCount(in scope: String) -> Int { Store.shared.pendingCount(in: scope) }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        let scope = Self.scope(for: request)
         switch Store.shared.take(for: request) {
         case let .response(statusCode, data, headers):
             deliver(statusCode: statusCode, data: data, headers: headers)
         case let .failure(code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
         case .pending:
-            Store.shared.addPending(self)
+            Store.shared.addPending(self, in: scope)
         }
     }
 

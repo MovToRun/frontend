@@ -80,7 +80,6 @@ struct WPage<Content:View,Actions:View>:View {
     var back:(()->Void)?
     var trailing:AnyView=AnyView(EmptyView())
     var onCommunityScrollOffset:((CGFloat)->Void)?=nil
-    var scrollAccessibilityID:String?=nil
     @ViewBuilder var content:Content
     @ViewBuilder var actions:Actions
     var body:some View {
@@ -97,15 +96,8 @@ struct WPage<Content:View,Actions:View>:View {
             .wObserveCommunityScrollOffset{onCommunityScrollOffset?($0)}
             .scrollDismissesKeyboard(.interactively)
             .modifier(WAuthBodyMotion())
-            .modifier(WOptionalAccessibilityIdentifier(identifier:scrollAccessibilityID))
             if Actions.self != EmptyView.self { VStack(spacing:10){actions}.padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)} }
         }.background(W.paper)
-    }
-}
-private struct WOptionalAccessibilityIdentifier:ViewModifier {
-    let identifier:String?
-    @ViewBuilder func body(content:Content)->some View {
-        if let identifier{content.accessibilityIdentifier(identifier)}else{content}
     }
 }
 private struct WCommunityScrollOffsetPreferenceKey:PreferenceKey {
@@ -2775,7 +2767,7 @@ struct WireframeRoot:View {
         let insertion:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .trailing:.leading)
         let removal:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .leading:.trailing)
         let hideOutgoing=AnyTransition.modifier(active:WOutgoingRouteAccessibility(hidden:true),identity:WOutgoingRouteAccessibility(hidden:false))
-        return .asymmetric(insertion:insertion,removal:removal.combined(with:hideOutgoing))
+        return .asymmetric(insertion:insertion,removal:hideOutgoing.combined(with:removal))
     }
     var body:some View {
         rootCommunityManageUpdates.alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
@@ -2840,7 +2832,12 @@ struct WireframeRoot:View {
                     }.frame(width:geo.size.width,height:geo.size.height).clipped()
                 }
                 if !isCommunityPrimaryTabScreen { nav }
-            }.opacity(isRoot && !splash ? 1:0).allowsHitTesting(isRoot && !splash).accessibilityHidden(!isRoot || splash).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
+            }
+            .opacity(isRoot && !splash ? 1:0)
+            .allowsHitTesting(isRoot && !splash)
+            .accessibilityElement(children:.contain)
+            .accessibilityIdentifier("screen-"+ui.screen)
+            .accessibilityHidden(!isRoot || splash)
             if !isRoot && !splash {
                 if ui.screen=="C20" {
                     VStack(spacing:0){
