@@ -1356,7 +1356,7 @@ extension WireframeRoot {
     }
     var communityFeedHeader:some View {
         let actions=AnyView(communityFeedHeaderActions)
-        if ui.path.last=="C24" { return WHeader(title:"커뮤니티",back:back,root:true,showRootMark:false,trailing:actions) }
+        if ui.path.last=="C24" { return WHeader(title:"커뮤니티",back:back,backIdentifier:"communityNotificationBackFromFeed",root:true,showRootMark:false,trailing:actions) }
         return WHeader(title:"커뮤니티",root:true,showRootMark:true,trailing:actions)
     }
     var communityFeedHeaderActions:some View {

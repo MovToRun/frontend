@@ -113,6 +113,9 @@ struct WCommunityScrollOffsetProbe:View {
     }
 }
 extension View {
+    @ViewBuilder func wAccessibilityIdentifier(_ identifier:String?)->some View {
+        if let identifier { accessibilityIdentifier(identifier) } else { self }
+    }
     func wOnCommunityScrollOffset(_ action:@escaping (CGFloat)->Void)->some View {
         onPreferenceChange(WCommunityScrollOffsetPreferenceKey.self,perform:action)
     }
@@ -137,13 +140,14 @@ private struct WOutgoingRouteAccessibility:ViewModifier {
 struct WHeader:View {
     var title:String
     var back:(()->Void)? = nil
+    var backIdentifier:String? = nil
     var root=false
     var showRootMark=true
     var mark=false
     var trailing:AnyView = AnyView(EmptyView())
     var body:some View {
         HStack {
-            if let back { Button(action:back){WBackIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.2,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:44,height:44)}.accessibilityLabel("뒤로") }
+            if let back { Button(action:back){WBackIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.2,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:44,height:44)}.accessibilityLabel("뒤로").wAccessibilityIdentifier(backIdentifier) }
             else if root ? showRootMark : mark {BrandMark(size:root ? 30:28).frame(width:root ? 30:28,height:44).accessibilityIdentifier(root ? "rootHeaderBrandMark":"completionBrandMark")}
             else {Color.clear.frame(width:44,height:44)}
             Spacer();trailing
@@ -2818,26 +2822,28 @@ struct WireframeRoot:View {
     var rootLayers:some View {
         ZStack {
             VStack(spacing:0){
-                GeometryReader { geo in
-                    ZStack {
-                        if ui.screen=="L01" {
-                            recordsRoot
-                        } else {
-                        home.accessibilityElement(children:.contain).offset(x:ui.rootIndex==2 ? 0:ui.rootIndex>2 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==2 || ui.previousRootIndex==2 ? 1:0).accessibilityHidden(ui.rootIndex != 2 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 2 && isRoot && !splash)
-                        ready.accessibilityElement(children:.contain).offset(x:ui.rootIndex==1 ? 0:ui.rootIndex>1 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==1 || ui.previousRootIndex==1 ? 1:0).accessibilityHidden(ui.rootIndex != 1 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 1 && isRoot && !splash)
-                        points.accessibilityElement(children:.contain).offset(x:ui.rootIndex==0 ? 0:ui.rootIndex>0 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==0 || ui.previousRootIndex==0 ? 1:0).accessibilityHidden(ui.rootIndex != 0 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 0 && isRoot && !splash)
-                        community.accessibilityElement(children:.contain).offset(x:ui.rootIndex==3 ? 0:ui.rootIndex>3 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==3 || ui.previousRootIndex==3 ? 1:0).accessibilityHidden(ui.rootIndex != 3 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 3 && isRoot && !splash)
-                        profile.accessibilityElement(children:.contain).offset(x:ui.rootIndex==4 ? 0:ui.rootIndex>4 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==4 || ui.previousRootIndex==4 ? 1:0).accessibilityHidden(ui.rootIndex != 4 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 4 && isRoot && !splash)
+                if isRoot {
+                    GeometryReader { geo in
+                        ZStack {
+                            if ui.screen=="L01" {
+                                recordsRoot
+                            } else {
+                                home.accessibilityElement(children:.contain).offset(x:ui.rootIndex==2 ? 0:ui.rootIndex>2 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==2 || ui.previousRootIndex==2 ? 1:0).accessibilityHidden(ui.rootIndex != 2 || splash).allowsHitTesting(ui.rootIndex == 2 && !splash)
+                                ready.accessibilityElement(children:.contain).offset(x:ui.rootIndex==1 ? 0:ui.rootIndex>1 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==1 || ui.previousRootIndex==1 ? 1:0).accessibilityHidden(ui.rootIndex != 1 || splash).allowsHitTesting(ui.rootIndex == 1 && !splash)
+                                points.accessibilityElement(children:.contain).offset(x:ui.rootIndex==0 ? 0:ui.rootIndex>0 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==0 || ui.previousRootIndex==0 ? 1:0).accessibilityHidden(ui.rootIndex != 0 || splash).allowsHitTesting(ui.rootIndex == 0 && !splash)
+                                community.accessibilityElement(children:.contain).offset(x:ui.rootIndex==3 ? 0:ui.rootIndex>3 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==3 || ui.previousRootIndex==3 ? 1:0).accessibilityHidden(ui.rootIndex != 3 || splash).allowsHitTesting(ui.rootIndex == 3 && !splash)
+                                profile.accessibilityElement(children:.contain).offset(x:ui.rootIndex==4 ? 0:ui.rootIndex>4 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==4 || ui.previousRootIndex==4 ? 1:0).accessibilityHidden(ui.rootIndex != 4 || splash).allowsHitTesting(ui.rootIndex == 4 && !splash)
+                            }
+                        }.frame(width:geo.size.width,height:geo.size.height).clipped()
                         }
-                    }.frame(width:geo.size.width,height:geo.size.height).clipped()
+                    if !isCommunityPrimaryTabScreen { nav }
                 }
-                if !isCommunityPrimaryTabScreen { nav }
             }
-            .opacity(isRoot && !splash ? 1:0)
-            .allowsHitTesting(isRoot && !splash)
+            .opacity(!splash ? 1:0)
+            .allowsHitTesting(!splash)
             .accessibilityElement(children:.contain)
             .accessibilityIdentifier("screen-"+ui.screen)
-            .accessibilityHidden(!isRoot || splash)
+            .accessibilityHidden(splash)
             if !isRoot && !splash {
                 if ui.screen=="C20" {
                     VStack(spacing:0){
