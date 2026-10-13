@@ -1355,15 +1355,12 @@ extension WireframeRoot {
         VStack(spacing:0){communityFeedHeader;communityFeedScroll}.background(W.paper)
     }
     var communityFeedHeader:some View {
-        let actions=AnyView(communityFeedHeaderActions)
-        if ui.path.last=="C24" { return WHeader(title:"커뮤니티",back:back,backIdentifier:"communityNotificationBackFromFeed",root:true,showRootMark:false,trailing:actions) }
-        return WHeader(title:"커뮤니티",root:true,showRootMark:true,trailing:actions)
-    }
-    var communityFeedHeaderActions:some View {
-        HStack(spacing:0){
-            Button{go("C29")}label:{Image(systemName:"magnifyingglass").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 검색").accessibilityIdentifier("communitySearch")
-            Button{go("C28")}label:{Image(systemName:"gearshape").font(.system(size:18,weight:.regular)).frame(width:44,height:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityLabel("커뮤니티 설정").accessibilityIdentifier("communitySettings")
-        }
+        WCommunityFeedHeader(
+            isNotificationContext:ui.path.last=="C24",
+            onBack:back,
+            onAllBoards:{go("C27")},
+            onSearch:{go("C29")}
+        )
     }
     var communityFeedScroll:some View {
         ScrollViewReader{proxy in
@@ -2795,6 +2792,45 @@ extension WireframeRoot {
         .onAppear{captureCommunityComposerBaseline(for:"C05")}
     }
     var communityPreview:some View {WPage(title:"미리보기",back:back){Text(ui.communityDraftCrewID == nil ? "커뮤니티에 공개":"크루 멤버에게 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");if !(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).isEmpty{Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody")};if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{if !ui.communityDraftAttachments.isEmpty{communityPreviewPhotoRow()};WNotice(text:ui.communityDraftCrewID == nil ? "사진과 영상은 이 기기에 로컬 저장돼요. 서버 전송이나 업로드는 연결하지 않았어요.":"크루 게시물은 해당 크루 멤버만 볼 수 있고, 첨부는 이 기기에 로컬 저장돼요.")};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityCourseDraft ? "코스 공유하기":ui.communityDraftPostID == nil ? "게시하기":"수정 완료"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).disabled(ui.communityMediaImporting).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":ui.communityDraftPostID == nil ? "communityPublishButton":"communityEditPostSave");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityMediaImporting)}}
+}
+
+private struct WCommunityFeedHeader:View {
+    let isNotificationContext:Bool
+    let onBack:()->Void
+    let onAllBoards:()->Void
+    let onSearch:()->Void
+
+    var body:some View {
+        HStack(spacing:0){
+            Button(action:isNotificationContext ? onBack:onAllBoards){
+                Image(systemName:isNotificationContext ? "chevron.left":"square.grid.2x2")
+                    .font(.system(size:18,weight:.regular))
+                    .frame(width:44,height:44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isNotificationContext ? "뒤로":"전체 게시판")
+            .accessibilityIdentifier(isNotificationContext ? "communityNotificationBackFromFeed":"communityAllBoards")
+
+            Spacer(minLength:0)
+            BrandMark(size:28).frame(width:44,height:44).accessibilityIdentifier("communityHeaderBrandMark")
+            Spacer(minLength:0)
+
+            Button(action:onSearch){
+                Image(systemName:"magnifyingglass")
+                    .font(.system(size:18,weight:.regular))
+                    .frame(width:44,height:44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("커뮤니티 검색")
+            .accessibilityIdentifier("communitySearch")
+        }
+        .padding(.horizontal,16)
+        .frame(height:64)
+        .background(W.paper.ignoresSafeArea(edges:.top))
+        .overlay(alignment:.bottom){W.line.frame(height:1)}
+    }
 }
 
 struct WCalendar:View {
