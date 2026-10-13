@@ -49,7 +49,8 @@ private actor RecordingCosmeticStoreTransport: APIResponseSending {
 
 private func makeCosmeticStoreClient(
     token: String? = "fixture-store-token",
-    sessionProvider: (any RunUploadSessionProviding)? = nil
+    sessionProvider: (any RunUploadSessionProviding)? = nil,
+    mockScope: String? = nil
 ) throws -> CosmeticStoreClient {
     let configuration = try APIClientConfiguration(
         environment: .development,
@@ -59,6 +60,11 @@ private func makeCosmeticStoreClient(
     )
     let sessionConfiguration = URLSessionConfiguration.ephemeral
     sessionConfiguration.protocolClasses = [MockURLProtocol.self]
+    if let mockScope {
+        var headers = sessionConfiguration.httpAdditionalHeaders ?? [:]
+        headers[MockURLProtocol.scopeHeader] = mockScope
+        sessionConfiguration.httpAdditionalHeaders = headers
+    }
     let apiClient = APIClient(configuration: configuration, session: URLSession(configuration: sessionConfiguration))
     return CosmeticStoreClient(
         apiClient: apiClient,
@@ -107,9 +113,25 @@ private func problemFixture(code: String, status: Int = 409, requestID: String =
     """.utf8)
 }
 
+private func waitForCosmeticStorePendingRequest(in scope: String) async -> Bool {
+    for _ in 0..<500 {
+        if MockURLProtocol.pendingCount(in: scope) > 0 { return true }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return false
+}
+
 private func waitForCosmeticStorePendingRequest() async -> Bool {
     for _ in 0..<500 {
         if MockURLProtocol.pendingCount > 0 { return true }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    }
+    return false
+}
+
+private func waitForCosmeticStorePendingCleanup(in scope: String) async -> Bool {
+    for _ in 0..<500 {
+        if MockURLProtocol.pendingCount(in: scope) == 0 { return true }
         try? await Task.sleep(nanoseconds: 1_000_000)
     }
     return false
@@ -376,8 +398,10 @@ final class CosmeticStoreClientTests: XCTestCase {
     }
 
     func testTaskCancellationDoesNotBecomeAnEmptySuccessOrTriggerAnotherRequest() async throws {
-        MockURLProtocol.suspendNext()
-        let client = try makeCosmeticStoreClient()
+        let mockScope = UUID().uuidString
+        defer { MockURLProtocol.reset(in: mockScope) }
+        MockURLProtocol.suspendNext(in: mockScope)
+        let client = try makeCosmeticStoreClient(mockScope: mockScope)
         let requestTask = Task { () -> CosmeticStoreFailure? in
             do {
                 _ = try await client.fetchInventory()
@@ -389,14 +413,16 @@ final class CosmeticStoreClientTests: XCTestCase {
             }
         }
 
-        let didSuspend = await waitForCosmeticStorePendingRequest()
+        let didSuspend = await waitForCosmeticStorePendingRequest(in: mockScope)
         XCTAssertTrue(didSuspend, "Expected the mock URL protocol to hold the request")
         requestTask.cancel()
 
         let failure = await requestTask.value
         XCTAssertEqual(failure, .cancelled)
-        XCTAssertEqual(MockURLProtocol.requests.count, 1)
-        XCTAssertEqual(MockURLProtocol.pendingCount, 0)
+        let didFinishCancellationCleanup = await waitForCosmeticStorePendingCleanup(in: mockScope)
+        XCTAssertTrue(didFinishCancellationCleanup, "URLSession must release the canceled request's scoped pending protocol")
+        XCTAssertEqual(MockURLProtocol.requests(in: mockScope).count, 1)
+        XCTAssertEqual(MockURLProtocol.pendingCount(in: mockScope), 0)
     }
 
     func testMalformedDTOPreviewPurchaseAndEquipmentResponsesFailClosed() async throws {
