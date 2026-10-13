@@ -868,7 +868,7 @@ import UIKit
         app.buttons["communityNotification-sample-verification"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C11"].waitForExistence(timeout:5))
         let verificationBackButtons=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@","뒤로","뒤로"))
-        XCTAssertEqual(verificationBackButtons.count,1,app.debugDescription,"The outgoing notification page is inaccessible during its route transition")
+        XCTAssertEqual(verificationBackButtons.count,1,"The outgoing notification page is inaccessible during its route transition. Accessibility hierarchy: \(app.debugDescription)")
         verificationBackButtons.element.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].exists)
         XCTAssertEqual(app.buttons["communityNotification-sample-verification"].value as? String,"읽음")
         app.buttons["뒤로"].tap();XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
