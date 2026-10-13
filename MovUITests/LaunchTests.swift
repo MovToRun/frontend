@@ -2588,7 +2588,7 @@ extension LaunchTests {
         XCTAssertEqual(app.buttons["weeklyDistanceToggle"].value as? String,"선택 안 됨")
         tap("weeklyDistanceToggle");capture("H04-followup-light-both")
         tap("saveWeeklyGoal");app.terminate()
-        app.launchArguments=["-wire-screen","H04","-wire-fixture","-appearance","dark"]
+        app.launchArguments=["-wire-screen","H04","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","dark"]
         app.launch();XCTAssertTrue(app.buttons["weeklyDistanceToggle"].waitForExistence(timeout:10))
         XCTAssertEqual(app.buttons["weeklyDistanceToggle"].value as? String,"선택됨")
         XCTAssertEqual(app.buttons["weeklyTimeToggle"].value as? String,"선택됨")
@@ -3751,7 +3751,17 @@ extension LaunchTests {
 
 extension LaunchTests {
     func visible(_ label:String)->Bool {app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).allElementsBoundByIndex.contains{$0.isHittable}}
-    func replaceInput(_ field:XCUIElement,_ text:String){XCTAssertTrue(field.waitForExistence(timeout:5));field.tap();XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5));let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)}
+    func replaceInput(_ field:XCUIElement,_ text:String){
+        XCTAssertTrue(field.waitForExistence(timeout:5));field.tap()
+        let strongPasswordSuggestion=app.buttons["GenerateStrongPasswordButton"]
+        if strongPasswordSuggestion.waitForExistence(timeout:0.5){
+            let dismissStrongPasswordSuggestion=app.buttons["xmark"]
+            XCTAssertTrue(dismissStrongPasswordSuggestion.waitForExistence(timeout:2),app.debugDescription)
+            dismissStrongPasswordSuggestion.tap()
+        }
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5),app.debugDescription)
+        let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)
+    }
     func testPointsShopAndHeaderRoutes(){
         userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")
         tap("tab-0");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertFalse(visible("설정"));XCTAssertFalse(visible("기록 보기"));XCTAssertTrue(visible("browsePointShop"),app.debugDescription);XCTAssertTrue(app.staticTexts["pointBalance"].exists,app.debugDescription);capture("Points-overview")
