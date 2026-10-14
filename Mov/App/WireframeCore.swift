@@ -143,6 +143,7 @@ struct WHeader:View {
     var backIdentifier:String? = nil
     var root=false
     var showRootMark=true
+    var centerRootMark=false
     var mark=false
     var trailing:AnyView = AnyView(EmptyView())
     var body:some View {
@@ -152,7 +153,13 @@ struct WHeader:View {
             else {Color.clear.frame(width:44,height:44)}
             Spacer();trailing
         }.padding(.horizontal,root ? 16:10).frame(height:root ? 64:68)
-            .overlay{Text(title).font(W.font(17,.medium)).lineLimit(2).minimumScaleFactor(0.65).frame(maxWidth:220).allowsHitTesting(false)}
+            .overlay{
+                if centerRootMark {
+                    BrandMark(size:30).accessibilityLabel("커뮤니티 내 프로필").accessibilityIdentifier("communityOwnProfileHeaderBrandMark").allowsHitTesting(false)
+                } else {
+                    Text(title).font(W.font(17,.medium)).lineLimit(2).minimumScaleFactor(0.65).frame(maxWidth:220).allowsHitTesting(false)
+                }
+            }
             .background(W.paper.ignoresSafeArea(edges:.top)).overlay(alignment:.bottom){if !(root && title=="내 정보"){W.line.frame(height:1)}}
     }
 }
@@ -3287,7 +3294,7 @@ struct WireframeRoot:View {
         }
     }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil,notificationRoute:String?=nil,notificationIdentifier:String?=nil)->some View {let communityNotifications=notificationRoute != nil;let unread=communityNotifications ? ui.hasUnreadCommunityNotifications:ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";let notificationID=notificationIdentifier ?? (run ? "openRecords":"notificationBell");return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":notificationRoute ?? "N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(communityNotifications ? Color.wire(0xFF5A5F,0xFF5A5F):W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":communityNotifications ? "커뮤니티 알림":"알림").accessibilityIdentifier(notificationID).accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communityOwnProfileSettings":"profileSettings")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil,notificationRoute:String?=nil,notificationIdentifier:String?=nil,centerRootMark:Bool=false)->some View {let communityNotifications=notificationRoute != nil;let unread=communityNotifications ? ui.hasUnreadCommunityNotifications:ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";let notificationID=notificationIdentifier ?? (run ? "openRecords":"notificationBell");return WHeader(title:title,root:true,showRootMark:centerRootMark ? false:showMark,centerRootMark:centerRootMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":notificationRoute ?? "N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(communityNotifications ? Color.wire(0xFF5A5F,0xFF5A5F):W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":communityNotifications ? "커뮤니티 알림":"알림").accessibilityIdentifier(notificationID).accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communityOwnProfileSettings":"profileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)

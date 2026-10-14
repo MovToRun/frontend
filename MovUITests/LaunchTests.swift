@@ -2161,6 +2161,11 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
         XCTAssertEqual(app.descendants(matching:.any)["communityProfilePostCount"].label,"2")
         XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowerCount"].label,"2")
+        XCTAssertTrue(app.buttons["communityProfileMore"].exists,"Other-member profiles keep their own overflow action")
+        XCTAssertFalse(app.buttons["communityNotificationBell"].exists,"The own-profile notification action stays on the community root profile")
+        XCTAssertFalse(app.buttons["communityOwnProfileSettings"].exists,"The own-profile settings action is not shown for another member")
+        XCTAssertTrue(app.buttons["뒤로"].exists,"Other-member profiles keep a back action to their origin")
+        capture("community-C08-other-profile")
         let follow=app.buttons["communityProfileFollow"]
         XCTAssertEqual(follow.label,"팔로우")
         follow.tap()
@@ -2173,6 +2178,49 @@ import UIKit
         app.buttons["communityProfileFollowers"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C30"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["communityConnection-fixture-member-no-eul"].exists)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),"Connections return to the viewed profile")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C07"].waitForExistence(timeout:5),"A viewed profile returns to its card preview")
+        app.buttons["communityCardClose"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5),"Closing the preview restores the originating post")
+    }
+
+    func testCommunityOwnProfileHeaderMatchesReview55AndKeepsActions() {
+        launchCommunity("C01")
+        app.buttons["community-tab-profile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+
+        let mark=app.images["communityOwnProfileHeaderBrandMark"]
+        let bell=app.buttons["communityNotificationBell"]
+        let settings=app.buttons["communityOwnProfileSettings"]
+        XCTAssertTrue(mark.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(mark.frame.midX,app.frame.midX,accuracy:2,"Review55 centers the Mob mark in the C08 header")
+        XCTAssertTrue(bell.exists && settings.exists,app.debugDescription)
+        XCTAssertLessThan(mark.frame.maxX,bell.frame.minX,"The centered mark does not overlap the notification action")
+        XCTAssertFalse(bell.frame.intersects(settings.frame),"Notification and settings hit areas remain separate")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfilePostCount"].label,"0")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowerCount"].label,"1")
+        XCTAssertEqual(app.descendants(matching:.any)["communityProfileFollowingCount"].label,"0")
+        capture("community-C08-own-profile-header")
+
+        bell.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C24"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),"The notification route returns to the own profile")
+        settings.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),"Community settings return to the own profile")
+
+        app.terminate()
+        launchCommunity("C01",appearance:"dark")
+        app.buttons["community-tab-profile"].tap()
+        let darkMark=app.images["communityOwnProfileHeaderBrandMark"]
+        XCTAssertTrue(darkMark.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(darkMark.frame.midX,app.frame.midX,accuracy:2,"The centered profile mark remains centered in dark mode")
+        XCTAssertTrue(app.buttons["communityNotificationBell"].exists && app.buttons["communityOwnProfileSettings"].exists)
+        capture("community-C08-own-profile-dark")
     }
 
     func testCommunityOwnProfileEditsLocallyAndRendersRunningCard() {
