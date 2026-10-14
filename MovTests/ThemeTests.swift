@@ -481,8 +481,25 @@ final class ThemeTests:XCTestCase {
         let root=FileManager.default.temporaryDirectory.appendingPathComponent("community-video-store-\(UUID().uuidString)",isDirectory:true)
         let store=WCommunityAttachmentStore(rootURL:root)
         defer{store.cleanup()}
-        let draft=try store.makeReviewVideoFixture()
+        let working=try store.makeVideoWorkingURL()
+        defer{store.removeTemporaryVideoFile(working)}
+        try WCommunityVideoFixtureFactory.writeMP4(to:working)
+        let movieType=UTType(filenameExtension:working.pathExtension)
+        XCTAssertTrue(movieType?.conforms(to:.movie)==true,"The synthetic fixture is an MP4 movie")
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=true
+        let posterImage=UIGraphicsImageRenderer(size:CGSize(width:320,height:240),format:format).image { context in
+            context.cgContext.setFillColor(UIColor(red:0.1,green:0.35,blue:0.7,alpha:1).cgColor)
+            context.cgContext.fill(CGRect(x:0,y:0,width:320,height:240))
+            context.cgContext.setFillColor(UIColor.white.cgColor)
+            context.cgContext.fillEllipse(in:CGRect(x:0,y:82,width:72,height:72))
+        }
+        let posterData=try XCTUnwrap(posterImage.jpegData(compressionQuality:0.82))
+        let size=try XCTUnwrap(working.resourceValues(forKeys:[.fileSizeKey]).fileSize)
+        let fixtureMetadata=WCommunityVideoMetadata(size:size,duration:2,width:320,height:240)
+        let draft=try store.stageConvertedVideo(at:working,posterData:posterData,metadata:fixtureMetadata,sourceIdentifier:"synthetic-review-video",fingerprint:"synthetic-review-video-fingerprint")
         XCTAssertTrue(store.contains(draft.url));XCTAssertTrue(store.contains(draft.posterURL));XCTAssertTrue(store.isDraft(draft.url))
+        let poster=try XCTUnwrap(UIImage(contentsOfFile:draft.posterPath))
+        XCTAssertEqual(poster.size,CGSize(width:320,height:240),"The generated JPEG poster remains readable at the fixture's dimensions")
         XCTAssertTrue(WCommunityVideoPolicy.canAppend(currentCount:0,currentBytes:0,addingCount:1,addingBytes:draft.byteCount))
         let inspected=try await WCommunityVideoTranscoder.inspectOutput(draft.url)
         XCTAssertEqual(inspected.width,320);XCTAssertEqual(inspected.height,240);XCTAssertLessThanOrEqual(inspected.duration,15)
