@@ -1669,6 +1669,8 @@ extension WireframeRoot {
                 Button("크루 만들기",action:startCommunityCrewCreation)
                     .buttonStyle(.plain)
                     .font(W.font(11,.medium)).foregroundStyle(W.muted)
+                    .frame(minWidth:44,minHeight:44)
+                    .contentShape(Rectangle())
                     .accessibilityIdentifier("communityCrewCreate")
             }
             communityCrewTabs
@@ -2832,6 +2834,8 @@ private struct WCommunityCrewHeader:View {
 
     var body:some View {
         HStack(spacing:0){
+            Color.clear.frame(width:44,height:44).accessibilityHidden(true)
+            Spacer(minLength:0)
             BrandMark(size:28).frame(width:44,height:44).accessibilityIdentifier("communityCrewHeaderBrandMark")
             Spacer(minLength:0)
             Button(action:onSearch){

@@ -863,9 +863,10 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false,videoPostFixture:Bool=false,videoDraftFixture:Bool=false) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,largeText:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false,videoPostFixture:Bool=false,videoDraftFixture:Bool=false) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
+        if largeText{app.launchArguments.append("-wire-large")}
         if anonymousPost{app.launchArguments.append("-wire-community-anonymous-post")}
         if emptyHot{app.launchArguments.append("-wire-community-empty-hot")}
         if let verificationStatus{app.launchArguments += ["-wire-community-verification-status",verificationStatus]}
@@ -1140,6 +1141,25 @@ import UIKit
         XCTAssertTrue(app.staticTexts["크루 회원에게만 공개돼요"].exists)
         XCTAssertTrue(app.buttons["communityCrewBoardDetail"].exists)
         XCTAssertFalse(app.staticTexts["오늘도 함께 완료"].exists,"A non-member never sees a crew's private posts")
+    }
+
+    func testCommunityCrewHeaderAndCreateTargetAtCompactLargeText() {
+        launchCommunity("C15",compact:true,largeText:true)
+        let mark=app.images["communityCrewHeaderBrandMark"]
+        let search=app.buttons["communitySearch"]
+        let title=app.staticTexts["communityCrewTitle"]
+        let create=app.buttons["communityCrewCreate"]
+        XCTAssertTrue(mark.exists,app.debugDescription)
+        XCTAssertTrue(search.isHittable,app.debugDescription)
+        XCTAssertTrue(waitHittable(create,timeout:5),app.debugDescription)
+        XCTAssertEqual(mark.frame.midX,app.frame.midX,accuracy:2,"Compact C15 keeps the Mov mark centered at accessibility text size")
+        XCTAssertLessThan(mark.frame.maxX,search.frame.minX,"The centered mark and right search target do not overlap")
+        XCTAssertFalse(title.frame.intersects(create.frame),"The title and create action remain separate at compact width and large text")
+        XCTAssertGreaterThanOrEqual(create.frame.width,44,"The visually compact create action keeps a full-width touch target")
+        XCTAssertGreaterThanOrEqual(create.frame.height,43.99,"The 44pt create target tolerates accessibility-frame subpixel rounding")
+        capture("community-C15-compact-large-header")
+        create.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C20"].waitForExistence(timeout:5),"Tapping the compact create action opens the crew form")
     }
 
     func testCommunityCrewCreateAndEditEntryStaysLocal() {
@@ -2273,11 +2293,15 @@ import UIKit
                 XCTAssertFalse(app.buttons["뒤로"].exists,"C02 uses the shared community header, not a back/title header")
             }
             if screen=="C15" {
-                XCTAssertTrue(app.images["communityCrewHeaderBrandMark"].exists,app.debugDescription)
-                XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
+                let crewMark=app.images["communityCrewHeaderBrandMark"]
+                let crewSearch=app.buttons["communitySearch"]
+                XCTAssertTrue(crewMark.exists,app.debugDescription)
+                XCTAssertTrue(crewSearch.isHittable,app.debugDescription)
+                XCTAssertEqual(crewMark.frame.midX,app.frame.midX,accuracy:2,"The C15 Mov mark stays centered in the shared community header")
+                XCTAssertLessThan(crewMark.frame.maxX,crewSearch.frame.minX,"The right-side search action stays clear of the centered mark")
                 XCTAssertTrue(app.buttons["communityCrewCreate"].isHittable,app.debugDescription)
                 XCTAssertFalse(app.buttons["뒤로"].exists,"The root crew screen uses the community header, not a back/title header")
-                app.buttons["communitySearch"].tap()
+                crewSearch.tap()
                 XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5),app.debugDescription)
                 app.buttons["뒤로"].tap()
                 XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5),app.debugDescription)
@@ -2370,8 +2394,12 @@ import UIKit
         app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["크루"].exists)
-        XCTAssertTrue(app.images["communityCrewHeaderBrandMark"].exists,app.debugDescription)
-        XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
+        let crewMark=app.images["communityCrewHeaderBrandMark"]
+        let crewSearch=app.buttons["communitySearch"]
+        XCTAssertTrue(crewMark.exists,app.debugDescription)
+        XCTAssertTrue(crewSearch.isHittable,app.debugDescription)
+        XCTAssertEqual(crewMark.frame.midX,app.frame.midX,accuracy:2,"The dark C15 header keeps the Mov mark centered")
+        XCTAssertLessThan(crewMark.frame.maxX,crewSearch.frame.minX,"The dark header keeps search clear of the centered mark")
         XCTAssertTrue(app.buttons["communityCrewCreate"].isHittable,app.debugDescription)
         XCTAssertFalse(app.buttons["뒤로"].exists,"The root crew screen uses the community header, not a back/title header")
         assertCommunityBar("community-tab-crew")
