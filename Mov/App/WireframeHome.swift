@@ -2496,7 +2496,7 @@ extension WireframeRoot {
         ui.profile.nickname=ui.nickname.trimmingCharacters(in:.whitespacesAndNewlines);ui.profile.introduction=ui.introduction;ui.profile.region=ui.region;ui.profile.photo=ui.photo;ui.save();ui.communityProfileEditing=false;ui.error=""
     }
     var communityOwnProfile:some View {
-        VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28",notificationRoute:"C24",notificationIdentifier:"communityNotificationBell")
+        VStack(spacing:0){rootHeader("내 정보",settingsRoute:"C28",notificationRoute:"C24",notificationIdentifier:"communityNotificationBell",centerRootMark:true)
             if ui.communityProfileEditing {
                 ScrollView{WCommunityScrollOffsetProbe(coordinateSpace:"community-own-profile-scroll");VStack(alignment:.leading,spacing:14){Text("나를 소개하는 러닝 카드").font(W.font(20,.semibold));WAvatarEditor(data:$ui.photo).accessibilityIdentifier("communityEditPhoto");WField(label:"닉네임",text:$ui.nickname,limit:20,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"communityEditNickname");WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"communityEditIntroduction");Text("활동 지역").font(W.font(13,.medium));WRegionPicker(selection:$ui.region);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}.padding(22).padding(.bottom,WCommunityBottomTab.barHeight+24)}
                     .coordinateSpace(name:"community-own-profile-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset)
