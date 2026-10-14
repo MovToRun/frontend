@@ -1073,7 +1073,10 @@ import UIKit
         XCTAssertFalse(app.staticTexts["이번 주 러닝 안내"].exists,"Changing board tabs filters the local example posts")
         app.buttons["communityCrewComposePost"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityComposeCrewName"].label,"모브 새벽 크루")
         XCTAssertTrue(app.staticTexts["communityComposeCrewBoard"].label.contains("러닝 일정"))
+        XCTAssertFalse(app.descendants(matching:.any)["communityComposeBoard"].exists,"A new crew draft keeps its board fixed to the selected crew board")
+        capture("F002-C05-crew-composer")
         let title=app.textFields["communityComposeTitle"]
         title.tap();title.typeText("이번 주 일정 예시")
         let body=app.textViews["communityComposeBody"]
@@ -1803,6 +1806,9 @@ import UIKit
 
     func testCommunityTextLimitsDisableEmptyActionsAndKeepDraftOnBack() {
         launchCommunity("C05")
+        XCTAssertTrue(app.descendants(matching:.any)["communityComposeBoard"].exists,"A public draft shows the board selector")
+        XCTAssertFalse(app.staticTexts["communityComposeCrewName"].exists,"A public draft does not inherit the currently selected crew")
+        capture("F002-C05-public-composer")
         let preview=app.buttons["communityPreviewButton"]
         XCTAssertTrue(preview.waitForExistence(timeout:5))
         XCTAssertFalse(preview.isEnabled,"Empty title/body cannot proceed")
@@ -1870,6 +1876,9 @@ import UIKit
         XCTAssertTrue(app.staticTexts["지금 많이 보는 글"].exists)
         app.buttons["communityHot-p1"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityPostMore"].exists,"C04 keeps the board title and overflow action in the header")
+        XCTAssertTrue(app.descendants(matching:.any).matching(NSPredicate(format:"label == %@","러닝 인증")).firstMatch.exists,"C04 exposes the selected board name")
+        capture("F002-C04-post-detail")
         XCTAssertEqual(app.staticTexts["communityDetailTitle"].label,"오늘은 강변을 따라 5 km")
         let like=app.buttons["communityDetailLike"]
         XCTAssertTrue(like.waitForExistence(timeout:5))
@@ -2138,6 +2147,8 @@ import UIKit
         let quote=app.descendants(matching:.any)["communityReplyQuote-\(grandchildReplyID)"]
         XCTAssertTrue(quote.exists)
         XCTAssertEqual(quote.label,"삭제된 댓글입니다","A quote to a deleted parent must not expose its author")
+        app.swipeUp()
+        capture("F002-C04-nested-replies")
     }
 
     func testCommunityProfilePreviewVisitPhotoFollowAndProfileContent() {
@@ -2503,6 +2514,7 @@ import UIKit
         tap("communityBoardShortcut-러닝 질문")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["비 오는 날에는 어떻게 달리세요?"].exists)
+        capture("F002-C03-board-list")
         tap("communityBoardCompose")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
         let title=app.textFields["communityComposeTitle"]
