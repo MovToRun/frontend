@@ -2272,6 +2272,16 @@ import UIKit
                 XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
                 XCTAssertFalse(app.buttons["뒤로"].exists,"C02 uses the shared community header, not a back/title header")
             }
+            if screen=="C15" {
+                XCTAssertTrue(app.images["communityCrewHeaderBrandMark"].exists,app.debugDescription)
+                XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
+                XCTAssertTrue(app.buttons["communityCrewCreate"].isHittable,app.debugDescription)
+                XCTAssertFalse(app.buttons["뒤로"].exists,"The root crew screen uses the community header, not a back/title header")
+                app.buttons["communitySearch"].tap()
+                XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5),app.debugDescription)
+                app.buttons["뒤로"].tap()
+                XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5),app.debugDescription)
+            }
             if ["C02","C15","C08"].contains(screen){capture("community-\(screen)-light")}
         }
 
@@ -2360,7 +2370,10 @@ import UIKit
         app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["크루"].exists)
-        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        XCTAssertTrue(app.images["communityCrewHeaderBrandMark"].exists,app.debugDescription)
+        XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
+        XCTAssertTrue(app.buttons["communityCrewCreate"].isHittable,app.debugDescription)
+        XCTAssertFalse(app.buttons["뒤로"].exists,"The root crew screen uses the community header, not a back/title header")
         assertCommunityBar("community-tab-crew")
         let crewScroll=app.scrollViews["communityCrewOverview"]
         XCTAssertTrue(crewScroll.waitForExistence(timeout:5),app.debugDescription)
