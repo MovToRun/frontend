@@ -2265,6 +2265,13 @@ import UIKit
             tab.tap()
             XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:5),app.debugDescription)
             XCTAssertTrue(app.buttons["community-tab-home"].exists,"The community bar remains available on \(screen)")
+            if screen=="C02" {
+                XCTAssertTrue(app.staticTexts["communityBoardsTitle"].exists,app.debugDescription)
+                XCTAssertTrue(app.buttons["communityAllBoards"].isHittable,app.debugDescription)
+                XCTAssertTrue(app.images["communityHeaderBrandMark"].exists,app.debugDescription)
+                XCTAssertTrue(app.buttons["communitySearch"].isHittable,app.debugDescription)
+                XCTAssertFalse(app.buttons["뒤로"].exists,"C02 uses the shared community header, not a back/title header")
+            }
             if ["C02","C15","C08"].contains(screen){capture("community-\(screen)-light")}
         }
 
@@ -2342,8 +2349,11 @@ import UIKit
 
         app.buttons["community-tab-boards"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
-        XCTAssertTrue(app.staticTexts["게시판"].exists)
-        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        XCTAssertTrue(app.staticTexts["communityBoardsTitle"].exists)
+        XCTAssertTrue(app.buttons["communityAllBoards"].isHittable)
+        XCTAssertTrue(app.buttons["communitySearch"].isHittable)
+        XCTAssertTrue(app.images["communityHeaderBrandMark"].exists)
+        XCTAssertFalse(app.buttons["뒤로"].exists)
         assertCommunityBar("community-tab-boards")
         capture("community-dark-C02-boards")
 
@@ -2372,11 +2382,28 @@ import UIKit
     }
 
     func testCommunityBoardRouteAndLocalPostPreviewPublish() {
-        app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-reset","-appearance","light"]
-        app.launch()
+        launchCommunity("C01")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:10))
         tap("community-tab-boards")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityBoardsTitle"].exists)
+        XCTAssertTrue(app.buttons["communityAllBoards"].isHittable)
+        XCTAssertTrue(app.buttons["communitySearch"].isHittable)
+        XCTAssertFalse(app.buttons["뒤로"].exists)
+        tap("communityAllBoards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5))
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communitySearch")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5))
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        let boardsScroll=app.scrollViews["communityBoardsScroll"]
+        XCTAssertTrue(boardsScroll.waitForExistence(timeout:5),app.debugDescription)
+        boardsScroll.swipeUp()
+        XCTAssertTrue(waitForLayout({!self.app.buttons["community-tab-boards"].isHittable},timeout:5),"Downward C02 scrolling hides the community bar")
+        boardsScroll.swipeDown()
+        XCTAssertTrue(waitForLayout({self.app.buttons["community-tab-boards"].isHittable},timeout:5),"Upward C02 scrolling restores the community bar")
         tap("communityBrowseAllBoards")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5))
         tap("communityBoard-러닝 질문")
