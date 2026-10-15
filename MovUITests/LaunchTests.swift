@@ -4,10 +4,12 @@ import UIKit
     var app=XCUIApplication()
     private let isolatedStoreSuite="mov.ui.fixture.\(UUID().uuidString)"
     private var accountLinkFixtureSuiteForCleanup:String?
+    private var socialLoginFixtureSuitesForCleanup:[String]=[]
     override func setUp(){continueAfterFailure=false}
     override func tearDown(){
         if app.state != .notRunning { app.terminate() }
         if let suite=accountLinkFixtureSuiteForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        for suite in socialLoginFixtureSuitesForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         super.tearDown()
     }
     private func makeFixtureStoreSuite(_ prefix:String)->String {
@@ -15,6 +17,7 @@ import UIKit
     }
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    func openSocialLoginFixture(_ extraArguments:[String]=[]){let suite=makeFixtureStoreSuite("mov.wire.social-login");socialLoginFixtureSuitesForCleanup.append(suite);app.launchArguments=["-wire-screen","A01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-social-login-fixture","-appearance","light"]+extraArguments;app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:15))}
     func openMemberProfileFixture(_ extraArguments:[String]=[]){
         let suite=makeFixtureStoreSuite("mov.wireframe.test.member-profile")
         app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-member-profile-fixture","-appearance","light"]+extraArguments
@@ -3830,6 +3833,45 @@ extension LaunchTests {
             tap("뒤로")
             XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
         }
+    }
+
+    func testSocialLoginFixtureRoutesExistingLoginAndSignupRequired() {
+        openSocialLoginFixture()
+        tap("Google로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:8),app.debugDescription)
+
+        openSocialLoginFixture(["-wire-social-login-new"])
+        tap("네이버로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:8),app.debugDescription)
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:8),app.debugDescription)
+        replace("아침러너",into:app.textFields["signupNicknameInput"])
+        tap("signupContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testSocialLoginFixtureCancellationAndFailureRetry() {
+        openSocialLoginFixture(["-wire-social-login-cancel"])
+        tap("카카오로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:8),app.debugDescription)
+
+        openSocialLoginFixture(["-wire-social-login-fail-once"])
+        tap("Google로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A04"].waitForExistence(timeout:8),app.debugDescription)
+        tap("authFailureRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:8),app.debugDescription)
+        tap("Google로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testSocialLoginFixtureIgnoresDuplicateSubmissionWhileBusy() {
+        openSocialLoginFixture(["-wire-social-login-delay-completion"])
+        tap("Google로 로그인")
+        tap("인증 성공 · 예시")
+        let start=app.buttons["socialLoginStart"]
+        let disabled=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in start.exists && !start.isEnabled},object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[disabled],timeout:5),.completed,app.debugDescription)
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:10),app.debugDescription)
     }
 
     func testPasswordResetAndEmailMethodManagement() {

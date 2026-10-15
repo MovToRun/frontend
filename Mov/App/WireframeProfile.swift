@@ -3,6 +3,35 @@ import PhotosUI
 import UniformTypeIdentifiers
 import ImageIO
 extension WireframeRoot {
+    func completeSocialSignup(_ attempt:SocialLoginAttempt){
+        guard ui.screen=="A03",socialLoginPendingAttempt==attempt,let coordinator=socialLoginCoordinator else{return}
+        guard !socialLoginBusy else{return}
+        let nickname=WSignupNicknameValidation.normalized(ui.nickname)
+        let consents=[SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)]
+        socialLoginBusy=true
+        Task { @MainActor in
+            defer {socialLoginBusy=false}
+            do {
+                _=try await coordinator.completeSignup(for:attempt,nickname:nickname,termsConsents:consents)
+                guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
+                ui.profile.weight=ui.weight
+                ui.profile.photo=ui.photo
+                ui.profile.nickname=nickname
+                if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)}
+                ui.setLoggedIn(true)
+                ui.save()
+                socialLoginPendingAttempt=nil
+                go("A15")
+            } catch let failure as SocialLoginFailure {
+                guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
+                ui.error=failure.userMessage
+            } catch {
+                guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
+                ui.error=SocialLoginFailure.invalidResponse.userMessage
+            }
+        }
+    }
+
     func beginMemberProfileDraft(_ profile:MemberProfile,for screen:String){
         memberProfileDraftBaseline=profile
         memberProfileDraftScopeID=ui.remoteAccountScopeID
@@ -252,6 +281,7 @@ extension WireframeRoot {
                 if usesRemoteProfile {saveMemberProfileWeight();return}
                 if let error=WSignupWeightValidation.error(for:ui.weight){ui.error=error;return}
                 if onboarding && (!ui.consentTerms || !ui.consentPrivacy){ui.error="필수 항목을 확인해 주세요.";go("A02");return}
+                if onboarding,let attempt=socialLoginPendingAttempt {completeSocialSignup(attempt);return}
                 ui.profile.weight=ui.weight
                 if onboarding {
                     ui.profile.photo=ui.photo
@@ -260,7 +290,7 @@ extension WireframeRoot {
                     ui.setLoggedIn(true)
                     ui.save();go("A15")
                 } else {ui.save();back()}
-            }.buttonStyle(WButtonStyle()).disabled(usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile)).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
+            }.buttonStyle(WButtonStyle()).disabled((onboarding && socialLoginBusy) || (usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile))).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
             if !onboarding {Button("체중 정보 제거"){
                 if usesRemoteProfile {ui.weight="";saveMemberProfileWeight()}
                 else {ui.profile.weight="";ui.weight="";ui.save();back()}
