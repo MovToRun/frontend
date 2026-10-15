@@ -1,5 +1,99 @@
 import SwiftUI
 
+enum WireframeSocialLoginFixtureTerms {
+    static let catalog=SocialLoginConsentCatalog(required:[
+        SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)
+    ])
+}
+
+/// API and provider seams used only by social-login UI fixtures.
+actor WireframeSocialLoginServiceFixture: SocialLoginServing {
+    private let requiresSignup: Bool
+    private let delayChallenge: Bool
+    private let delayCompletion: Bool
+    private var shouldFailVerification: Bool
+    private var shouldExpireSignupProof: Bool
+    private var shouldLoseCompletionResponse: Bool
+    private var failedCompletionRequest: SocialLoginCompletionRequest?
+    private let challenge = SocialLoginChallenge(state: String(repeating: "s", count: 43), nonce: String(repeating: "n", count: 43), expiresInSeconds: 600)
+    private let proof = SocialLoginProof(socialSignupProof: String(repeating: "p", count: 43), expiresInSeconds: 600)
+    private let tokens = SocialLoginSessionTokens(accessToken: "fixture-only-access", refreshToken: "fixture-only-refresh", tokenType: "Bearer", accessExpiresInSeconds: 900, refreshExpiresInSeconds: 604_800)
+
+    init(
+        requiresSignup: Bool,
+        failVerificationOnce: Bool,
+        delayChallenge: Bool,
+        delayCompletion: Bool,
+        expireSignupProofOnce: Bool,
+        loseCompletionResponseOnce: Bool
+    ) {
+        self.requiresSignup = requiresSignup
+        self.shouldFailVerification = failVerificationOnce
+        self.delayChallenge = delayChallenge
+        self.delayCompletion = delayCompletion
+        self.shouldExpireSignupProof = expireSignupProofOnce
+        self.shouldLoseCompletionResponse = loseCompletionResponseOnce
+    }
+
+    func issueChallenge(provider: SocialLoginProvider, deviceID: UUID) async throws -> SocialLoginChallenge {
+        if delayChallenge {
+            return await withCheckedContinuation { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(5_000))
+                    continuation.resume(returning: challenge)
+                }
+            }
+        }
+        return challenge
+    }
+
+    func verify(provider: SocialLoginProvider, challenge: SocialLoginChallenge, deviceID: UUID, requestID: UUID, credential: String) async throws -> SocialLoginProof {
+        if shouldFailVerification {
+            shouldFailVerification = false
+            throw SocialLoginFailure.invalidCredentials
+        }
+        return proof
+    }
+
+    func complete(_ request: SocialLoginCompletionRequest) async throws -> SocialLoginSessionTokens {
+        let isExactRetry:Bool
+        if let failedCompletionRequest {
+            guard failedCompletionRequest == request else { throw SocialLoginFailure.invalidRequest }
+            self.failedCompletionRequest = nil
+            isExactRetry=true
+        } else {
+            isExactRetry=false
+        }
+        if requiresSignup {
+            guard request.nickname != nil, WireframeSocialLoginFixtureTerms.catalog.accepts(request.termsConsents) else {
+                throw SocialLoginFailure.termsNotAccepted
+            }
+            if shouldExpireSignupProof {
+                shouldExpireSignupProof=false
+                throw SocialLoginFailure.signupProofInvalid
+            }
+            guard WSignupNicknameValidation.error(for:request.nickname ?? "")==nil else {
+                throw SocialLoginFailure.invalidRequest
+            }
+        }
+        if delayCompletion && !isExactRetry { try await Task.sleep(for: .milliseconds(5_000)) }
+        if shouldLoseCompletionResponse {
+            shouldLoseCompletionResponse = false
+            failedCompletionRequest = request
+            throw SocialLoginFailure.transport(.timedOut)
+        }
+        return tokens
+    }
+}
+
+struct WireframeSocialLoginCredentialFixture: SocialLoginCredentialProviding {
+    let cancelled: Bool
+
+    func credential(for provider: SocialLoginProvider, challenge: SocialLoginChallenge) async throws -> String? {
+        cancelled ? nil : "fixture-only-\(provider.rawValue)-credential"
+    }
+}
+
 /// A non-secret session snapshot used only by password-reset UI tests.
 final class WireframePasswordResetSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
     let mutationCoordinator = AuthSessionMutationCoordinator()
@@ -42,7 +136,7 @@ extension WireframeRoot {
     var loginFailure:some View {
         WPage(title:WLoginFailureCopy.title,back:{go("A01")}) {
             WHeading(text:WLoginFailureCopy.heading).padding(.top,9)
-            WText(text:WLoginFailureCopy.body)
+            WText(text:ui.error.isEmpty ? WLoginFailureCopy.body : ui.error)
             WAuthNotice(text:WLoginFailureCopy.notice,sourceWrapping:true)
         } actions: {
             Button("다시 시도"){go("A01")}
