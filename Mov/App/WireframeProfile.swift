@@ -7,7 +7,7 @@ extension WireframeRoot {
         guard ui.screen=="A03",socialLoginPendingAttempt==attempt,let coordinator=socialLoginCoordinator else{return}
         guard !socialLoginBusy else{return}
         let nickname=WSignupNicknameValidation.normalized(ui.nickname)
-        let consents=[SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)]
+        let consents=WireframeSocialLoginFixtureTerms.catalog.required
         socialLoginBusy=true
         Task { @MainActor in
             defer {socialLoginBusy=false}
@@ -24,7 +24,13 @@ extension WireframeRoot {
                 go("A15")
             } catch let failure as SocialLoginFailure {
                 guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
-                ui.error=failure.userMessage
+                if failure == .signupProofInvalid {
+                    socialLoginPendingAttempt=nil
+                    ui.error=failure.userMessage
+                    go("A04")
+                } else {
+                    ui.error=failure.userMessage
+                }
             } catch {
                 guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
                 ui.error=SocialLoginFailure.invalidResponse.userMessage
@@ -245,8 +251,8 @@ extension WireframeRoot {
             if onboarding {
                 WText(text:"02 / 02",small:true).offset(y:6)
                 WHeading(text:"어떻게 불러드릴까요?")
-                WField(label:"닉네임 (필수)",text:$ui.nickname,placeholder:"예: 아침러너",limit:20,accessibilityID:"signupNicknameInput")
-                Text("최대 20자 · 가상 닉네임으로 진행해 주세요").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading)
+                WField(label:"닉네임 (필수)",text:$ui.nickname,placeholder:"예: 아침러너",limit:12,accessibilityID:"signupNicknameInput")
+                Text("2~12자 · 한글, 영문, 숫자, 밑줄").font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.leading)
                 if !ui.error.isEmpty {Text(ui.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).accessibilityIdentifier("signupNicknameError")}
                 Text("체중은 선택이에요").font(W.font(17,.semibold)).padding(.top,4)
             } else {

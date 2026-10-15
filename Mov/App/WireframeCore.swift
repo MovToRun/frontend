@@ -363,11 +363,7 @@ enum WSignupNicknameValidation {
     static let fixtureNicknames=["달빛러너","RunMate"]
 
     static func normalized(_ value:String)->String {
-        let scalars=value.precomposedStringWithCanonicalMapping.unicodeScalars.filter { scalar in
-            let code=scalar.value
-            return !(code<=0x1F || (0x7F...0x9F).contains(code) || [0x061C,0x200B,0x200E,0x200F,0x202A,0x202B,0x202C,0x202D,0x202E,0x2066,0x2067,0x2068,0x2069,0xFEFF].contains(code))
-        }
-        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in:.whitespacesAndNewlines)
+        value.precomposedStringWithCanonicalMapping
     }
 
     static func canonical(_ value:String)->String {normalized(value).lowercased()}
@@ -375,7 +371,12 @@ enum WSignupNicknameValidation {
     static func error(for value:String)->String? {
         let name=normalized(value)
         guard !name.isEmpty else{return "닉네임을 입력해 주세요."}
-        guard name.count<=20 else{return "닉네임은 20자까지 입력할 수 있어요."}
+        let scalars=Array(name.unicodeScalars)
+        guard (2...12).contains(scalars.count) else{return "닉네임은 2~12자로 입력해 주세요."}
+        guard scalars.allSatisfy({scalar in
+            let code=scalar.value
+            return (0xAC00...0xD7A3).contains(code) || (0x41...0x5A).contains(code) || (0x61...0x7A).contains(code) || (0x30...0x39).contains(code) || code==0x5F
+        }) else{return "한글, 영문, 숫자, 밑줄만 사용할 수 있어요."}
         return nil
     }
 
@@ -3630,7 +3631,8 @@ struct WireframeRoot:View {
             let service=WireframeSocialLoginServiceFixture(
                 requiresSignup:args.contains("-wire-social-login-new"),
                 failVerificationOnce:args.contains("-wire-social-login-fail-once"),
-                delayCompletion:args.contains("-wire-social-login-delay-completion")
+                delayCompletion:args.contains("-wire-social-login-delay-completion"),
+                expireSignupProofOnce:args.contains("-wire-social-login-expired-proof-once")
             )
             let credentials=WireframeSocialLoginCredentialFixture(cancelled:args.contains("-wire-social-login-cancel"))
             return SocialLoginCoordinator(service:service,credentials:credentials)

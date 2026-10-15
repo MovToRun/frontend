@@ -211,7 +211,9 @@ final class SocialLoginClientTests: XCTestCase {
     func testProviderErrorsAndTransportFailuresRemainTyped() async {
         let cases: [(APIClientResponse, SocialLoginFailure)] = [
             (response(401, #"{"code":"INVALID_CREDENTIALS","requestId":"bad-auth"}"#), .invalidCredentials),
+            (response(400, #"{"code":"VALIDATION_FAILED"}"#), .invalidRequest),
             (response(422, #"{"code":"TERMS_NOT_ACCEPTED","requestId":"terms"}"#), .termsNotAccepted),
+            (response(422, #"{"code":"SIGNUP_PROOF_INVALID"}"#), .signupProofInvalid),
             (response(409, #"{"code":"NICKNAME_ALREADY_USED","requestId":"name"}"#), .nicknameAlreadyUsed),
             (response(409, #"{"code":"SIGNUP_REQUEST_CONFLICT","requestId":"conflict"}"#), .signupRequestConflict),
             (response(429, #"{"code":"TOO_MANY_REQUESTS"}"#), .tooManyRequests),
@@ -239,6 +241,47 @@ final class SocialLoginClientTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+
+    func testConsentCatalogRequiresEveryUniqueAcceptedDocumentAtExactVersion() {
+        let catalog=SocialLoginConsentCatalog(required:[
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"privacy.required",version:"v4",accepted:true)
+        ])
+        XCTAssertTrue(catalog.accepts([
+            SocialLoginConsent(documentId:"privacy.required",version:"v4",accepted:true),
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true)
+        ]),"Order does not change the consent set")
+        XCTAssertFalse(catalog.accepts(nil))
+        XCTAssertFalse(catalog.accepts([SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true)]))
+        XCTAssertFalse(catalog.accepts([
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"privacy.required",version:"old",accepted:true)
+        ]))
+        XCTAssertFalse(catalog.accepts([
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"privacy.required",version:"v4",accepted:false)
+        ]))
+        XCTAssertFalse(catalog.accepts([
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true)
+        ]))
+        XCTAssertFalse(SocialLoginConsentCatalog(required:[
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true)
+        ]).accepts(catalog.required))
+        XCTAssertFalse(SocialLoginConsentCatalog(required:[]).accepts([]))
+        XCTAssertFalse(SocialLoginConsentCatalog(required:[
+            SocialLoginConsent(documentId:" ",version:"v1",accepted:true)
+        ]).accepts([SocialLoginConsent(documentId:" ",version:"v1",accepted:true)]))
+        XCTAssertFalse(SocialLoginConsentCatalog(required:[
+            SocialLoginConsent(documentId:String(repeating:"x",count:81),version:"v1",accepted:true)
+        ]).accepts([SocialLoginConsent(documentId:String(repeating:"x",count:81),version:"v1",accepted:true)]))
+        let repeatedDocumentID=SocialLoginConsentCatalog(required:[
+            SocialLoginConsent(documentId:"terms.required",version:"v2",accepted:true),
+            SocialLoginConsent(documentId:"terms.required",version:"v3",accepted:true)
+        ])
+        XCTAssertTrue(repeatedDocumentID.accepts(repeatedDocumentID.required))
     }
 
     func testProviderCancellationDoesNotVerifyOrSubmitAnythingElse() async throws {

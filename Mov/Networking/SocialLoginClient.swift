@@ -37,6 +37,35 @@ struct SocialLoginConsent: Codable, Equatable, Sendable {
     }
 }
 
+/// Validates an injected consent catalog against the backend's exact required set.
+/// Production document IDs and versions must come from the active backend catalog.
+struct SocialLoginConsentCatalog: Sendable {
+    let required: [SocialLoginConsent]
+
+    func accepts(_ supplied: [SocialLoginConsent]?) -> Bool {
+        guard !required.isEmpty, let supplied, supplied.count == required.count, supplied.count <= 16,
+              required.allSatisfy({ item in
+                  !item.documentId.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty
+                      && !item.version.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty
+                      && item.documentId.utf16.count <= 80 && item.version.utf16.count <= 80
+              }),
+              Set(required.map(ConsentKey.init)).count == required.count,
+              Set(supplied.map(ConsentKey.init)).count == supplied.count else { return false }
+        let requiredKeys=Set(required.map(ConsentKey.init))
+        return supplied.allSatisfy { $0.accepted && requiredKeys.contains(ConsentKey($0)) }
+    }
+
+    private struct ConsentKey: Hashable {
+        let documentId:String
+        let version:String
+
+        init(_ consent:SocialLoginConsent) {
+            documentId=consent.documentId
+            version=consent.version
+        }
+    }
+}
+
 struct SocialLoginCompletionRequest: Equatable, Sendable {
     let socialSignupProof: String
     let requestID: UUID
@@ -83,6 +112,7 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
     case invalidResponse
     case invalidCredentials
     case termsNotAccepted
+    case signupProofInvalid
     case nicknameAlreadyUsed
     case signupRequestConflict
     case tooManyRequests
@@ -101,6 +131,8 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
             "로그인 응답을 확인할 수 없어요. 다시 시도해 주세요."
         case .termsNotAccepted:
             "필수 약관에 동의해 주세요."
+        case .signupProofInvalid:
+            "소셜 인증이 만료됐어요. 로그인 화면에서 다시 시작해 주세요."
         case .nicknameAlreadyUsed:
             "이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해 주세요."
         case .signupRequestConflict:
@@ -357,7 +389,9 @@ struct SocialLoginClient: SocialLoginServing {
             .signupRequestConflict
         case (422, "TERMS_NOT_ACCEPTED"):
             .termsNotAccepted
-        case (422, "VALIDATION_FAILED"):
+        case (422, "SIGNUP_PROOF_INVALID"):
+            .signupProofInvalid
+        case (400, "VALIDATION_FAILED"), (422, "VALIDATION_FAILED"):
             .invalidRequest
         case (429, _):
             .tooManyRequests

@@ -1,18 +1,26 @@
 import SwiftUI
 
+enum WireframeSocialLoginFixtureTerms {
+    static let catalog=SocialLoginConsentCatalog(required:[
+        SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)
+    ])
+}
+
 /// API and provider seams used only by social-login UI fixtures.
 actor WireframeSocialLoginServiceFixture: SocialLoginServing {
     private let requiresSignup: Bool
     private let delayCompletion: Bool
     private var shouldFailVerification: Bool
+    private var shouldExpireSignupProof: Bool
     private let challenge = SocialLoginChallenge(state: String(repeating: "s", count: 43), nonce: String(repeating: "n", count: 43), expiresInSeconds: 600)
     private let proof = SocialLoginProof(socialSignupProof: String(repeating: "p", count: 43), expiresInSeconds: 600)
     private let tokens = SocialLoginSessionTokens(accessToken: "fixture-only-access", refreshToken: "fixture-only-refresh", tokenType: "Bearer", accessExpiresInSeconds: 900, refreshExpiresInSeconds: 604_800)
 
-    init(requiresSignup: Bool, failVerificationOnce: Bool, delayCompletion: Bool) {
+    init(requiresSignup: Bool, failVerificationOnce: Bool, delayCompletion: Bool, expireSignupProofOnce: Bool) {
         self.requiresSignup = requiresSignup
         self.shouldFailVerification = failVerificationOnce
         self.delayCompletion = delayCompletion
+        self.shouldExpireSignupProof = expireSignupProofOnce
     }
 
     func issueChallenge(provider: SocialLoginProvider, deviceID: UUID) async throws -> SocialLoginChallenge {
@@ -28,8 +36,17 @@ actor WireframeSocialLoginServiceFixture: SocialLoginServing {
     }
 
     func complete(_ request: SocialLoginCompletionRequest) async throws -> SocialLoginSessionTokens {
-        if requiresSignup && (request.nickname == nil || request.termsConsents == nil) {
-            throw SocialLoginFailure.termsNotAccepted
+        if requiresSignup {
+            guard request.nickname != nil, WireframeSocialLoginFixtureTerms.catalog.accepts(request.termsConsents) else {
+                throw SocialLoginFailure.termsNotAccepted
+            }
+            if shouldExpireSignupProof {
+                shouldExpireSignupProof=false
+                throw SocialLoginFailure.signupProofInvalid
+            }
+            guard WSignupNicknameValidation.error(for:request.nickname ?? "")==nil else {
+                throw SocialLoginFailure.invalidRequest
+            }
         }
         if delayCompletion { try await Task.sleep(for: .milliseconds(2_000)) }
         return tokens
@@ -86,7 +103,7 @@ extension WireframeRoot {
     var loginFailure:some View {
         WPage(title:WLoginFailureCopy.title,back:{go("A01")}) {
             WHeading(text:WLoginFailureCopy.heading).padding(.top,9)
-            WText(text:WLoginFailureCopy.body)
+            WText(text:ui.error.isEmpty ? WLoginFailureCopy.body : ui.error)
             WAuthNotice(text:WLoginFailureCopy.notice,sourceWrapping:true)
         } actions: {
             Button("다시 시도"){go("A01")}
