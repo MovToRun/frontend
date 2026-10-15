@@ -3,7 +3,13 @@ import UIKit
 @MainActor final class LaunchTests:XCTestCase {
     var app=XCUIApplication()
     private let isolatedStoreSuite="mov.ui.fixture.\(UUID().uuidString)"
+    private var accountLinkFixtureSuiteForCleanup:String?
     override func setUp(){continueAfterFailure=false}
+    override func tearDown(){
+        if app.state != .notRunning { app.terminate() }
+        if let suite=accountLinkFixtureSuiteForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        super.tearDown()
+    }
     private func makeFixtureStoreSuite(_ prefix:String)->String {
         "\(prefix).\(UUID().uuidString)"
     }
@@ -16,7 +22,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-M01"].waitForExistence(timeout:15))
         XCTAssertTrue(app.staticTexts["remoteProfileNickname"].waitForExistence(timeout:8),app.debugDescription)
     }
-    func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
+    func tap(_ label:String){let matches=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label));let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in matches.allElementsBoundByIndex.contains(where:{$0.isHittable})},object:nil);let details=label.hasPrefix("accountLinkReauthenticate-") ? "\n"+app.debugDescription:"";XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"Visible button: "+label+details);matches.allElementsBoundByIndex.first(where:{$0.isHittable})?.tap()}
     private func scrollCurrentScreen(){
         let visible=app.scrollViews.allElementsBoundByIndex.first{$0.isHittable && $0.frame.minX>=0}
         visible?.swipeUp()
@@ -3340,6 +3346,144 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    private func openAccountLinkFixture(_ extraArguments:[String]=[]) {
+        let suite=makeFixtureStoreSuite("mov.wireframe.test.account-link")
+        accountLinkFixtureSuiteForCleanup=suite
+        app.launchArguments=["-wire-screen","T05","-wire-fixture","-wire-account-link-fixture","-wire-test-store-suite",suite,"-wire-reset"]+extraArguments
+        if app.state != .notRunning { app.terminate() }
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:15),app.debugDescription)
+        XCTAssertTrue(app.buttons["account-link-method-Google"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    private func beginGoogleAccountLink() {
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.buttons["accountLinkSubmit"].waitForExistence(timeout:5),app.debugDescription)
+    }
+
+    func testAccountLinkSuccessRefreshesMethodsAndCompletionReturnsToProviders() {
+        openAccountLinkFixture()
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Google이\n연결됐어요"].exists,app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.buttons["account-link-method-Google"].debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-Google"].isEnabled,"A completed provider cannot be submitted again")
+    }
+
+    func testAccountLinkConflictRequiresFreshReauthenticationBeforeRetry() {
+        openAccountLinkFixture(["-wire-account-link-fail-once"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.buttons["accountLinkRetry"].isEnabled,app.debugDescription)
+        tap("accountLinkRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkAuthorizationCancellationReturnsToProviderListUnchanged() {
+        openAccountLinkFixture(["-wire-account-link-cancel-target"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.buttons["account-link-method-Google"].debugDescription)
+    }
+
+    func testAccountLinkReauthenticationCancellationReturnsToProviderList() {
+        openAccountLinkFixture(["-wire-account-link-cancel-reauth"])
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.buttons["account-link-method-Google"].debugDescription)
+    }
+
+    func testAccountLinkSupportsExistingPasswordReauthentication() {
+        openAccountLinkFixture(["-wire-account-link-local-password"])
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        let password=app.secureTextFields["accountLinkPassword"]
+        XCTAssertTrue(password.waitForExistence(timeout:5),app.debugDescription)
+        password.tap()
+        password.typeText("fixture-password")
+        tap("accountLinkReauthenticate-password")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkAlreadyLinkedProviderIsShownAsConnectedAndDisabled() {
+        openAccountLinkFixture(["-wire-account-link-google-already-linked"])
+        let google=app.buttons["account-link-method-Google"]
+        XCTAssertTrue(google.label.contains("연결됨"),google.debugDescription)
+        XCTAssertFalse(google.isEnabled,"An already-linked provider cannot start another link flow")
+    }
+
+    func testAccountLinkDuplicateSubmitIsDisabledWhileCompletionIsInFlight() {
+        openAccountLinkFixture(["-wire-account-link-delay-completion"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        let submit=app.buttons["accountLinkSubmit"]
+        let disabled=XCTNSPredicateExpectation(predicate:NSPredicate(format:"isEnabled == false"),object:submit)
+        XCTAssertEqual(XCTWaiter.wait(for:[disabled],timeout:3),.completed,app.debugDescription)
+        let back=app.buttons["accountLinkBack"]
+        let cancel=app.buttons["accountLinkCancel"]
+        XCTAssertTrue(back.waitForExistence(timeout:3),app.debugDescription)
+        XCTAssertFalse(back.isEnabled,"Back is locked after the server mutation is submitted")
+        XCTAssertFalse(cancel.isEnabled,"Cancel is locked after the server mutation is submitted")
+        back.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        cancel.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].exists,"Back and cancel taps cannot leave a submitted mutation unresolved")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkLostCompletionResponseReconcilesLinkedMethods() {
+        openAccountLinkFixture(["-wire-account-link-response-lost-once"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.debugDescription)
+    }
+
+    func testAccountLinkUnknownCompletionRequiresStatusConfirmationBeforeLeaving() {
+        openAccountLinkFixture(["-wire-account-link-response-lost-once","-wire-account-link-status-read-lost-once"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:8),app.debugDescription)
+        let back=app.buttons["accountLinkBack"]
+        let cancel=app.buttons["accountLinkCancel"]
+        let retry=app.buttons["accountLinkStatusRetry"]
+        XCTAssertFalse(back.isEnabled,"An unresolved server mutation keeps navigation locked")
+        XCTAssertFalse(cancel.isEnabled,"An unresolved server mutation cannot be cancelled")
+        XCTAssertTrue(retry.isEnabled,app.debugDescription)
+        tap("accountLinkStatusRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkConfigurationMissingShowsDisabledUnavailableState() {
+        let suite=makeFixtureStoreSuite("mov.wireframe.test.account-link-unconfigured")
+        accountLinkFixtureSuiteForCleanup=suite
+        app.launchArguments=["-wire-screen","T05","-wire-fixture","-wire-account-link-unconfigured","-wire-test-store-suite",suite,"-wire-reset"]
+        if app.state != .notRunning { app.terminate() }
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:15),app.debugDescription)
+        let google=app.buttons["account-link-method-Google"]
+        XCTAssertTrue(google.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(google.isEnabled,"Provider links must be disabled until API, auth, and OAuth dependencies are configured")
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["accountLinkSubmit"].exists,"An unavailable connection must not expose a fake or live submit action")
+    }
+
     func testA02ConsentReviewPartialRequiredAndCompletion() {
         openAuthFixture("A02",suite:"mov.wireframe.test.a02-consent-review")
         XCTAssertTrue(app.staticTexts["필수 항목을 확인하고 동의해 주세요.\n실제 법적 동의가 아닌 화면 검토입니다."].exists)
