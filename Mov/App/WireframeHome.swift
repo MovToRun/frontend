@@ -75,6 +75,7 @@ struct WCommunityCrew:Identifiable,Equatable {
     let minimumRank:Int
     let tags:[String]
     var boards:[WCommunityCrewBoard]
+    var level:Int?=nil
     var photoData:Data?=nil
     var operatorMemberIDs:Set<String>=[]
     var warnings:[WCommunityCrewWarning]=[]
@@ -138,6 +139,9 @@ enum WCommunityCrewReviewResult:Equatable {case approved,rejected,missingApplica
 enum WCommunityCrewFixtures {
     static func boards(for id:String)->[WCommunityCrewBoard] {
         ["공지사항","러닝 일정","러닝 인증","자유게시판"].enumerated().map{WCommunityCrewBoard(id:"\(id)-board-\($0.offset)",title:$0.element,kind:$0.offset==0 ? .notice:.member)}
+    }
+    static func informationReviewFixture(_ crew:WCommunityCrew,introduction:String,ownerMemberID:String?=nil,level:Int?,boards:[WCommunityCrewBoard]?=nil)->WCommunityCrew {
+        WCommunityCrew(id:crew.id,name:crew.name,introduction:introduction,region:crew.region,guidance:crew.guidance,ownerMemberID:ownerMemberID ?? crew.ownerMemberID,memberIDs:crew.memberIDs,minimumRank:crew.minimumRank,tags:crew.tags,boards:boards ?? crew.boards,level:level,photoData:crew.photoData,operatorMemberIDs:crew.operatorMemberIDs,warnings:crew.warnings,announcements:crew.announcements)
     }
     static let values:[WCommunityCrew] = {
         let dawnBoards=boards(for:"dawn"),riverBoards=boards(for:"river"),fullBoards=boards(for:"full")
@@ -1575,7 +1579,7 @@ extension WireframeRoot {
         case .ready:
             let crew:WCommunityCrew
             if let id=ui.communityCrewDraftID,let existing=communityCrew(id){
-                crew=WCommunityCrew(id:existing.id,name:ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines),introduction:ui.communityCrewDraftIntroduction.trimmingCharacters(in:.whitespacesAndNewlines),region:ui.communityCrewDraftRegion,guidance:existing.guidance,ownerMemberID:existing.ownerMemberID,memberIDs:existing.memberIDs,minimumRank:ui.communityCrewDraftRank,tags:existing.tags,boards:existing.boards,photoData:ui.communityCrewDraftPhoto,operatorMemberIDs:existing.operatorMemberIDs,warnings:existing.warnings,announcements:existing.announcements)
+                crew=WCommunityCrew(id:existing.id,name:ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines),introduction:ui.communityCrewDraftIntroduction.trimmingCharacters(in:.whitespacesAndNewlines),region:ui.communityCrewDraftRegion,guidance:existing.guidance,ownerMemberID:existing.ownerMemberID,memberIDs:existing.memberIDs,minimumRank:ui.communityCrewDraftRank,tags:existing.tags,boards:existing.boards,level:existing.level,photoData:ui.communityCrewDraftPhoto,operatorMemberIDs:existing.operatorMemberIDs,warnings:existing.warnings,announcements:existing.announcements)
                 ui.communityCrewOverrides[id]=crew
             }else{
                 let id="local-crew-\(UUID().uuidString)"
@@ -1748,14 +1752,13 @@ extension WireframeRoot {
             VStack(alignment:.leading,spacing:10){Text(crew.name).font(W.font(22,.semibold)).accessibilityIdentifier("communityCrewInfoName");Text(crew.introduction).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(5).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoIntroduction")}
             VStack(spacing:0){
                 communityCrewInformationRow("활동 지역",value:crew.region,identifier:"communityCrewInfoRegion")
-                communityCrewInformationRow("크루 레벨",value:"운영 기준 미정",identifier:"communityCrewInfoLevel")
+                communityCrewInformationRow("크루 레벨",value:crew.level.map{"Lv.\($0)"} ?? "—",identifier:"communityCrewInfoLevel")
                 communityCrewInformationRow("멤버",value:"\(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명",identifier:"communityCrewInfoMembers")
                 communityCrewInformationRow("가입 등급",value:rank,identifier:"communityCrewInfoRank")
                 communityCrewInformationRow("크루장",value:owner.name,identifier:"communityCrewInfoOwner")
-                communityCrewInformationRow("활성 게시판",value:"\(activeBoards)/\(WCommunityCrewPolicy.boardCapacity)개",identifier:"communityCrewInfoBoards")
+                communityCrewInformationRow("게시판",value:"\(activeBoards)/\(WCommunityCrewPolicy.boardCapacity)개",identifier:"communityCrewInfoBoards")
             }
             VStack(alignment:.leading,spacing:10){Text("가입 안내").font(W.font(14,.medium));Text(crew.guidance.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "등록된 가입 안내가 없어요.":crew.guidance).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(6).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoGuidance")}.frame(maxWidth:.infinity,alignment:.leading).padding(.top,8)
-            WNotice(text:"크루 정보는 이 기기의 로컬 예시예요. 레벨 운영 기준과 서버 상태는 연결되어 있지 않아요.").accessibilityIdentifier("communityCrewInfoLocalNotice")
         }actions:{}
         return AnyView(page.accessibilityIdentifier("communityCrewInformation"))
     }
@@ -1787,7 +1790,6 @@ extension WireframeRoot {
     var communityCrewApplicationList:some View {
         let pending=ui.communityCrewApplications.filter{$0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}
         return WPage(title:"신청 중인 크루",back:back){
-            WNotice(text:"가입 신청 상태는 이 기기의 로컬 예시예요. 실제 신청 취소나 크루 알림은 전송되지 않아요.").accessibilityIdentifier("communityCrewApplicationsLocalNotice")
             if pending.isEmpty{Text("기다리는 가입 신청이 없어요").font(W.font(14)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:120,alignment:.center).accessibilityIdentifier("communityCrewApplicationsEmpty")}
             else{VStack(spacing:0){ForEach(pending){application in
                 let crew=communityCrew(application.crewID)
