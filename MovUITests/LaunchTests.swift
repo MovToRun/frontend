@@ -3088,6 +3088,25 @@ extension LaunchTests {
         tap("로그인으로");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
 
+    func testSessionStoreDeleteFailureRetriesSameCompletionThenReturnsToLogin() {
+        launch(extraArguments:["-wire-password-reset-session-store-fixture","-wire-password-reset-session-store-fail-once"])
+        tap("비밀번호 찾기");tap("가상 예시값 채우기");tapPrimary()
+        tap("계속");tap("fillDemoResetCode")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5))
+        tap("가상 예시값 채우기");tapPrimary()
+
+        XCTAssertTrue(app.staticTexts["비밀번호는 변경됐지만 이 기기의 로그인 정보를 정리하지 못했어요. 같은 내용으로 다시 시도해 주세요."].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].exists,"A failed persisted-session delete must keep the user on A12")
+        XCTAssertFalse(app.descendants(matching:.any)["screen-A13"].exists)
+
+        tapPrimary()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:5),"The exact idempotent completion can retry after the one-shot store failure")
+        XCTAssertTrue(app.staticTexts["이제 로그인해 주세요"].exists)
+        XCTAssertFalse(app.buttons["뒤로"].exists,"A completed reset must not reopen the proof or password screen")
+        tap("로그인으로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+
     func testResetCompletesInNormalRootViewWhenNoServerSessionIsPersisted() {
         launch()
         tap("비밀번호 찾기");tap("가상 예시값 채우기");tapPrimary()
