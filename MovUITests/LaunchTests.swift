@@ -3018,9 +3018,10 @@ extension LaunchTests {
 @MainActor final class PasswordResetUITests:XCTestCase {
     private var app=XCUIApplication()
     override func setUp(){continueAfterFailure=false}
-    private func launch(_ screen:String="A01",resendReady:Bool=false){
+    private func launch(_ screen:String="A01",resendReady:Bool=false,extraArguments:[String]=[]){
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.password-reset.ui.\(UUID().uuidString)","-wire-reset","-appearance","light"]
         if resendReady{app.launchArguments.append("-wire-password-reset-resend-ready")}
+        app.launchArguments += extraArguments
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:15),app.debugDescription)
     }
     private func tap(_ label:String){let button=app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).firstMatch;XCTAssertTrue(button.waitForExistence(timeout:5),label);XCTAssertTrue(button.isHittable,label);button.tap()}
@@ -3068,6 +3069,23 @@ extension LaunchTests {
         tap("changeResetEmail");XCTAssertTrue(app.descendants(matching:.any)["screen-A10"].waitForExistence(timeout:5))
         tapPrimary();XCTAssertTrue(app.staticTexts["이메일을 입력해 주세요."].waitForExistence(timeout:5))
         tap("취소");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
+    }
+
+    func testCommunicationRetriesKeepExactCompletionAndCompletedScreenHasNoBack() {
+        launch(extraArguments:["-wire-password-reset-challenge-timeout-once","-wire-password-reset-confirm-timeout-once","-wire-password-reset-completion-response-lost-once"])
+        tap("비밀번호 찾기");tap("가상 예시값 채우기");tapPrimary()
+        XCTAssertTrue(app.staticTexts["연결 상태를 확인한 뒤 같은 내용으로 다시 시도해 주세요."].waitForExistence(timeout:5))
+        tapPrimary();XCTAssertTrue(app.descendants(matching:.any)["screen-A11"].waitForExistence(timeout:5))
+        tap("계속");XCTAssertTrue(app.descendants(matching:.any)["screen-A24"].waitForExistence(timeout:5))
+        tap("fillDemoResetCode")
+        XCTAssertTrue(app.staticTexts["연결 상태를 확인한 뒤 같은 내용으로 다시 시도해 주세요."].waitForExistence(timeout:5))
+        tap("verifyResetCode");XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5))
+        tap("가상 예시값 채우기");tapPrimary()
+        XCTAssertTrue(app.staticTexts["연결 상태를 확인한 뒤 같은 내용으로 다시 시도해 주세요."].waitForExistence(timeout:5))
+        tapPrimary()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["뒤로"].exists,"A completed reset cannot navigate back into the proof or password form")
+        tap("로그인으로");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
 }
 

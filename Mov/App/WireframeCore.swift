@@ -450,6 +450,7 @@ struct WireframeRemoteReadDependencies {
     let runningProgressLoader: RunningProgressLoader?
     let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
+    let passwordResetService: (any PasswordResetServing)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
@@ -460,7 +461,8 @@ struct WireframeRemoteReadDependencies {
         runRecordsDeleter: (any RunRecordsDeleting)? = nil,
         runningProgressLoader: RunningProgressLoader? = nil,
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
-        sessionLogoutRequester: (any SessionLogoutRequesting)? = nil
+        sessionLogoutRequester: (any SessionLogoutRequesting)? = nil,
+        passwordResetService: (any PasswordResetServing)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.memberProfileUpdater = memberProfileUpdater
@@ -471,6 +473,7 @@ struct WireframeRemoteReadDependencies {
         self.runningProgressLoader = runningProgressLoader
         self.weeklyGoalWriter = weeklyGoalWriter
         self.sessionLogoutRequester = sessionLogoutRequester
+        self.passwordResetService = passwordResetService
     }
 }
 
@@ -2243,7 +2246,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var goal=RunGoal();var weekly=WeeklyGoal()
     var testing=false
     var saving=false;var passwordChanged=false;var resetBack="A01"
-    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession(issuer:Self.passwordResetCodeIssuer)}
+    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession()}
     func seedCommunityPhotoFixtures(draft:Bool,post:Bool,videoPost:Bool=false,videoDraft:Bool=false){
         if draft,let photos=try? communityAttachmentStore.makeReviewFixtures(){communityDraftAttachments=photos.map(WCommunityAttachment.photo);communityDraftTitle="사진 첨부 예시";communityDraftBody=""}
         if post,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let draft=try? communityAttachmentStore.makeReviewFixtures(count:1),let photos=try? communityAttachmentStore.commit(draft,forPost:"p1"){communityPosts[index].attachments=photos.map(WCommunityAttachment.photo)}
@@ -2283,7 +2286,6 @@ struct WCommunityVerificationState:Codable,Equatable {
     }
     static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
     static let passwordResetScreens:Set<String>=["A10","A11","A12","A13","A24","A25","A26","A27","A28"]
-    static let passwordResetCodeIssuer=WLocalPasswordResetCodeIssuer(startingAt:700_000)
     func clearAuthSecrets(preservingOTP:Bool=false){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];if !preservingOTP{code="";otpFocused=false;lastAttemptedOTP=nil}}
     func leaveAuth(for next:String){
         if screen=="A02" && next != "A02",consentSequenceID != nil{consentTerms=consentSequenceOriginalTerms;consentPrivacy=consentSequenceOriginalPrivacy;consentSequenceID=nil;consentBusy=false}
@@ -2309,7 +2311,8 @@ struct WCommunityVerificationState:Codable,Equatable {
     func openRemoteRecord(id:String){remoteSelectedRunID=id;selected=nil;forward=true;path.append(screen);screen="L04";error=""}
     func back(){
         if screen=="A15"{go("H00");return}
-        if screen=="A13" || (screen=="A18" && passwordChanged){go("A01");return}
+        if screen=="A13"{return}
+        if screen=="A18" && passwordChanged{go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if ["L04","L07"].contains(screen), !["L04","L07"].contains(destination){remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
 struct RootView:View {
@@ -2346,6 +2349,23 @@ struct RootView:View {
                 alwaysFails:args.contains("-wire-auth-logout-fail"),
                 delaysResponse:args.contains("-wire-auth-logout-delay")
             ) : nil
+        let passwordResetFixture: WireframePasswordResetFixture? = WReviewMode.tools && args.contains("-wire-fixture")
+            ? WireframePasswordResetFixture(
+                initialChallenge: {
+                    guard let index=args.firstIndex(of:"-wire-screen"),args.indices.contains(index+1) else{return false}
+                    return WireState.passwordResetScreens.contains(args[index+1]) && args[index+1] != "A10"
+                }(),
+                initialCode: args.contains("-wire-screen") && args.indices.contains((args.firstIndex(of:"-wire-screen") ?? 0)+1) && args[(args.firstIndex(of:"-wire-screen") ?? 0)+1] == "A28" ? "700001":"700000",
+                initialChallengeAge: {
+                    guard let index=args.firstIndex(of:"-wire-screen"),args.indices.contains(index+1) else{return 0}
+                    if args[index+1]=="A26"{return PasswordResetPolicy.codeLifetime+1}
+                    if args[index+1]=="A28" || args.contains("-wire-password-reset-resend-ready"){return PasswordResetPolicy.resendInterval}
+                    return 0
+                }(),
+                failChallengeOnce:args.contains("-wire-password-reset-challenge-timeout-once"),
+                failVerificationOnce:args.contains("-wire-password-reset-confirm-timeout-once"),
+                loseCompletionResponseOnce:args.contains("-wire-password-reset-completion-response-lost-once")
+            ) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
@@ -2353,7 +2373,7 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -2381,7 +2401,8 @@ struct RootView:View {
             runRecordsDeleter:runDeleteFixture ? runClient:nil,
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
-            sessionLogoutRequester:logoutFixture
+            sessionLogoutRequester:logoutFixture,
+            passwordResetService:passwordResetFixture
         )
     }
 
@@ -2679,6 +2700,7 @@ struct WireframeRoot:View {
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
+    @State var passwordResetService: (any PasswordResetServing)?
     @State var weeklyGoalDraftVersion:Int64?
     @State var weeklyGoalDraftScopeID:String?
     @State var weeklyGoalDraftDirty=false
@@ -2691,6 +2713,11 @@ struct WireframeRoot:View {
         runUploadQueue: (any RunUploadEnqueueing)? = nil,
         runUploadDrainer: (any RunUploadDraining)? = nil
     ){
+        let bundledResetService: (any PasswordResetServing)? = {
+            guard let configuration=try? APIClientConfiguration.bundled() else{return nil}
+            return PasswordResetClient(apiClient:APIClient(configuration:configuration))
+        }()
+        _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService ?? bundledResetService)
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults

@@ -21,7 +21,7 @@ extension WireframeRoot {
         switch ui.screen {
         case "A06":return .init(title:"동의 내용",heading:ui.consentTopic,text:"서비스 이용과 개인정보 처리 내용을 확인해 주세요.",notice:"운동 기록과 프로필은 이 기기에 저장돼요. 앱 삭제 시 복구가 어려울 수 있어요.",buttons:[("확인했어요","consent-reviewed",0)])
         case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
-        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
+        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[("로그인으로","reset-cancel",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜 계정":ui.provider)+"로\n계속할까요?",text:"선택한 로그인 수단으로 시작해요.",buttons:[((ui.provider.isEmpty ? "선택한 계정":ui.provider)+"로 계속","social-success",0),("취소","A01",1)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "다시 로그인해 주세요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "설정을 마쳤어요. 로그인 화면으로 돌아가요.":"로그인 수단에서 연결 상태를 확인할 수 있어요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
@@ -84,7 +84,7 @@ extension WireframeRoot {
         case "A04":return .init(title:WLoginFailureCopy.title,heading:WLoginFailureCopy.heading,text:WLoginFailureCopy.body,notice:WLoginFailureCopy.notice,buttons:[("다시 시도","A01",0)])
         case "A06":return .init(title:"동의 내용 검토",heading:ui.consentTopic,text:"이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.",notice:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.",buttons:[("확인했어요","consent-reviewed",0)])
         case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
-        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[(ui.resetBack=="T05" ? "로그인 수단으로":"로그인으로","reset-cancel",0)])
+        case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[("로그인으로","reset-cancel",0)])
         case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜":ui.provider)+" 로그인 예시",text:"실제 제공자에 연결하지 않아요.\n아래에서 가상 인증 결과를 선택해 주세요.",buttons:[("인증 성공 · 예시","social-success",0),("인증 오류 · 예시","A04",1),("인증 취소","A01",3)])
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "변경 완료 화면이에요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "실제 비밀번호는 바뀌지 않았어요.\n변경 데모를 마쳐 다시 로그인해야 해요.\n입력한 비밀번호는 보관하지 않아요.":"이 브라우저의 데모 연결 상태만 바뀌었어요.\n입력한 비밀번호는 보관하지 않아요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
@@ -122,7 +122,7 @@ extension WireframeRoot {
         default:return .init(title:"화면 확인",heading:"화면을 확인해 주세요",text:"",buttons:[("홈으로","H00",0)])
         }
     }
-    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ui.screen=="T12" ? nil:{back()};return WPage(title:data.title,back:navigationBack){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
+    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ["T12","A13"].contains(ui.screen) ? nil:{back()};return WPage(title:data.title,back:navigationBack){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
         if ui.screen=="H06"{WMetric(record:current)}
         if ui.screen=="P01"{WMap().frame(height:172).clipShape(RoundedRectangle(cornerRadius:14))}
         if ui.screen=="A06"{VStack(spacing:0){ForEach(["서비스 이용 목적과 범위","회원 식별 및 제공자 연결 정보","위치·경로·운동 기록 처리","선택 체중과 칼로리 추정","기기 저장·보존·삭제 정책","동의 철회와 문의 방법"],id:\.self){WRow(title:$0,plain:true)}}}
@@ -139,7 +139,9 @@ extension WireframeRoot {
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3{Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else if ui.screen=="L07" && item.1=="L04"{Button(item.0){back()}.buttonStyle(WButtonStyle(kind:item.2))}else if ui.screen=="L07",let runID=ui.remoteSelectedRunID,item.1=="delete-record"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isDeletingRunRecord || !remoteReads.canDeleteRunRecord(runID)).accessibilityIdentifier("confirmDeleteRecord")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
     func infoAction(_ action:String){switch action {
-    case "reset-cancel":go(ui.resetBack)
+    case "reset-cancel":
+        if ui.screen=="A13"{guard ui.passwordReset.completed else{return};go("A01")}
+        else if ui.screen=="A11"{ui.passwordReset.invalidate();go(ui.resetBack)}
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
     case "reset-verification":guard ui.screen=="A11",ui.passwordReset.issuedAt != nil else{return};go("A24")
     case "consent-reviewed":ui.error="";if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()

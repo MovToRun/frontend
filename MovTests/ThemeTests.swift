@@ -2765,77 +2765,112 @@ final class AuthSessionClientSessionTests: XCTestCase {
 }
 
 final class PasswordResetFlowTests:XCTestCase {
-    func testResetResendRejectsOldCodeAndAcceptsOnlyCurrentCode() {
-        let start=Date(timeIntervalSince1970:1_800_000_000)
-        var reset=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000))
-        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
-        XCTAssertEqual(reset.issuedCode,"700000")
-        let oldCode=reset.issuedCode
-        XCTAssertTrue(reset.resend(now:start.addingTimeInterval(60)))
-        XCTAssertEqual(reset.issuedCode,"700001")
-        XCTAssertEqual(reset.verify(oldCode,now:start.addingTimeInterval(61)),.rejected)
-        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(62)),.accepted)
-        XCTAssertTrue(reset.hasProof)
-        XCTAssertFalse(reset.resend(now:start.addingTimeInterval(123)),"A verified challenge cannot be replaced while its proof is in use")
+    private let start=Date(timeIntervalSince1970:1_800_000_000)
+    private func preparedReset() -> WPasswordResetSession {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let request=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.finishChallengeRequest(request,now:start))
+        return reset
+    }
+    private func addProof(to reset:inout WPasswordResetSession,at now:Date) {
+        reset.code="700000"
+        let operation=try! XCTUnwrap(reset.beginVerification(now:now))
+        XCTAssertTrue(reset.finishVerification(operation,proof:PasswordResetProof(value:String(repeating:"R",count:43),expiresInSeconds:600),now:now))
     }
 
-    func testResetSessionsUseDistinctCodesFromSignupAndPreviousResetFlow() {
-        let start=Date(timeIntervalSince1970:1_800_000_000)
+    func testChallengeDedupeCodeLifetimeResendCooldownAndFiveAttemptLock() {
+        var reset=preparedReset()
+        XCTAssertEqual(reset.issuedAt,start)
+        XCTAssertEqual(reset.beginChallengeRequest(now:start),nil,"An active challenge cannot be resent before 60 seconds")
+        XCTAssertNil(reset.beginVerification(now:start.addingTimeInterval(300)),"A code expires at five minutes")
+        for attempt in 0..<5 {
+            reset.code=String(format:"%06d",100_000+attempt)
+            let operation=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(Double(attempt+1))))
+            let outcome=reset.failVerification(operation,failure:.verificationFailed(requestID:"fixture"))
+            XCTAssertEqual(outcome,attempt==4 ? .locked:.rejected)
+        }
+        XCTAssertNil(reset.beginVerification(now:start.addingTimeInterval(10)),"Five rejected codes lock this challenge")
+        XCTAssertNil(reset.beginChallengeRequest(now:start.addingTimeInterval(59)))
+        let resend=try! XCTUnwrap(reset.beginChallengeRequest(now:start.addingTimeInterval(60)))
+        XCTAssertTrue(reset.isRequestingCode)
+        XCTAssertFalse(reset.beginChallengeRequest(now:start.addingTimeInterval(60.1)) != nil,"Double submission must not start another request")
+        XCTAssertTrue(reset.finishChallengeRequest(resend,now:start.addingTimeInterval(60),demoCode:"700001"))
+        XCTAssertEqual(reset.attempts,0)
+        XCTAssertEqual(reset.demoCode,"700001")
+    }
+
+    func testSignupCodeAndPasswordResetPurposeFailuresRemainSeparate() {
         var signup=WLocalOTPCodeIssuer()
         let signupCode=try! XCTUnwrap(signup.issueNext())
         XCTAssertEqual(signupCode,"482619")
-
-        let issuer=WLocalPasswordResetCodeIssuer(startingAt:700_000)
-        var reset=WPasswordResetSession(issuer:issuer)
-        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
-        let firstResetCode=reset.issuedCode
-        XCTAssertNotEqual(firstResetCode,signupCode)
-        XCTAssertEqual(reset.verify(signupCode,now:start.addingTimeInterval(1)),.rejected)
-        XCTAssertEqual(reset.verify(firstResetCode,now:start.addingTimeInterval(2)),.accepted)
-
-        var nextReset=WPasswordResetSession(issuer:issuer)
-        XCTAssertTrue(nextReset.begin(email:"runner@example.test",now:start.addingTimeInterval(70)))
-        let latestResetCode=nextReset.issuedCode
-        XCTAssertEqual(latestResetCode,"700001")
-        XCTAssertEqual(nextReset.verify(firstResetCode,now:start.addingTimeInterval(71)),.rejected)
-        XCTAssertEqual(nextReset.verify(latestResetCode,now:start.addingTimeInterval(72)),.accepted)
+        var reset=preparedReset();reset.code=signupCode
+        let verification=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(1)))
+        XCTAssertEqual(reset.failVerification(verification,failure:.verificationFailed(requestID:nil)),.rejected)
+        XCTAssertEqual(reset.attempts,1)
+        XCTAssertNil(reset.resetProof)
     }
 
-    func testResetEmailChangeAndCancellationInvalidateDelayedCompletion() {
-        let start=Date(timeIntervalSince1970:1_800_000_000)
-        var reset=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000))
-        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
-        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(1)),.accepted)
-        let completion=try! XCTUnwrap(reset.beginCompletion())
-        reset.emailDidChange("new@example.test")
-        XCTAssertEqual(reset.email,"new@example.test")
-        XCTAssertFalse(reset.hasProof)
-        XCTAssertFalse(reset.finishCompletion(completion),"An old flow must not complete after the email changes")
-
-        XCTAssertTrue(reset.begin(email:"runner@example.test",now:start))
-        XCTAssertEqual(reset.verify(reset.issuedCode,now:start.addingTimeInterval(1)),.accepted)
-        let canceled=try! XCTUnwrap(reset.beginCompletion())
-        reset.cancelCompletion()
-        XCTAssertFalse(reset.finishCompletion(canceled),"A canceled delayed completion must be ignored")
-        let abandoned=try! XCTUnwrap(reset.beginCompletion())
+    func testEmailChangeAndInvalidationRejectStaleNetworkResponses() {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let request=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        reset.emailDidChange("other@example.test")
+        XCTAssertFalse(reset.finishChallengeRequest(request,now:start),"A delayed result for the old email must be ignored")
+        XCTAssertEqual(reset.email,"other@example.test")
+        XCTAssertNil(reset.issuedAt)
+        let request2=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.finishChallengeRequest(request2,now:start))
+        reset.code="700000"
+        let verification=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(1)))
         reset.invalidate()
-        XCTAssertFalse(reset.finishCompletion(abandoned),"A closed flow must invalidate pending completion work")
+        XCTAssertEqual(reset.failVerification(verification,failure:.verificationFailed(requestID:nil)),.stale)
     }
 
-    func testResetChallengeExpiryLockAndSharedPasswordPolicy() {
-        let start=Date(timeIntervalSince1970:1_800_000_000)
-        var expired=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000));XCTAssertTrue(expired.begin(email:"runner@example.test",now:start))
-        XCTAssertEqual(expired.verify(expired.issuedCode,now:start.addingTimeInterval(300)),.expired)
-        XCTAssertTrue(expired.resend(now:start.addingTimeInterval(300)),"Expired challenges can recover by resending after the cooldown")
-        var locked=WPasswordResetSession(issuer:WLocalPasswordResetCodeIssuer(startingAt:700_000));XCTAssertTrue(locked.begin(email:"runner@example.test",now:start))
-        for n in 0..<WEmailChallengePolicy.maximumAttempts {
-            XCTAssertEqual(locked.verify(String(format:"%06d",100_000+n),now:start.addingTimeInterval(Double(n+1))),n==WEmailChallengePolicy.maximumAttempts-1 ? .locked:.rejected)
-        }
-        XCTAssertTrue(locked.resend(now:start.addingTimeInterval(60)),"Locked challenges can recover by resending after the cooldown")
-        XCTAssertEqual(locked.attempts,0)
-        XCTAssertTrue(WAuthValidation.password("MovDemo482619"))
-        XCTAssertFalse(WAuthValidation.password("short1"))
-        XCTAssertFalse(WAuthValidation.password("allletters"))
+    func testExpiredProofIsRejectedAndAmbiguousCompletionRetriesExactRequest() {
+        var reset=preparedReset();addProof(to:&reset,at:start.addingTimeInterval(1))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        XCTAssertNil(reset.beginCompletion(now:start.addingTimeInterval(601)),"A proof expires after ten minutes")
+        reset.expireProof();XCTAssertFalse(reset.hasProof)
+
+        addProof(to:&reset,at:start.addingTimeInterval(2))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        let first=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(3)))
+        XCTAssertTrue(reset.isCompleting)
+        XCTAssertNil(reset.beginCompletion(now:start.addingTimeInterval(3)),"A completion request cannot be submitted twice while in flight")
+        XCTAssertTrue(reset.failCompletion(first,failure:.transport(.timedOut)))
+        XCTAssertTrue(reset.requiresExactCompletionRetry)
+        reset.newPasswordDidChange("Different123")
+        XCTAssertEqual(reset.newPassword,first.password,"Uncertain outcomes lock the submitted password")
+        let retry=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(4)))
+        XCTAssertEqual(retry.requestID,first.requestID)
+        XCTAssertEqual(retry.resetProof,first.resetProof)
+        XCTAssertEqual(retry.email,first.email)
+        XCTAssertEqual(retry.password,first.password)
+        XCTAssertNotEqual(retry.id,first.id)
+        XCTAssertTrue(reset.finishCompletion(retry))
+        XCTAssertTrue(reset.completed)
+        XCTAssertFalse(reset.hasProof,"A successful proof can be consumed once")
+        XCTAssertNil(reset.beginCompletion())
+    }
+
+    func testKnownVerificationFailureDropsExpiredOrReusedProof() {
+        var reset=preparedReset();addProof(to:&reset,at:start.addingTimeInterval(1))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        let completion=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(2)))
+        XCTAssertTrue(reset.failCompletion(completion,failure:.verificationFailed(requestID:"fixture")))
+        XCTAssertFalse(reset.hasProof)
+        XCTAssertFalse(reset.requiresExactCompletionRetry)
+        XCTAssertTrue(reset.newPassword.isEmpty)
+    }
+
+    func testChallengeTransportFailureCanBeRetriedWithoutOverlappingRequests() {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let failed=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.failChallengeRequest(failed,message:PasswordResetFailure.transport(.timedOut).userMessage))
+        XCTAssertFalse(reset.isRequestingCode)
+        XCTAssertNil(reset.issuedAt)
+        let retry=try! XCTUnwrap(reset.beginChallengeRequest(now:start.addingTimeInterval(1)))
+        XCTAssertTrue(reset.finishChallengeRequest(retry,now:start.addingTimeInterval(1)))
+        XCTAssertNotNil(reset.issuedAt)
     }
 }
 
@@ -2990,7 +3025,7 @@ extension ThemeTests {
     @MainActor func testCompletedAuthDoesNotReopenCompletedSteps(){
         let state=WireState();state.screen="A01";state.path=["T01","T10"];state.go("H00");XCTAssertTrue(state.path.isEmpty)
         state.screen="A15";state.path=["A07","A19","A02","A03"];state.back();XCTAssertEqual(state.screen,"H00");XCTAssertTrue(state.path.isEmpty)
-        state.screen="A13";state.path=["A10","A11","A12"];state.back();XCTAssertEqual(state.screen,"A01");XCTAssertTrue(state.path.isEmpty)
+        state.screen="A13";state.path=["A10","A11","A12"];state.back();XCTAssertEqual(state.screen,"A13");XCTAssertEqual(state.path,["A10","A11","A12"])
         state.screen="A18";state.passwordChanged=true;state.path=["T01","T05","A17"];state.back();XCTAssertEqual(state.screen,"A01");XCTAssertTrue(state.path.isEmpty)
         state.screen="A19";state.authPassword="NotPersisted123";state.authConfirm=state.authPassword;state.go("A02");XCTAssertTrue(state.authPassword.isEmpty);XCTAssertTrue(state.authConfirm.isEmpty)
     }

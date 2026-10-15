@@ -22,7 +22,7 @@ extension WireframeRoot {
         let id=ui.screen
         let title=["A07":"회원가입","A10":"비밀번호 찾기","A12":"새 비밀번호","A16":"이메일 로그인 연결","A17":"이메일 로그인 관리"][id] ?? ""
         return VStack(spacing:0){
-            if id != "A01"{WHeader(title:title,back:{authBack(id)})}
+            if id != "A01"{WHeader(title:title,back:canLeavePasswordReset(id) ? {authBack(id)}:nil)}
             ScrollView{VStack(alignment:.leading,spacing:18){
                 if id=="A01"{VStack(alignment:.leading,spacing:24){Color.clear.frame(height:84);Text("오늘의 달리기를\n나의 기록으로").font(W.font(25,.bold)).lineSpacing(6)}}
                 else{WHeading(text:["A07":"모브와 함께 시작해요","A10":"비밀번호를\n다시 설정해요","A12":"새 비밀번호를 입력해요","A16":"이메일로도 로그인해요","A17":"비밀번호를 관리해요"][id] ?? "")}
@@ -42,7 +42,7 @@ extension WireframeRoot {
                     if reviewTools{Button{if id=="A10"{ui.passwordReset.email="runner@example.test";ui.passwordReset.error=""}else if id=="A12"{ui.passwordReset.newPassword="MovDemo482619";ui.passwordReset.confirmPassword="MovDemo482619";ui.passwordReset.error=""}else{ui.authFilled=true;ui.authEmail="runner@example.test";ui.authPassword="MovDemo482619";ui.authConfirm=ui.authPassword;ui.authCurrent=ui.authPassword;ui.error=""}}label:{Text("가상 예시값 채우기").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain)}
                     if !ui.passwordReset.error.isEmpty && ["A10","A12"].contains(id){WAuthNotice(text:ui.passwordReset.error,danger:true).padding(.vertical,8)}
                     if !ui.error.isEmpty && ui.authErrorField.isEmpty{WAuthNotice(text:ui.error,danger:true).padding(.vertical,8)}
-                    Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).accessibilityIdentifier("authPrimary")
+                    Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).disabled((id=="A10" && ui.passwordReset.isRequestingCode) || (id=="A12" && ui.passwordReset.isCompleting)).accessibilityIdentifier("authPrimary")
                 }
                 if id=="A01"{
                     VStack(spacing:0){
@@ -54,13 +54,19 @@ extension WireframeRoot {
                 }
                 if id=="A17"{VStack(alignment:.leading,spacing:0){Button("비밀번호 재설정"){ui.resetBack="T05";go("A10")}.font(W.font(13)).frame(minHeight:44);Button("이메일 로그인 연결 해제"){ui.provider="이메일";go(ui.profile.providers.count>1 ? "T08":"T09")}.font(W.font(13)).frame(minHeight:44)}}
                 if id=="A16"{authDemoNote}
-            }.padding(.horizontal,24).padding(.top,id=="A01" ? 26:24).padding(.bottom,24)}.scrollDismissesKeyboard(.immediately).modifier(WAuthBodyMotion())
-            if id != "A01"{Button(id=="A07" ? "가입 취소":"취소"){ui.authFilled=false;if ["A10","A12"].contains(id){ui.passwordReset.invalidate();go(ui.resetBack)}else{authBack(id)}}.buttonStyle(WButtonStyle(kind:1)).padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)}}
+                    }.padding(.horizontal,24).padding(.top,id=="A01" ? 26:24).padding(.bottom,24)}.scrollDismissesKeyboard(.immediately).modifier(WAuthBodyMotion())
+            if id=="A12"{WSecondTicker{tick in Color.clear.onChange(of:tick){_,now in expirePasswordResetProof(now:now)}}.frame(width:0,height:0)}
+            if id != "A01"{Button(id=="A07" ? "가입 취소":"취소"){ui.authFilled=false;if ["A10","A11","A12"].contains(id){guard canLeavePasswordReset(id)else{return};ui.passwordReset.invalidate();go(ui.resetBack)}else{authBack(id)}}.buttonStyle(WButtonStyle(kind:1)).padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)}.disabled(!canLeavePasswordReset(id))}
         }
+    }
+    func canLeavePasswordReset(_ id:String)->Bool {
+        guard ["A10","A11","A12"].contains(id) else{return true}
+        return !ui.passwordReset.isCompleting && !ui.passwordReset.requiresExactCompletionRetry
     }
     func authBack(_ id:String){
         if ["A16","A17"].contains(id){go("T05")}
-        else if id=="A12"{ui.passwordReset.cancelCompletion();if ui.path.last=="A24"{back()}else{go("A24")}}
+        else if id=="A12"{guard canLeavePasswordReset(id)else{return};if ui.path.last=="A24"{back()}else{go("A24")}}
+        else if id=="A11"{go("A10")}
         else if ["A07","A10"].contains(id){go(id=="A10" ? ui.resetBack:"A01")}
         else{back()}
     }
@@ -95,32 +101,67 @@ extension WireframeRoot {
     }
     @ViewBuilder func passwordResetPasswordField(_ label:String,confirm:Bool)->some View {
         let fieldID=confirm ? "reset-confirm-password":"reset-new-password"
-        let value=confirm ? Binding(get:{ui.passwordReset.confirmPassword},set:{ui.passwordReset.confirmPassword=$0;ui.passwordReset.error=""}):Binding(get:{ui.passwordReset.newPassword},set:{ui.passwordReset.newPassword=$0;ui.passwordReset.error=""})
+        let value=confirm ? Binding(get:{ui.passwordReset.confirmPassword},set:{ui.passwordReset.confirmPasswordDidChange($0)}):Binding(get:{ui.passwordReset.newPassword},set:{ui.passwordReset.newPasswordDidChange($0)})
         let revealed=ui.passwordReset.revealedFields.contains(fieldID)
         VStack(alignment:.leading,spacing:8){Text(label).font(W.font(13,.medium)).frame(height:18.85,alignment:.leading)
             HStack{if revealed{TextField("",text:value,prompt:Text("8~20자, 영문과 숫자").foregroundStyle(W.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}else{SecureField("",text:value,prompt:Text("8~20자, 영문과 숫자").foregroundStyle(W.muted)).textContentType(nil).accessibilityIdentifier(fieldID).focused($authInput,equals:fieldID).submitLabel(.done).onSubmit{authInput=nil}}
                 if !value.wrappedValue.isEmpty{Button{if revealed{ui.passwordReset.revealedFields.remove(fieldID)}else{ui.passwordReset.revealedFields.insert(fieldID)}}label:{WEyeIcon(revealed:revealed).stroke(W.muted,style:StrokeStyle(lineWidth:1.125,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:30,height:44)}.accessibilityLabel(label+(revealed ? " 숨기기":" 보기")).accessibilityIdentifier(fieldID+"-reveal")}
-            }.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.passwordReset.errorField==(confirm ? "confirm":"password") && !ui.passwordReset.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line))
+            }.font(W.font(14)).foregroundStyle(W.ink).padding(14).frame(height:52).background(W.soft,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(ui.passwordReset.errorField==(confirm ? "confirm":"password") && !ui.passwordReset.error.isEmpty ? Color.wire(0xA92D32,0xFF9CA3):W.line)).disabled(ui.passwordReset.isCompleting || ui.passwordReset.requiresExactCompletionRetry)
             if ui.passwordReset.errorField==(confirm ? "confirm":"password") && !ui.passwordReset.error.isEmpty{Text(ui.passwordReset.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3))}
         }
     }
     func submitPasswordResetRequest(now:Date=Date()){
         guard ui.screen=="A10" else{return};ui.passwordReset.error="";ui.passwordReset.errorField=""
-        guard WAuthValidation.email(ui.passwordReset.email)else{ui.passwordReset.errorField="email";ui.passwordReset.error=ui.passwordReset.email.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "이메일을 입력해 주세요.":"이메일 형식을 확인해 주세요.";return}
-        guard ui.passwordReset.begin(email:ui.passwordReset.email,now:now)else{ui.passwordReset.error="코드를 준비하지 못했어요. 다시 시도해 주세요.";return}
-        go("A11")
-    }
-    func submitPasswordReset(){
-        guard ui.screen=="A12",ui.passwordReset.proofID != nil,!ui.passwordReset.isCompleting else{return}
-        ui.passwordReset.error="";ui.passwordReset.errorField=""
-        guard WAuthValidation.password(ui.passwordReset.newPassword)else{ui.passwordReset.errorField="password";ui.passwordReset.error="8~20자의 영문과 숫자를 포함해 입력해 주세요.";return}
-        guard ui.passwordReset.newPassword==ui.passwordReset.confirmPassword else{ui.passwordReset.errorField="confirm";ui.passwordReset.error="비밀번호가 서로 달라요.";return}
-        guard let completion=ui.passwordReset.beginCompletion()else{return}
+        guard PasswordResetValidation.isValidEmail(ui.passwordReset.email)else{ui.passwordReset.errorField="email";ui.passwordReset.error=ui.passwordReset.email.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "이메일을 입력해 주세요.":"이메일 형식을 확인해 주세요.";return}
+        guard let operationID=ui.passwordReset.beginChallengeRequest(now:now)else{return}
+        let email=ui.passwordReset.email
+        guard let service=passwordResetService else{_ = ui.passwordReset.failChallengeRequest(operationID,message:PasswordResetFailure.serviceUnavailable(requestID:nil).userMessage);return}
         Task{@MainActor in
-            if !reduceMotion{try? await Task.sleep(for:.milliseconds(420))}
-            guard ui.screen=="A12",ui.passwordReset.finishCompletion(completion),ui.screen=="A12" else{return}
+            do {
+                try await service.requestCode(email:email)
+                let demoCode=await (service as? any WPasswordResetDemoServing)?.currentDemoCode()
+                guard ui.screen=="A10",ui.passwordReset.finishChallengeRequest(operationID,now:Date(),demoCode:demoCode) else{return}
+                go("A11")
+            } catch let failure as PasswordResetFailure {
+                _ = ui.passwordReset.failChallengeRequest(operationID,message:failure.userMessage)
+            } catch {
+                _ = ui.passwordReset.failChallengeRequest(operationID,message:PasswordResetFailure.invalidResponse.userMessage)
+            }
+        }
+    }
+    func submitPasswordReset(now:Date=Date()){
+        guard ui.screen=="A12",ui.passwordReset.hasProof,!ui.passwordReset.isCompleting else{return}
+        ui.passwordReset.error="";ui.passwordReset.errorField=""
+        guard PasswordResetValidation.isValidPassword(ui.passwordReset.newPassword)else{ui.passwordReset.errorField="password";ui.passwordReset.error="8~20자의 영문과 숫자를 포함해 입력해 주세요.";return}
+        guard ui.passwordReset.newPassword==ui.passwordReset.confirmPassword else{ui.passwordReset.errorField="confirm";ui.passwordReset.error="비밀번호가 서로 달라요.";return}
+        guard let completion=ui.passwordReset.beginCompletion(now:now)else{
+            if let expiresAt=ui.passwordReset.proofExpiresAt,now>=expiresAt{expirePasswordResetProof(now:now)}
+            return
+        }
+        guard let service=passwordResetService else{
+            _ = ui.passwordReset.failCompletion(completion,failure:.serviceUnavailable(requestID:nil));return
+        }
+        Task{@MainActor in
+            do {
+                try await service.resetPassword(resetProof:completion.resetProof,requestID:completion.requestID,email:completion.email,password:completion.password)
+                guard ui.screen=="A12",ui.passwordReset.finishCompletion(completion) else{return}
+                ui.setLoggedIn(false);ui.save();ui.resetRemoteAccountScope()
+            } catch let failure as PasswordResetFailure {
+                guard ui.screen=="A12",ui.passwordReset.failCompletion(completion,failure:failure) else{return}
+                if failure.isVerificationFailure{navigatePasswordReset("A26");ui.passwordReset.error="인증이 만료됐어요. 새 코드를 요청해 주세요."}
+                return
+            } catch {
+                guard ui.screen=="A12" else{return}
+                _ = ui.passwordReset.failCompletion(completion,failure:.invalidResponse)
+                return
+            }
+            guard ui.screen=="A12" else{return}
             go("A13")
         }
+    }
+    func expirePasswordResetProof(now:Date=Date()){
+        guard ui.screen=="A12",let expiresAt=ui.passwordReset.proofExpiresAt,now>=expiresAt,!ui.passwordReset.isCompleting else{return}
+        ui.passwordReset.expireProof();navigatePasswordReset("A26");ui.passwordReset.error="인증이 만료됐어요. 새 코드를 요청해 주세요."
     }
     func acceptConsents(){
         guard ui.screen=="A02", !ui.consentBusy else{return}
@@ -246,18 +287,57 @@ extension WireframeRoot {
     }}
     func verifyPasswordResetCode(now:Date=Date()){
         guard ["A24","A25","A26","A27","A28"].contains(ui.screen) else{return}
-        switch ui.passwordReset.verify(ui.passwordReset.code,now:now){
-        case .accepted:go("A12")
-        case .rejected:go("A25");ui.passwordReset.error="코드가 일치하지 않아요. \(WEmailChallengePolicy.maximumAttempts-ui.passwordReset.attempts)번 더 시도할 수 있어요."
-        case .locked:go("A27");ui.passwordReset.error="입력 횟수를 초과했어요. 새 코드를 요청해 주세요."
-        case .expired:go("A26");ui.passwordReset.error="코드가 만료됐어요. 새 코드를 요청해 주세요."
-        case .missing:ui.passwordReset.error="이메일 확인을 다시 시작해 주세요."
-        case .duplicate:break
+        guard PasswordResetValidation.isValidCode(ui.passwordReset.code) else{return}
+        if WEmailChallengePolicy.secondsRemaining(since:ui.passwordReset.issuedAt,now:now,duration:PasswordResetPolicy.codeLifetime)==0 {
+            showPasswordResetState("A26",error:"코드가 만료됐어요. 새 코드를 요청해 주세요.");return
+        }
+        guard let operationID=ui.passwordReset.beginVerification(now:now) else{return}
+        guard let service=passwordResetService else{_ = ui.passwordReset.failVerification(operationID,failure:.serviceUnavailable(requestID:nil));return}
+        let email=ui.passwordReset.email;let code=ui.passwordReset.code;let sourceScreen=ui.screen
+        Task{@MainActor in
+            do {
+                let proof=try await service.confirmCode(email:email,code:code)
+                let demoCode=await (service as? any WPasswordResetDemoServing)?.currentDemoCode()
+                guard ui.screen==sourceScreen,ui.passwordReset.finishVerification(operationID,proof:proof,now:Date(),demoCode:demoCode) else{return}
+                navigatePasswordReset("A12")
+            } catch let failure as PasswordResetFailure {
+                guard ui.screen==sourceScreen else{return}
+                let result=ui.passwordReset.failVerification(operationID,failure:failure)
+                switch result {
+                case .rejected:showPasswordResetState("A25",error:"코드가 일치하지 않아요. \(max(0,PasswordResetPolicy.maximumAttempts-ui.passwordReset.attempts))번 더 시도할 수 있어요.")
+                case .locked:showPasswordResetState("A27",error:"입력 횟수를 초과했어요. 새 코드를 요청해 주세요.")
+                case .expired:showPasswordResetState("A26",error:"코드가 만료됐어요. 새 코드를 요청해 주세요.")
+                case .missing:ui.passwordReset.error=failure.userMessage
+                case .stale,.accepted:break
+                }
+            } catch {
+                guard ui.screen==sourceScreen else{return}
+                _ = ui.passwordReset.failVerification(operationID,failure:.invalidResponse)
+            }
         }
     }
+    func navigatePasswordReset(_ screen:String){
+        guard ui.screen != screen else{return}
+        let source=ui.screen
+        ui.leaveAuth(for:screen);ui.path.append(source);ui.forward=true;ui.screen=screen;ui.error=""
+    }
+    func showPasswordResetState(_ screen:String,error:String){navigatePasswordReset(screen);ui.passwordReset.error=error}
     func resendPasswordResetCode(now:Date=Date()){
-        guard WireState.passwordResetScreens.contains(ui.screen),ui.passwordReset.resend(now:now)else{return}
-        go("A28")
+        guard WireState.passwordResetScreens.contains(ui.screen),let operationID=ui.passwordReset.beginChallengeRequest(now:now)else{return}
+        guard let service=passwordResetService else{_ = ui.passwordReset.failChallengeRequest(operationID,message:PasswordResetFailure.serviceUnavailable(requestID:nil).userMessage);return}
+        let email=ui.passwordReset.email;let sourceScreen=ui.screen
+        Task{@MainActor in
+            do {
+                try await service.requestCode(email:email)
+                let demoCode=await (service as? any WPasswordResetDemoServing)?.currentDemoCode()
+                guard ui.screen==sourceScreen,ui.passwordReset.finishChallengeRequest(operationID,now:Date(),demoCode:demoCode) else{return}
+                go("A28")
+            } catch let failure as PasswordResetFailure {
+                _ = ui.passwordReset.failChallengeRequest(operationID,message:failure.userMessage)
+            } catch {
+                _ = ui.passwordReset.failChallengeRequest(operationID,message:PasswordResetFailure.invalidResponse.userMessage)
+            }
+        }
     }
     func changePasswordResetEmail(){
         ui.passwordReset.invalidate();go("A10");ui.path.removeAll{WireState.passwordResetScreens.contains($0)}
@@ -269,7 +349,7 @@ extension WireframeRoot {
         let expired=lifetime==0
         let locked=flow.attempts>=WEmailChallengePolicy.maximumAttempts || ui.screen=="A27"
         let missing=flow.issuedAt==nil
-        let disabled=missing || expired || locked
+        let disabled=missing || expired || locked || flow.isVerifyingCode || flow.isRequestingCode
         let field=Binding(get:{ui.passwordReset.code},set:{ui.passwordReset.code=WEmailChallengePolicy.digits($0);if ui.passwordReset.code.count<6{ui.passwordReset.error=""}})
         WPage(title:"비밀번호 재설정",back:{back()}){
             WHeading(text:"이메일을 확인해요")
@@ -285,16 +365,16 @@ extension WireframeRoot {
                 Text(missing ? "재설정 요청부터 다시 시작해 주세요.":expired ? "코드가 만료됐어요.":locked ? "현재 코드는 잠겼어요.":"유효 시간 \(max(0,lifetime ?? 0)/60):\(String(format:"%02d",max(0,lifetime ?? 0)%60))")
                     .font(W.font(11)).foregroundStyle(W.muted).frame(minHeight:20,alignment:.leading)
                 if !flow.error.isEmpty{Text(flow.error).font(W.font(12)).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).padding(.top,5).accessibilityIdentifier("resetOtpError")}
-                if reviewTools{Button{ui.passwordReset.code=ui.passwordReset.issuedCode}label:{Text("예시 코드 입력").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).disabled(disabled).accessibilityIdentifier("fillDemoResetCode")}
+                if reviewTools{Button{ui.passwordReset.code=ui.passwordReset.demoCode}label:{Text("예시 코드 입력").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).disabled(disabled).accessibilityIdentifier("fillDemoResetCode")}
                 Button("인증 코드 확인"){verifyPasswordResetCode(now:now)}.buttonStyle(WButtonStyle()).padding(.top,9).disabled(flow.code.count != 6 || disabled).accessibilityIdentifier("verifyResetCode")
-                Button(resend.map{$0>0 ? "새 코드 요청 · \($0)초 후":"새 코드 요청"} ?? "새 코드 요청"){resendPasswordResetCode(now:now)}.buttonStyle(.plain).font(W.font(12)).foregroundStyle(missing || (resend ?? 0)>0 ? W.muted:Color.wire(0xA92D32,0xFF9CA3)).frame(minHeight:44).disabled(missing || (resend ?? 0)>0).accessibilityIdentifier("requestNewResetCode")
+        Button(resend.map{$0>0 ? "새 코드 요청 · \($0)초 후":"새 코드 요청"} ?? "새 코드 요청"){resendPasswordResetCode(now:now)}.buttonStyle(.plain).font(W.font(12)).foregroundStyle(missing || (resend ?? 0)>0 ? W.muted:Color.wire(0xA92D32,0xFF9CA3)).frame(minHeight:44).disabled(missing || (resend ?? 0)>0 || flow.isRequestingCode || flow.isVerifyingCode).accessibilityIdentifier("requestNewResetCode")
                 Text("유효 시간 5분 · 재요청 간격 60초\n코드는 최대 5회까지 입력할 수 있어요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).padding(.top,14)
                 Button("이메일 변경"){changePasswordResetEmail()}.buttonStyle(.plain).font(W.font(12,.semibold)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).accessibilityIdentifier("changeResetEmail")
             }
         }actions:{Button("취소하고 돌아가기"){ui.passwordReset.invalidate();go(ui.resetBack)}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("cancelPasswordReset")}
         .onChange(of:now){_,tick in
             guard WireState.passwordResetScreens.contains(ui.screen),!expired,let issued=ui.passwordReset.issuedAt,tick.timeIntervalSince(issued)>=WEmailChallengePolicy.lifetime else{return}
-            go("A26");ui.passwordReset.error="코드가 만료됐어요. 새 코드를 요청해 주세요."
+            navigatePasswordReset("A26");ui.passwordReset.error="코드가 만료됐어요. 새 코드를 요청해 주세요."
         }
     }}
     var providers:some View {WPage(title:"로그인 수단",back:back){Text("하나의 계정에 연결해요").font(W.font(22,.semibold));WText(text:"이름이나 이메일만으로\n계정을 합치지 않아요.");VStack(spacing:0){ForEach(["이메일","카카오","네이버","Google","Apple"],id:\.self){p in Button{ui.provider=p;if p=="이메일"{ui.pending=ui.profile.providers.contains(p) ? "A17":"A16";ui.pendingBack="T05";go("T15")}else if ui.profile.providers.contains(p){go(ui.profile.providers.count>1 ? "T08":"T09")}else{ui.pending="T06";ui.pendingBack="T05";go("T15")}}label:{HStack(spacing:14){providerMark(p);VStack(alignment:.leading,spacing:6){Text(p=="이메일" ? "이메일 · 비밀번호":p).font(W.font(14,.medium));WText(text:ui.profile.providers.contains(p) ? "이 계정에 연결됨":"연결되지 않음",small:true)};Spacer();Text(ui.profile.providers.contains(p) ? (p=="이메일" ? "관리":"해제"):"연결").font(W.font(12))}.frame(minHeight:85).overlay(alignment:.bottom){W.line.frame(height:1)}}}};WAuthNotice(text:"현재 계정을 확인한 뒤 새 로그인 수단을 연결해요.",sourceWrapping:true)}actions:{}}
@@ -356,100 +436,249 @@ struct WLocalOTPCodeIssuer {
         candidate.count==6 && WEmailChallengePolicy.digits(candidate)==candidate && candidate==currentCode
     }
 }
-enum WPasswordResetCodeResult:Equatable {case accepted,rejected,expired,locked,missing,duplicate}
-struct WPasswordResetCompletionToken:Equatable {let flowID:UUID;let proofID:UUID;let completionID:UUID}
-/// In-process fixture only: avoids reusing demo codes between reset sessions while the app runs.
-/// It is not a security control or a replacement for server-issued OTPs.
-final class WLocalPasswordResetCodeIssuer {
-    private static let codeSpace=1_000_000
-    private var nextValue:Int
-    private var issuedCodes=Set<String>()
-    private var currentCode:String?
-    init(startingAt:Int){nextValue=((startingAt%Self.codeSpace)+Self.codeSpace)%Self.codeSpace}
-    func revokeCurrent(){currentCode=nil}
-    func issueNext()->String?{
-        for _ in 0..<Self.codeSpace {
-            let code=String(format:"%06d",nextValue)
-            nextValue=(nextValue+1)%Self.codeSpace
-            if issuedCodes.insert(code).inserted{currentCode=code;return code}
-        }
-        return nil
-    }
-    func matches(_ candidate:String)->Bool{
-        candidate.count==6 && WEmailChallengePolicy.digits(candidate)==candidate && candidate==currentCode
-    }
+enum WPasswordResetVerificationResult:Equatable {case rejected,locked,expired,missing,stale,accepted}
+struct WPasswordResetCompletionAttempt:Equatable {
+    let id:UUID
+    let flowID:UUID
+    let resetProof:String
+    let requestID:String
+    let email:String
+    let password:String
 }
+protocol WPasswordResetDemoServing:Sendable {func currentDemoCode() async -> String}
+
+/// UI-only mock used by isolated `-wire-fixture` launches. It never sends mail or mutates a server account.
+actor WireframePasswordResetFixture:PasswordResetServing,WPasswordResetDemoServing {
+    private var code:String
+    private var hasIssuedChallenge:Bool
+    private var challengeIssuedAt:Date?
+    private var challengeEmail:String?
+    private var proofEmail:String?
+    private var emailCooldowns:[String:Date]=[:]
+    private var activeProof:String?
+    private var completedRequest:(requestID:String,proof:String,email:String,password:String)?
+    private var proofExpiresAt:Date?
+    private var failedAttempts=0
+    private var codeConsumed=false
+    private var failChallengeOnce:Bool
+    private var failVerificationOnce:Bool
+    private var loseCompletionResponseOnce:Bool
+
+    init(initialChallenge:Bool,initialCode:String="700000",initialChallengeAge:TimeInterval=0,failChallengeOnce:Bool=false,failVerificationOnce:Bool=false,loseCompletionResponseOnce:Bool=false) {
+        code=initialCode;hasIssuedChallenge=initialChallenge
+        challengeIssuedAt=initialChallenge ? Date().addingTimeInterval(-initialChallengeAge):nil
+        if initialChallenge{challengeEmail="runner@example.test";emailCooldowns["runner@example.test"]=challengeIssuedAt}
+        self.failChallengeOnce=failChallengeOnce;self.failVerificationOnce=failVerificationOnce;self.loseCompletionResponseOnce=loseCompletionResponseOnce
+    }
+
+    func requestCode(email:String) async throws {
+        guard PasswordResetValidation.isValidEmail(email) else{throw PasswordResetFailure.invalidRequest}
+        if failChallengeOnce{failChallengeOnce=false;throw PasswordResetFailure.transport(.timedOut)}
+        let key=normalizedEmail(email);let now=Date()
+        if let lastRequest=emailCooldowns[key],now.timeIntervalSince(lastRequest)<PasswordResetPolicy.resendInterval {
+            throw PasswordResetFailure.tooManyRequests(requestID:"fixture-reset-cooldown")
+        }
+        if hasIssuedChallenge {
+            let next=((Int(code) ?? 699_999)+1)%1_000_000
+            code=String(format:"%06d",next)
+        } else {hasIssuedChallenge=true}
+        challengeIssuedAt=now;challengeEmail=key;proofEmail=nil;emailCooldowns[key]=now
+        activeProof=nil;proofExpiresAt=nil;failedAttempts=0;codeConsumed=false
+    }
+
+    func confirmCode(email:String,code candidate:String) async throws -> PasswordResetProof {
+        if failVerificationOnce{failVerificationOnce=false;throw PasswordResetFailure.transport(.timedOut)}
+        if let challengeIssuedAt,Date().timeIntervalSince(challengeIssuedAt)>=PasswordResetPolicy.codeLifetime {
+            throw PasswordResetFailure.verificationFailed(requestID:"fixture-reset-expired")
+        }
+        guard hasIssuedChallenge,!codeConsumed,activeProof==nil,failedAttempts<PasswordResetPolicy.maximumAttempts,
+              PasswordResetValidation.isValidEmail(email),challengeEmail==normalizedEmail(email),candidate==code else {
+            failedAttempts+=1
+            throw PasswordResetFailure.verificationFailed(requestID:"fixture-reset-code")
+        }
+        let proof=String(repeating:"R",count:43)
+        activeProof=proof;proofEmail=challengeEmail;proofExpiresAt=Date().addingTimeInterval(TimeInterval(PasswordResetPolicy.proofLifetimeSeconds));codeConsumed=true
+        return PasswordResetProof(value:proof,expiresInSeconds:PasswordResetPolicy.proofLifetimeSeconds)
+    }
+
+    func resetPassword(resetProof:String,requestID:String,email:String,password:String) async throws {
+        if let completedRequest {
+            guard completedRequest.requestID==requestID,completedRequest.proof==resetProof,
+                  completedRequest.email==email,completedRequest.password==password else {
+                throw PasswordResetFailure.verificationFailed(requestID:"fixture-reset-proof")
+            }
+            return
+        }
+        guard activeProof==resetProof,PasswordResetValidation.isValidRequestID(requestID),
+              let expiresAt=proofExpiresAt,Date()<expiresAt,
+              proofEmail==normalizedEmail(email),PasswordResetValidation.isValidEmail(email),PasswordResetValidation.isValidPassword(password) else {
+            throw PasswordResetFailure.verificationFailed(requestID:"fixture-reset-proof")
+        }
+        completedRequest=(requestID,resetProof,email,password)
+        activeProof=nil;proofEmail=nil;proofExpiresAt=nil
+        if loseCompletionResponseOnce{loseCompletionResponseOnce=false;throw PasswordResetFailure.transport(.timedOut)}
+    }
+
+    func currentDemoCode() async -> String {code}
+    private func normalizedEmail(_ email:String)->String{email.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()}
+}
+
 struct WPasswordResetSession {
     private(set) var flowID=UUID()
     var email=""
     var code=""
-    private(set) var issuedCode=""
     private(set) var issuedAt:Date?
-    private let issuer:WLocalPasswordResetCodeIssuer
     private(set) var attempts=0
-    private var lastAttemptedCode:String?
-    private(set) var proofID:UUID?
-    private var completionID:UUID?
+    private(set) var resetProof:String?
+    private(set) var proofExpiresAt:Date?
+    private(set) var isRequestingCode=false
+    private(set) var isVerifyingCode=false
     private(set) var isCompleting=false
+    private(set) var requiresExactCompletionRetry=false
     private(set) var completed=false
+    private(set) var demoCode=""
+    private var challengeOperationID:UUID?
+    private var verificationOperationID:UUID?
+    private var completionOperationID:UUID?
+    private(set) var completionRequestID:String?
+    private var completionPassword:String?
     var newPassword=""
     var confirmPassword=""
     var revealedFields:Set<String>=[]
     var error=""
     var errorField=""
-    var hasProof:Bool{proofID != nil}
+    var hasProof:Bool{resetProof != nil}
+    var isBusy:Bool{isRequestingCode || isVerifyingCode || isCompleting}
 
-    init(issuer:WLocalPasswordResetCodeIssuer){self.issuer=issuer}
-
-    mutating func begin(email:String,now:Date=Date())->Bool {
-        invalidate();self.email=email.trimmingCharacters(in:.whitespacesAndNewlines)
-        return issue(now:now)
-    }
     mutating func emailDidChange(_ value:String){guard email != value else{return};invalidate();email=value}
-    private mutating func issue(now:Date)->Bool {
-        guard let value=issuer.issueNext()else{return false}
-        issuedCode=value;issuedAt=now;code="";attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;error="";errorField="";newPassword="";confirmPassword="";revealedFields=[]
+
+    mutating func beginChallengeRequest(now:Date=Date())->UUID? {
+        guard !isRequestingCode,!isVerifyingCode,!isCompleting,!completed else{return nil}
+        if issuedAt != nil {
+            guard resetProof==nil,
+                  WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:PasswordResetPolicy.resendInterval)==0 else{return nil}
+        }
+        let id=UUID();challengeOperationID=id;isRequestingCode=true;error="";errorField=""
+        return id
+    }
+
+    mutating func finishChallengeRequest(_ id:UUID,now:Date=Date(),demoCode:String?=nil)->Bool {
+        guard challengeOperationID==id else{return false}
+        challengeOperationID=nil;isRequestingCode=false;issuedAt=now;attempts=0;code="";resetProof=nil;proofExpiresAt=nil
+        completionOperationID=nil;completionRequestID=nil;completionPassword=nil;requiresExactCompletionRetry=false
+        newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""
+        if let demoCode{self.demoCode=demoCode}
         return true
     }
-    mutating func resend(now:Date=Date())->Bool {
-        guard WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:WEmailChallengePolicy.resendDelay)==0,
-              proofID==nil,!isCompleting else{return false}
-        return issue(now:now)
+
+    mutating func failChallengeRequest(_ id:UUID,message:String)->Bool {
+        guard challengeOperationID==id else{return false}
+        challengeOperationID=nil;isRequestingCode=false;error=message;errorField=""
+        return true
     }
-    mutating func verify(_ candidate:String,now:Date=Date())->WPasswordResetCodeResult {
-        guard let issuedAt else{return .missing}
-        if WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:WEmailChallengePolicy.lifetime)==0{return .expired}
-        if attempts>=WEmailChallengePolicy.maximumAttempts{return .locked}
-        let value=WEmailChallengePolicy.digits(candidate);code=value
-        guard value.count==6 else{return .missing}
-        guard lastAttemptedCode != value else{return .duplicate}
-        lastAttemptedCode=value
-        if issuer.matches(value){proofID=UUID();error="";errorField="";return .accepted}
+
+    mutating func beginVerification(now:Date=Date())->UUID? {
+        guard !isRequestingCode,!isVerifyingCode,!isCompleting,!completed,
+              let issuedAt,resetProof==nil,code.count==PasswordResetPolicy.codeLength,
+              attempts<PasswordResetPolicy.maximumAttempts,
+              let secondsRemaining=WEmailChallengePolicy.secondsRemaining(since:issuedAt,now:now,duration:PasswordResetPolicy.codeLifetime),
+              secondsRemaining>0 else{return nil}
+        let id=UUID();verificationOperationID=id;isVerifyingCode=true;error=""
+        return id
+    }
+
+    mutating func finishVerification(_ id:UUID,proof:PasswordResetProof,now:Date=Date(),demoCode:String?=nil)->Bool {
+        guard verificationOperationID==id,PasswordResetValidation.isValidProof(proof.value),
+              proof.expiresInSeconds==PasswordResetPolicy.proofLifetimeSeconds else{return false}
+        verificationOperationID=nil;isVerifyingCode=false;resetProof=proof.value
+        proofExpiresAt=now.addingTimeInterval(TimeInterval(proof.expiresInSeconds));error="";errorField=""
+        if let demoCode{self.demoCode=demoCode}
+        return true
+    }
+
+    mutating func failVerification(_ id:UUID,failure:PasswordResetFailure)->WPasswordResetVerificationResult {
+        guard verificationOperationID==id else{return .stale}
+        verificationOperationID=nil;isVerifyingCode=false;error=failure.userMessage;errorField=""
+        guard failure.isVerificationFailure else{return .missing}
         attempts+=1
-        return attempts>=WEmailChallengePolicy.maximumAttempts ? .locked:.rejected
+        return attempts>=PasswordResetPolicy.maximumAttempts ? .locked:.rejected
     }
-    mutating func beginCompletion()->WPasswordResetCompletionToken? {
-        guard let proofID,!isCompleting,!completed else{return nil}
-        let id=UUID();completionID=id;isCompleting=true
-        return WPasswordResetCompletionToken(flowID:flowID,proofID:proofID,completionID:id)
+
+    mutating func beginCompletion(now:Date=Date())->WPasswordResetCompletionAttempt? {
+        guard !isRequestingCode,!isVerifyingCode,!isCompleting,!completed,
+              let resetProof,let proofExpiresAt,now<proofExpiresAt else{return nil}
+        let requestID:String
+        let password:String
+        if requiresExactCompletionRetry {
+            guard let existingID=completionRequestID,let existingPassword=completionPassword,
+                  newPassword==existingPassword else{return nil}
+            requestID=existingID;password=existingPassword
+        } else {
+            let id=UUID().uuidString.lowercased()
+            requestID=id;password=newPassword;completionRequestID=id;completionPassword=password
+        }
+        let attempt=WPasswordResetCompletionAttempt(id:UUID(),flowID:flowID,resetProof:resetProof,requestID:requestID,email:email,password:password)
+        completionOperationID=attempt.id;isCompleting=true;error="";errorField=""
+        return attempt
     }
-    mutating func finishCompletion(_ token:WPasswordResetCompletionToken)->Bool {
-        guard token.flowID==flowID,token.proofID==proofID,token.completionID==completionID,isCompleting else{return false}
-        isCompleting=false;completionID=nil;proofID=nil;completed=true;newPassword="";confirmPassword="";revealedFields=[]
+
+    mutating func finishCompletion(_ attempt:WPasswordResetCompletionAttempt)->Bool {
+        guard attempt.flowID==flowID,completionOperationID==attempt.id,isCompleting,
+              resetProof==attempt.resetProof,completionRequestID==attempt.requestID else{return false}
+        completionOperationID=nil;isCompleting=false;resetProof=nil;proofExpiresAt=nil;completionRequestID=nil;completionPassword=nil
+        requiresExactCompletionRetry=false;completed=true;newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""
         return true
     }
-    mutating func cancelCompletion(){isCompleting=false;completionID=nil}
-    mutating func prepareFixture(screen:String,now:Date=Date(),resendReady:Bool=false){
-        let age:TimeInterval=screen=="A26" ? 301:resendReady || screen=="A28" ? 60:0
-        guard begin(email:"runner@example.test",now:now.addingTimeInterval(-age))else{return}
-        if screen=="A27"{attempts=WEmailChallengePolicy.maximumAttempts;error="입력 횟수를 초과했어요. 새 코드를 요청해 주세요."}
-        if screen=="A25"{error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}
-        if screen=="A28"{_ = resend(now:now)}
-        if screen=="A26"{error="코드가 만료됐어요. 새 코드를 요청해 주세요."}
-        if screen=="A12" || screen=="A13"{_ = verify(issuedCode,now:now)}
-        if screen=="A13",let token=beginCompletion(){_ = finishCompletion(token)}
+
+    mutating func failCompletion(_ attempt:WPasswordResetCompletionAttempt,failure:PasswordResetFailure)->Bool {
+        guard attempt.flowID==flowID,completionOperationID==attempt.id,isCompleting,
+              completionRequestID==attempt.requestID else{return false}
+        completionOperationID=nil;isCompleting=false;error=failure.userMessage;errorField=""
+        if failure.isVerificationFailure {
+            resetProof=nil;proofExpiresAt=nil;completionRequestID=nil;completionPassword=nil
+            requiresExactCompletionRetry=false;newPassword="";confirmPassword="";revealedFields=[]
+        } else if failure.requiresExactRetry {
+            requiresExactCompletionRetry=true;completionPassword=attempt.password
+        } else {
+            completionRequestID=nil;completionPassword=nil;requiresExactCompletionRetry=false
+        }
+        return true
     }
-    mutating func invalidate(){flowID=UUID();email="";code="";issuedCode="";issuedAt=nil;issuer.revokeCurrent();attempts=0;lastAttemptedCode=nil;proofID=nil;completionID=nil;isCompleting=false;completed=false;newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""}
+
+    mutating func newPasswordDidChange(_ value:String){
+        guard !isCompleting,!requiresExactCompletionRetry else{return}
+        newPassword=value;completionRequestID=nil;completionPassword=nil;error="";errorField=""
+    }
+
+    mutating func confirmPasswordDidChange(_ value:String){
+        guard !isCompleting,!requiresExactCompletionRetry else{return}
+        confirmPassword=value;error="";errorField=""
+    }
+
+    mutating func expireProof(){
+        resetProof=nil;proofExpiresAt=nil;completionOperationID=nil;completionRequestID=nil;completionPassword=nil
+        isCompleting=false;requiresExactCompletionRetry=false;newPassword="";confirmPassword="";revealedFields=[]
+    }
+
+    mutating func cancelCompletion(){guard !requiresExactCompletionRetry else{return};isCompleting=false;completionOperationID=nil}
+
+    mutating func prepareFixture(screen:String,now:Date=Date(),resendReady:Bool=false){
+        invalidate();email="runner@example.test"
+        let age:TimeInterval=screen=="A26" ? PasswordResetPolicy.codeLifetime+1:resendReady || screen=="A28" ? PasswordResetPolicy.resendInterval:0
+        issuedAt=now.addingTimeInterval(-age);demoCode=screen=="A28" ? "700001":"700000"
+        if screen=="A27"{attempts=PasswordResetPolicy.maximumAttempts;error="입력 횟수를 초과했어요. 새 코드를 요청해 주세요."}
+        if screen=="A25"{attempts=1;error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}
+        if screen=="A26"{error="코드가 만료됐어요. 새 코드를 요청해 주세요."}
+        if screen=="A12" || screen=="A13"{resetProof=String(repeating:"R",count:43);proofExpiresAt=now.addingTimeInterval(TimeInterval(PasswordResetPolicy.proofLifetimeSeconds))}
+        if screen=="A13"{completed=true}
+    }
+
+    mutating func invalidate(){
+        flowID=UUID();email="";code="";issuedAt=nil;attempts=0;resetProof=nil;proofExpiresAt=nil
+        isRequestingCode=false;isVerifyingCode=false;isCompleting=false;requiresExactCompletionRetry=false;completed=false;demoCode=""
+        challengeOperationID=nil;verificationOperationID=nil;completionOperationID=nil;completionRequestID=nil;completionPassword=nil
+        newPassword="";confirmPassword="";revealedFields=[];error="";errorField=""
+    }
 }
 struct WAuthNotice:View {
     let text:String;var danger=false;var sourceWrapping=false
