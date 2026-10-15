@@ -1322,21 +1322,34 @@ import UIKit
 
         app.buttons["communityCrewMembers"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"2/20명")
+        XCTAssertFalse(app.staticTexts["communityCrewMemberCount"].exists,"C34 follows the Review55 member-row layout without a capacity summary")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewMemberLocalNotice"].exists,"C34 does not insert a local-only notice absent from the wireframe")
+        XCTAssertEqual(app.staticTexts["communityCrewMemberName-fixture-member-early"].label,"새벽러너")
+        XCTAssertEqual(app.staticTexts["communityCrewMemberRole-fixture-member-early"].label,"멤버")
         app.buttons["communityCrewMember-fixture-member-early"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C35"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["communityCrewMemberDetailName"].label,"새벽러너")
         XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"멤버")
+        XCTAssertFalse(app.staticTexts["시작러너"].exists,"C35 presents identity and role without the runner rank")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewMemberDetailLocalNotice"].exists,"C35 does not insert an extra local-only notice")
 
         app.buttons["communityCrewMemberRoleChange"].tap()
         XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"운영자","The owner can grant operator status")
         app.buttons["communityCrewMemberRoleChange"].tap()
         XCTAssertEqual(app.staticTexts["communityCrewMemberDetailRole"].label,"멤버","The owner can revoke operator status")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5),"Back returns from C35 to the selected crew’s C34 list")
+        app.buttons["communityCrewMember-fixture-member-early"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C35"].waitForExistence(timeout:5))
 
         let note=app.textViews["communityCrewMemberWarning"]
         note.tap();note.typeText("함께 안전하게 달려 주세요.")
         app.buttons["communityCrewMemberWarn"].tap()
-        XCTAssertEqual(app.staticTexts["communityCrewWarningCount"].label,"주의 기록 1회")
+        XCTAssertEqual(app.staticTexts["communityCrewWarningCount"].label,"주의 1회")
         XCTAssertTrue(app.staticTexts["communityCrewMemberFeedback"].label.contains("실제로 전달되지는 않았어요"))
+        note.tap();note.typeText("다시 안전하게 달려 주세요.")
+        app.buttons["communityCrewMemberWarn"].tap()
+        XCTAssertEqual(app.staticTexts["communityCrewWarningCount"].label,"주의 2회","Repeated warning actions are retained in the local crew fixture")
 
         app.buttons["communityCrewMemberKick"].tap()
         XCTAssertTrue(app.alerts["이 멤버를 내보낼까요?"].waitForExistence(timeout:3))
@@ -1345,7 +1358,8 @@ import UIKit
         app.buttons["communityCrewMemberKick"].tap()
         app.alerts.buttons.matching(identifier:"communityCrewConfirmRemove").firstMatch.tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityCrewMemberCount"].label,"1/20명")
+        XCTAssertFalse(app.staticTexts["communityCrewMemberCount"].exists)
+        XCTAssertTrue(app.staticTexts["communityCrewMemberName-fixture-member-current"].exists,"Removing one selected member retains the crew owner")
         XCTAssertFalse(app.buttons["communityCrewMember-fixture-member-early"].exists,"A removed member leaves the local member list")
     }
 
