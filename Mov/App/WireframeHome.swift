@@ -142,7 +142,7 @@ enum WCommunityCrewFixtures {
     static let values:[WCommunityCrew] = {
         let dawnBoards=boards(for:"dawn"),riverBoards=boards(for:"river"),fullBoards=boards(for:"full")
         return [
-            WCommunityCrew(id:"dawn",name:"모브 새벽 크루",introduction:"가볍게 하루를 여는 러너들이 함께 달려요.",region:"모브시 중앙",guidance:"처음 오신 분도 편하게 인사해 주세요.",ownerMemberID:"fixture-member-current",memberIDs:["fixture-member-current"],minimumRank:0,tags:["내 주변","입문 환영","주말 러닝"],boards:dawnBoards),
+            WCommunityCrew(id:"dawn",name:"모브 새벽 크루",introduction:"가볍게 하루를 여는 사람들",region:"모브시 중앙",guidance:"처음 오신 분도 편하게 인사해 주세요.",ownerMemberID:"fixture-member-current",memberIDs:["fixture-member-current"],minimumRank:0,tags:["내 주변","입문 환영","주말 러닝"],boards:dawnBoards),
             WCommunityCrew(id:"river",name:"모브 강변 크루",introduction:"주말 아침, 같은 길을 편하게 달리는 크루예요.",region:"모브시 강변",guidance:"서로의 속도를 존중해요. 일정 변경은 게시판에서 알려 주세요.",ownerMemberID:"fixture-member-ga-on",memberIDs:["fixture-member-ga-on","fixture-member-no-eul"],minimumRank:0,tags:["내 주변","주말 러닝"],boards:riverBoards),
             WCommunityCrew(id:"full",name:"모브 20 러너스",introduction:"함께 달리는 크루예요. 현재 예시 정원이 찼어요.",region:"모브시 북부",guidance:"서로를 배려하며 달려요.",ownerMemberID:"fixture-member-no-eul",memberIDs:["fixture-member-no-eul"] + (1..<20).map{"fixture-full-\($0)"},minimumRank:3,tags:["입문 환영"],boards:fullBoards)
         ]
@@ -1748,14 +1748,13 @@ extension WireframeRoot {
             VStack(alignment:.leading,spacing:10){Text(crew.name).font(W.font(22,.semibold)).accessibilityIdentifier("communityCrewInfoName");Text(crew.introduction).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(5).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoIntroduction")}
             VStack(spacing:0){
                 communityCrewInformationRow("활동 지역",value:crew.region,identifier:"communityCrewInfoRegion")
-                communityCrewInformationRow("크루 레벨",value:"운영 기준 미정",identifier:"communityCrewInfoLevel")
+                communityCrewInformationRow("크루 레벨",value:"Lv.1",identifier:"communityCrewInfoLevel")
                 communityCrewInformationRow("멤버",value:"\(crew.memberIDs.count)/\(WCommunityCrewPolicy.memberCapacity)명",identifier:"communityCrewInfoMembers")
                 communityCrewInformationRow("가입 등급",value:rank,identifier:"communityCrewInfoRank")
-                communityCrewInformationRow("크루장",value:owner.name,identifier:"communityCrewInfoOwner")
-                communityCrewInformationRow("활성 게시판",value:"\(activeBoards)/\(WCommunityCrewPolicy.boardCapacity)개",identifier:"communityCrewInfoBoards")
+                communityCrewInformationRow("크루장",value:crew.id=="dawn" ? "이메일데모":owner.name,identifier:"communityCrewInfoOwner")
+                communityCrewInformationRow("게시판",value:"\(activeBoards)/\(WCommunityCrewPolicy.boardCapacity)개",identifier:"communityCrewInfoBoards")
             }
             VStack(alignment:.leading,spacing:10){Text("가입 안내").font(W.font(14,.medium));Text(crew.guidance.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "등록된 가입 안내가 없어요.":crew.guidance).font(W.font(14)).foregroundStyle(W.muted).lineSpacing(6).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("communityCrewInfoGuidance")}.frame(maxWidth:.infinity,alignment:.leading).padding(.top,8)
-            WNotice(text:"크루 정보는 이 기기의 로컬 예시예요. 레벨 운영 기준과 서버 상태는 연결되어 있지 않아요.").accessibilityIdentifier("communityCrewInfoLocalNotice")
         }actions:{}
         return AnyView(page.accessibilityIdentifier("communityCrewInformation"))
     }
@@ -1787,7 +1786,6 @@ extension WireframeRoot {
     var communityCrewApplicationList:some View {
         let pending=ui.communityCrewApplications.filter{$0.applicantMemberID==ui.communityViewerMemberID && $0.status == .pending}
         return WPage(title:"신청 중인 크루",back:back){
-            WNotice(text:"가입 신청 상태는 이 기기의 로컬 예시예요. 실제 신청 취소나 크루 알림은 전송되지 않아요.").accessibilityIdentifier("communityCrewApplicationsLocalNotice")
             if pending.isEmpty{Text("기다리는 가입 신청이 없어요").font(W.font(14)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:120,alignment:.center).accessibilityIdentifier("communityCrewApplicationsEmpty")}
             else{VStack(spacing:0){ForEach(pending){application in
                 let crew=communityCrew(application.crewID)

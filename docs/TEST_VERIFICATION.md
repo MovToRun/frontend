@@ -65,10 +65,17 @@
 ## Crew information and member application list (C32–C33)
 
 - Branch: `feature/community-crew-info-applications`, based on merged PR #35 main SHA `b682c19f34eb9169e3121eb14ed92fa8a0e8a076`.
-- Final focused suite: 69/69 passed (67 `ThemeTests` + 2 UI tests) on the existing iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It used a temporary source copy with unique app/unit/UI bundle IDs and isolated fixture storage.
-- UI coverage: `testCommunityCrewInformationUsesCurrentLocalPolicyAndRoutesFromDetailAndBoard` checks C16/C19 entry, current member/board policy values, join guidance and the unresolved level label; `testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation` checks current-user filtering, C18 round trip, dismissal without mutation, and confirmed local cancellation.
+- Historical focused suite before the Review55 copy correction: 69/69 passed (67 `ThemeTests` + 2 UI tests) on the existing iPhone 17 Pro simulator, iOS 26.3.1 (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`). It used a temporary source copy with unique app/unit/UI bundle IDs and isolated fixture storage.
+- Its former `testCommunityCrewInformationUsesCurrentLocalPolicyAndRoutesFromDetailAndBoard` checked the implementation's then-current unresolved-level label. The follow-up test below replaces that expectation with the Review55 screen copy. `testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation` still checks current-user filtering, C18 round trip, dismissal without mutation, and confirmed local cancellation.
 - Result bundle: `/tmp/mov-community-crew-info-suite.xcresult`.
-- C32 shows `운영 기준 미정` because crew-level rules are unresolved; it does not infer a level. C33 cancellation only changes the in-memory fixture and does not contact or notify a server. These screens are locally implemented, server-unconnected, and still need source/app pixel and motion comparison.
+- Historical note: `운영 기준 미정` was an implementation assumption, not user-approved product policy. It does not override the Review55 C32 value `Lv.1`; the follow-up below corrects that display and removes the C32/C33 local-demo notices that are absent from the wireframe. C33 state changes remain local and do not contact or notify a server.
+
+### Review55 C32/C33 wireframe follow-up (2026-10-15)
+
+- The C32 copy now matches the wireframe: introduction `가볍게 하루를 여는 사람들`, level `Lv.1`, crew owner `이메일데모`, and row label `게시판 4/5개`. The C32 local-only notice and C33 local-application notice were removed. C32/C33 layout, safe-area title, and C33 empty text were checked on the existing iPhone 17 Pro (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`); captures are in `docs/F002-F003-live-review-20261015/`.
+- `Mov` scheme built app target `Mov` and UI test bundle target `MovUITests` from the updated checkout. Compiled source/test tree: `5018edc4533aec322f3d911b8b64ff98fe3c2038`; product app: `/private/tmp/Mov-C32-C33-wireframe-20261015-derived/Build/Products/Debug-iphonesimulator/Mov.app`. The installed bundle reports `com.movtorun.mov`, version `1.0` (build `1`), Xcode build `17C529`.
+- Focused UI run: 2/2 passed, including `testCommunityCrewInformationMatchesWireframeAndRoutesFromDetailAndBoard` and `testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation`. Result bundle: `/private/tmp/Mov-C32-C33-wireframe-20261015.xcresult`.
+- The earlier 5/5 bundle `/private/tmp/Mov-F002-F003-live-review-20261015-retry.xcresult` was built before these C32/C33 changes, from checkout commit `56f447913ed12f150d65eeb0ae9fd063de309ca0` (tree `fe2e50f92f3632cd72c303cc92005af5ab24c4cd`, identical to then-current `main`). It covers navigation/scroll, dark/short-screen community layout, and H00/H07–H09 behavior, not the corrected C32 copy.
 
 ## Crew settings and board lifecycle (C36–C40)
 
