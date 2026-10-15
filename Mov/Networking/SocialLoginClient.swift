@@ -123,6 +123,19 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
     case requestInProgress
     case providerAuthorizationUnavailable
 
+    /// True when the backend has returned a response that conclusively rejects completion.
+    /// Transport and malformed-response failures keep the exact request available for replay.
+    var completionWasRejected: Bool {
+        switch self {
+        case .invalidRequest, .invalidCredentials, .termsNotAccepted, .signupProofInvalid,
+             .nicknameAlreadyUsed, .signupRequestConflict, .tooManyRequests, .providerAuthorizationUnavailable,
+             .requestInProgress:
+            true
+        case .invalidResponse, .serviceUnavailable, .serverFailure, .transport, .cancelled:
+            false
+        }
+    }
+
     var userMessage: String {
         switch self {
         case .invalidRequest, .invalidCredentials:
@@ -201,11 +214,15 @@ actor SocialLoginCoordinator {
         defer { isStarting = false }
 
         do {
+            try Task.checkCancellation()
             let challenge = try await service.issueChallenge(provider: provider, deviceID: deviceID)
+            try Task.checkCancellation()
             guard let credential = try await credentials.credential(for: provider, challenge: challenge) else {
                 throw SocialLoginFailure.cancelled
             }
+            try Task.checkCancellation()
             guard Self.isCredential(credential) else { throw SocialLoginFailure.invalidRequest }
+            try Task.checkCancellation()
             let proof = try await service.verify(
                 provider: provider,
                 challenge: challenge,
@@ -213,6 +230,7 @@ actor SocialLoginCoordinator {
                 requestID: UUID(),
                 credential: credential
             )
+            try Task.checkCancellation()
             return SocialLoginAttempt(provider: provider, deviceID: deviceID, proof: proof, completionRequestID: UUID())
         } catch is CancellationError {
             throw SocialLoginFailure.cancelled
@@ -254,6 +272,7 @@ actor SocialLoginCoordinator {
     }
 
     func complete(_ request: SocialLoginCompletionRequest) async throws -> SocialLoginSessionTokens {
+        guard !Task.isCancelled else { throw SocialLoginFailure.cancelled }
         if let (existingRequest, task) = completions[request.requestID] {
             guard existingRequest == request else { throw SocialLoginFailure.invalidRequest }
             return try await task.value

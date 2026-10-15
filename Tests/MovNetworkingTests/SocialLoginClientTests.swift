@@ -85,13 +85,34 @@ private actor SocialLoginServiceMock: SocialLoginServing {
 
 private actor SocialLoginCredentialMock: SocialLoginCredentialProviding {
     private let result: String?
+    private let holdsCredential: Bool
     private(set) var requestedProviders: [SocialLoginProvider] = []
+    private var continuation: CheckedContinuation<String?, Error>?
+    private var startedContinuation: CheckedContinuation<Void, Never>?
 
-    init(result: String?) { self.result = result }
+    init(result: String?, holdsCredential: Bool = false) {
+        self.result = result
+        self.holdsCredential = holdsCredential
+    }
 
     func credential(for provider: SocialLoginProvider, challenge: SocialLoginChallenge) async throws -> String? {
         requestedProviders.append(provider)
-        return result
+        guard holdsCredential else { return result }
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            startedContinuation?.resume()
+            startedContinuation = nil
+        }
+    }
+
+    func waitUntilCredentialStarts() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { continuation in startedContinuation = continuation }
+    }
+
+    func releaseCredential() {
+        continuation?.resume(returning: result)
+        continuation = nil
     }
 }
 
@@ -300,6 +321,43 @@ final class SocialLoginClientTests: XCTestCase {
         let requestedProviders = await credentials.requestedProviders
         XCTAssertEqual(calls.count, 1, "Cancellation stops after the challenge and never sends a provider credential")
         XCTAssertEqual(requestedProviders, [.naver])
+    }
+
+    func testCancellationWithLateCredentialStopsBeforeVerification() async throws {
+        let service=SocialLoginServiceMock()
+        let credentials=SocialLoginCredentialMock(result:"late-fixture-credential",holdsCredential:true)
+        let coordinator=SocialLoginCoordinator(service:service,credentials:credentials)
+        let begin=Task { try await coordinator.begin(provider:.google,deviceID:UUID()) }
+
+        await credentials.waitUntilCredentialStarts()
+        begin.cancel()
+        await credentials.releaseCredential()
+
+        do {
+            _ = try await begin.value
+            XCTFail("A credential returned after cancellation must not continue to verification")
+        } catch let failure as SocialLoginFailure {
+            XCTAssertEqual(failure,.cancelled)
+        }
+        let calls=await service.recordedCalls()
+        XCTAssertEqual(calls.count,1)
+        XCTAssertTrue(calls[0].hasPrefix("challenge:"))
+    }
+
+    func testSubmittedCompletionReturnsItsResultWhenCallerIsCancelled() async throws {
+        let service=SocialLoginServiceMock(holdCompletion:true)
+        let coordinator=SocialLoginCoordinator(service:service,credentials:SocialLoginCredentialMock(result:"fixture-credential"))
+        let authenticate=Task { try await coordinator.authenticate(provider:.kakao,deviceID:UUID()) }
+
+        await service.waitUntilCompletionStarts()
+        authenticate.cancel()
+        await service.releaseCompletion()
+
+        let outcome=try await authenticate.value
+        guard case .authenticated(let tokens)=outcome else {return XCTFail("The submitted response must reach its caller")}
+        XCTAssertEqual(tokens.accessToken,"fixture-access")
+        let completedCount=await service.completionCount()
+        XCTAssertEqual(completedCount,1)
     }
 
     func testBackendTermsFailureBranchesToSignupAndReusesProofAndRequestID() async throws {

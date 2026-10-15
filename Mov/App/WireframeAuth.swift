@@ -9,22 +9,42 @@ enum WireframeSocialLoginFixtureTerms {
 /// API and provider seams used only by social-login UI fixtures.
 actor WireframeSocialLoginServiceFixture: SocialLoginServing {
     private let requiresSignup: Bool
+    private let delayChallenge: Bool
     private let delayCompletion: Bool
     private var shouldFailVerification: Bool
     private var shouldExpireSignupProof: Bool
+    private var shouldLoseCompletionResponse: Bool
+    private var failedCompletionRequest: SocialLoginCompletionRequest?
     private let challenge = SocialLoginChallenge(state: String(repeating: "s", count: 43), nonce: String(repeating: "n", count: 43), expiresInSeconds: 600)
     private let proof = SocialLoginProof(socialSignupProof: String(repeating: "p", count: 43), expiresInSeconds: 600)
     private let tokens = SocialLoginSessionTokens(accessToken: "fixture-only-access", refreshToken: "fixture-only-refresh", tokenType: "Bearer", accessExpiresInSeconds: 900, refreshExpiresInSeconds: 604_800)
 
-    init(requiresSignup: Bool, failVerificationOnce: Bool, delayCompletion: Bool, expireSignupProofOnce: Bool) {
+    init(
+        requiresSignup: Bool,
+        failVerificationOnce: Bool,
+        delayChallenge: Bool,
+        delayCompletion: Bool,
+        expireSignupProofOnce: Bool,
+        loseCompletionResponseOnce: Bool
+    ) {
         self.requiresSignup = requiresSignup
         self.shouldFailVerification = failVerificationOnce
+        self.delayChallenge = delayChallenge
         self.delayCompletion = delayCompletion
         self.shouldExpireSignupProof = expireSignupProofOnce
+        self.shouldLoseCompletionResponse = loseCompletionResponseOnce
     }
 
     func issueChallenge(provider: SocialLoginProvider, deviceID: UUID) async throws -> SocialLoginChallenge {
-        challenge
+        if delayChallenge {
+            return await withCheckedContinuation { continuation in
+                Task {
+                    try? await Task.sleep(for: .milliseconds(5_000))
+                    continuation.resume(returning: challenge)
+                }
+            }
+        }
+        return challenge
     }
 
     func verify(provider: SocialLoginProvider, challenge: SocialLoginChallenge, deviceID: UUID, requestID: UUID, credential: String) async throws -> SocialLoginProof {
@@ -36,6 +56,14 @@ actor WireframeSocialLoginServiceFixture: SocialLoginServing {
     }
 
     func complete(_ request: SocialLoginCompletionRequest) async throws -> SocialLoginSessionTokens {
+        let isExactRetry:Bool
+        if let failedCompletionRequest {
+            guard failedCompletionRequest == request else { throw SocialLoginFailure.invalidRequest }
+            self.failedCompletionRequest = nil
+            isExactRetry=true
+        } else {
+            isExactRetry=false
+        }
         if requiresSignup {
             guard request.nickname != nil, WireframeSocialLoginFixtureTerms.catalog.accepts(request.termsConsents) else {
                 throw SocialLoginFailure.termsNotAccepted
@@ -48,7 +76,12 @@ actor WireframeSocialLoginServiceFixture: SocialLoginServing {
                 throw SocialLoginFailure.invalidRequest
             }
         }
-        if delayCompletion { try await Task.sleep(for: .milliseconds(2_000)) }
+        if delayCompletion && !isExactRetry { try await Task.sleep(for: .milliseconds(5_000)) }
+        if shouldLoseCompletionResponse {
+            shouldLoseCompletionResponse = false
+            failedCompletionRequest = request
+            throw SocialLoginFailure.transport(.timedOut)
+        }
         return tokens
     }
 }

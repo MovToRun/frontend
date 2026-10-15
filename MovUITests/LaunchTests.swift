@@ -3858,6 +3858,16 @@ extension LaunchTests {
         tap("카카오로 로그인");tap("인증 성공 · 예시")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:8),app.debugDescription)
 
+        openSocialLoginFixture(["-wire-social-login-delay-challenge"])
+        tap("Google로 로그인");tap("인증 성공 · 예시")
+        let start=app.buttons["socialLoginStart"]
+        let starting=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in start.exists && !start.isEnabled},object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[starting],timeout:5),.completed,app.debugDescription)
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.descendants(matching:.any)["screen-A04"].waitForExistence(timeout:6),"A late challenge response must not navigate after cancellation")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].exists,app.debugDescription)
+
         openSocialLoginFixture(["-wire-social-login-fail-once"])
         tap("Google로 로그인");tap("인증 성공 · 예시")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A04"].waitForExistence(timeout:8),app.debugDescription)
@@ -3893,6 +3903,29 @@ extension LaunchTests {
         let disabled=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in start.exists && !start.isEnabled},object:nil)
         XCTAssertEqual(XCTWaiter.wait(for:[disabled],timeout:5),.completed,app.debugDescription)
         XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:10),app.debugDescription)
+    }
+
+    func testSocialSignupKeepsSubmittedRequestAndRetriesAfterLostResponse() {
+        openSocialLoginFixture(["-wire-social-login-new","-wire-social-login-delay-completion","-wire-social-login-lose-completion-once"])
+        tap("Google로 로그인");tap("인증 성공 · 예시")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:8),app.debugDescription)
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:8),app.debugDescription)
+        let nickname=app.textFields["signupNicknameInput"]
+        replace("아침러너",into:nickname)
+        tap("signupContinue")
+
+        let submit=app.buttons["signupContinue"]
+        let submitting=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in submit.exists && !submit.isEnabled},object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[submitting],timeout:5),.completed,app.debugDescription)
+        XCTAssertFalse(app.buttons["뒤로"].isEnabled,app.debugDescription)
+        XCTAssertFalse(nickname.isEnabled,app.debugDescription)
+        XCTAssertTrue(app.staticTexts["연결을 확인한 뒤 다시 시도해 주세요."].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["뒤로"].isEnabled,app.debugDescription)
+        XCTAssertFalse(nickname.isEnabled,app.debugDescription)
+        XCTAssertTrue(submit.isEnabled,app.debugDescription)
+        tap("signupContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:12),app.debugDescription)
     }
 
     func testPasswordResetAndEmailMethodManagement() {

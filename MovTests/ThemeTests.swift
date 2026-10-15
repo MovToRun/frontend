@@ -3002,16 +3002,21 @@ extension ThemeTests {
     }
 
     func testSignupNicknameAndOptionalWeightPolicies() {
-        XCTAssertNil(WSignupNicknameValidation.error(for:"아침 러너"))
+        XCTAssertEqual(WSignupNicknameValidation.error(for:"아침 러너"),"한글, 영문, 숫자, 밑줄만 사용할 수 있어요.")
         XCTAssertNil(WSignupNicknameValidation.error(for:"새벽러너"))
-        XCTAssertEqual(WSignupNicknameValidation.error(for:" \n "),"닉네임을 입력해 주세요.")
-        XCTAssertEqual(WSignupNicknameValidation.error(for:String(repeating:"가",count:21)),"닉네임은 20자까지 입력할 수 있어요.")
+        XCTAssertNil(WSignupNicknameValidation.error(for:"Run_2026"))
+        XCTAssertNil(WSignupNicknameValidation.error(for:"\u{1100}\u{1161}러너"),"NFC-composed Hangul follows the backend policy")
+        XCTAssertNil(WSignupNicknameValidation.error(for:String(repeating:"가",count:12)))
+        XCTAssertEqual(WSignupNicknameValidation.error(for:"가"),"닉네임은 2~12자로 입력해 주세요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:String(repeating:"가",count:13)),"닉네임은 2~12자로 입력해 주세요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:" \n "),"한글, 영문, 숫자, 밑줄만 사용할 수 있어요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:""),"닉네임을 입력해 주세요.")
         XCTAssertNil(WSignupNicknameValidation.error(for:"달빛러너"),"Generic validation does not claim global nickname availability")
         XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"달빛러너"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
         XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"runmate"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
-        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"  RunMate  "),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertNil(WSignupNicknameValidation.fixtureError(for:"  RunMate  "),"Whitespace is rejected by the shared nickname policy")
         XCTAssertNil(WSignupNicknameValidation.fixtureError(for:"아침러너"))
-        XCTAssertEqual(WSignupNicknameValidation.normalized("  cafe\u{301}  "),"café")
+        XCTAssertEqual(WSignupNicknameValidation.normalized("  cafe\u{301}  "),"  café  ")
         XCTAssertNil(WSignupWeightValidation.error(for:""))
         XCTAssertNil(WSignupWeightValidation.error(for:"20"))
         XCTAssertNil(WSignupWeightValidation.error(for:"300"))
@@ -3019,6 +3024,14 @@ extension ThemeTests {
         XCTAssertNotNil(WSignupWeightValidation.error(for:"19.9"))
         XCTAssertNotNil(WSignupWeightValidation.error(for:"300.1"))
         XCTAssertNotNil(WSignupWeightValidation.error(for:"nan"))
+    }
+
+    func testSocialLoginNavigationCanCancelPreparationButProtectsSubmittedCompletion() {
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A14",completionSubmitted:false))
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A03",completionSubmitted:false))
+        XCTAssertFalse(WSocialLoginNavigationPolicy.canNavigateAway(from:"A14",completionSubmitted:true))
+        XCTAssertFalse(WSocialLoginNavigationPolicy.canNavigateAway(from:"A03",completionSubmitted:true))
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A01",completionSubmitted:true))
     }
 
     @MainActor func testConsentSequenceCancellationRestoresPriorChecksOnReentry() {

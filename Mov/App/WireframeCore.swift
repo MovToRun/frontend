@@ -384,6 +384,11 @@ enum WSignupNicknameValidation {
         fixtureNicknames.contains(where:{canonical($0)==canonical(value)}) ? "검토용 예시 계정에서 사용 중인 닉네임이에요.":nil
     }
 }
+enum WSocialLoginNavigationPolicy {
+    static func canNavigateAway(from screen:String,completionSubmitted:Bool)->Bool {
+        !completionSubmitted || !["A14","A03"].contains(screen)
+    }
+}
 enum WSignupWeightValidation {
     static func error(for value:String)->String? {
         guard !value.isEmpty else{return nil}
@@ -3604,8 +3609,12 @@ struct WireframeRoot:View {
     @State var authSessionStore: (any AuthSessionStoring)?
     @State var socialLoginCoordinator: SocialLoginCoordinator?
     @State var socialLoginPendingAttempt: SocialLoginAttempt?
+    @State var socialLoginPendingCompletion: SocialLoginCompletionRequest?
+    @State var socialLoginNextCompletionRequestID: UUID?
+    @State var socialLoginCompletionSubmitted = false
     @State var socialLoginBusy = false
     @State var socialLoginInvocationID: UUID?
+    @State var socialLoginTask: Task<Void,Never>?
     @State var accountLinkPasswordInput = ""
     @State var weeklyGoalDraftVersion:Int64?
     @State var weeklyGoalDraftScopeID:String?
@@ -3631,8 +3640,10 @@ struct WireframeRoot:View {
             let service=WireframeSocialLoginServiceFixture(
                 requiresSignup:args.contains("-wire-social-login-new"),
                 failVerificationOnce:args.contains("-wire-social-login-fail-once"),
+                delayChallenge:args.contains("-wire-social-login-delay-challenge"),
                 delayCompletion:args.contains("-wire-social-login-delay-completion"),
-                expireSignupProofOnce:args.contains("-wire-social-login-expired-proof-once")
+                expireSignupProofOnce:args.contains("-wire-social-login-expired-proof-once"),
+                loseCompletionResponseOnce:args.contains("-wire-social-login-lose-completion-once")
             )
             let credentials=WireframeSocialLoginCredentialFixture(cancelled:args.contains("-wire-social-login-cancel"))
             return SocialLoginCoordinator(service:service,credentials:credentials)
@@ -4025,11 +4036,76 @@ struct WireframeRoot:View {
         }
         communityDiscardContext=nil
     }
-    func go(_ id:String){guard !remoteReads.isAccountLinkMutationInFlight else{return};let route=id=="B01" ? "POINTS":id;if ui.screen=="A14" && route != "A14"{socialLoginInvocationID=nil;socialLoginBusy=false};if socialLoginPendingAttempt != nil && ["A02","A03"].contains(ui.screen) && !["A02","A03"].contains(route){socialLoginPendingAttempt=nil};if route=="C08" && ui.communityCardOriginAnonymous{return};if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return};if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return};if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return};if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return};performNavigation(route)}
-    func performNavigation(_ route:String){guard !remoteReads.isAccountLinkMutationInFlight else{return};if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
-    func back(){guard !remoteReads.isAccountLinkMutationInFlight else{return};if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return};performBack()}
-    func performBack(){guard !remoteReads.isAccountLinkMutationInFlight else{return};let source=ui.screen;if source=="L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(source){remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(source){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()};if source=="A14" && ui.screen != "A14"{socialLoginInvocationID=nil;socialLoginBusy=false};if socialLoginPendingAttempt != nil && ["A02","A03"].contains(source) && !["A02","A03"].contains(ui.screen){socialLoginPendingAttempt=nil}}
-    func selectRootTab(_ route:String){guard !remoteReads.isAccountLinkMutationInFlight else{return};if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];if ["C02","C08","C15"].contains(route),ui.rootIndex != 3{ui.forward=3>ui.rootIndex;ui.previousRootIndex=ui.rootIndex;ui.rootIndex=3};go(route)}
+    func prepareSocialLoginNavigation(to route:String)->Bool {
+        guard WSocialLoginNavigationPolicy.canNavigateAway(from:ui.screen,completionSubmitted:socialLoginCompletionSubmitted) else{return false}
+        guard route != ui.screen else{return true}
+        if ui.screen=="A14" {
+            socialLoginInvocationID=nil
+            socialLoginTask?.cancel()
+            if route != "A02" {
+                socialLoginPendingAttempt=nil
+                socialLoginPendingCompletion=nil
+                socialLoginNextCompletionRequestID=nil
+            }
+        }
+        if socialLoginPendingAttempt != nil && ["A02","A03"].contains(ui.screen) && !["A02","A03"].contains(route) {
+            socialLoginPendingAttempt=nil
+            socialLoginPendingCompletion=nil
+            socialLoginNextCompletionRequestID=nil
+        }
+        return true
+    }
+    func go(_ id:String){
+        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        let route=id=="B01" ? "POINTS":id
+        guard prepareSocialLoginNavigation(to:route) else{return}
+        if route=="C08" && ui.communityCardOriginAnonymous{return}
+        if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return}
+        if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return}
+        if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return}
+        if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return}
+        performNavigation(route)
+    }
+    func performNavigation(_ route:String){
+        guard !remoteReads.isAccountLinkMutationInFlight,prepareSocialLoginNavigation(to:route) else{return}
+        if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()}
+        if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()}
+        if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
+        if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}}
+        if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()}
+        let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"]
+        let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24
+        prepare(route)
+        withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}
+    }
+    func back(){
+        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return}
+        if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return}
+        if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return}
+        if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return}
+        performBack()
+    }
+    func performBack(){
+        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        let source=ui.screen
+        let destination=ui.path.last ?? "H00"
+        guard prepareSocialLoginNavigation(to:destination) else{return}
+        if source=="L07"{remoteReads.cancelRunRecordDeletion()}
+        if ["H04","H10"].contains(source){remoteReads.cancelWeeklyGoalMutation()}
+        if ["M02","T02"].contains(source){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
+        withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
+    }
+    func selectRootTab(_ route:String){
+        guard !remoteReads.isAccountLinkMutationInFlight,prepareSocialLoginNavigation(to:route) else{return}
+        if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return}
+        if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return}
+        if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return}
+        if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return}
+        ui.path=[]
+        if ["C02","C08","C15"].contains(route),ui.rootIndex != 3{ui.forward=3>ui.rootIndex;ui.previousRootIndex=ui.rootIndex;ui.rootIndex=3}
+        go(route)
+    }
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
         if screen=="C13"{return WCommunityComposerSnapshot(screen:screen,board:"",crewID:nil,postID:nil,title:ui.communityCourseTitle,body:ui.communityCourseIntroduction,recordID:ui.communityCourseRecordID,hideEnds:ui.communityCourseHideEnds)}

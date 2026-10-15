@@ -196,7 +196,14 @@ extension WireframeRoot {
         case "A06":return .init(title:"동의 내용 검토",heading:ui.consentTopic,text:"이 화면은 최종 약관이 아닌\n고지 구조 검토안이에요.",notice:"운영 주체, 처리 근거, 보존 기간, 문의처와 최종 문구는 출시 전 확정이 필요해요.",buttons:[("확인했어요","consent-reviewed",0)])
         case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
         case "A13":return .init(title:"재설정 완료",heading:"이제 로그인해 주세요",text:"로그인 화면으로 돌아가 계속해 주세요.",buttons:[("로그인으로","reset-cancel",0)])
-        case "A14":return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜":ui.provider)+" 로그인 예시",text:"실제 제공자에 연결하지 않아요.\n아래에서 가상 인증 결과를 선택해 주세요.",buttons:[("인증 성공 · 예시","social-success",0),("인증 오류 · 예시","A04",1),("인증 취소","A01",3)])
+        case "A14":
+            let text=socialLoginCompletionSubmitted
+                ? (socialLoginBusy ? "가입 결과를 확인하고 있어요.\n응답이 오면 계속 진행해요.":"앞선 요청의 응답을 확인하지 못했어요.\n같은 요청을 다시 확인해요.")
+                : "실제 제공자에 연결하지 않아요.\n아래에서 가상 인증 결과를 선택해 주세요."
+            let buttons:[(String,String,Int)]=socialLoginCompletionSubmitted
+                ? [(socialLoginBusy ? "요청 확인 중…":"같은 요청 다시 확인 · 예시","social-success",0)]
+                : [("인증 성공 · 예시","social-success",0),("인증 오류 · 예시","A04",1),("인증 취소","A01",3)]
+            return .init(title:"소셜 로그인",heading:(ui.provider.isEmpty ? "소셜":ui.provider)+" 로그인 예시",text:text,notice:ui.error,buttons:buttons)
         case "A15":return .init(title:"회원가입",heading:"이제 달려 볼까요?",text:"준비가 끝났어요.\n나의 첫 러닝을 시작해 보세요.",buttons:[("시작하기","H00",0)])
         case "A18":return .init(title:"이메일 로그인",heading:ui.passwordChanged ? "변경 완료 화면이에요":"이메일 로그인을 연결했어요",text:ui.passwordChanged ? "실제 비밀번호는 바뀌지 않았어요.\n변경 데모를 마쳐 다시 로그인해야 해요.\n입력한 비밀번호는 보관하지 않아요.":"이 브라우저의 데모 연결 상태만 바뀌었어요.\n입력한 비밀번호는 보관하지 않아요.",buttons:[(ui.passwordChanged ? "다시 로그인":"로그인 수단 확인",ui.passwordChanged ? "A01":"T05",0)])
         case "H06":return .init(title:"임시 기록 확인",heading:"이전 러닝이\n남아 있어요",text:"마지막 확인 지점까지의 기록이에요.\n멈춰 있던 시간은 더하지 않았어요.",notice:"미저장 기록의 마지막 확인 지점을 이 기기에 임시 보관했어요. 저장 버튼을 눌러 완료해 주세요.",buttons:[("이 기록 저장","save",0),("일시정지 상태로 보기","R04",1),("임시 기록 삭제","R11",3)])
@@ -233,7 +240,7 @@ extension WireframeRoot {
         default:return .init(title:"화면 확인",heading:"화면을 확인해 주세요",text:"",buttons:[("홈으로","H00",0)])
         }
     }
-    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ["T12","A13"].contains(ui.screen) ? nil:{back()};return WPage(title:data.title,back:navigationBack,backDisabled:["T06","T08","T15"].contains(ui.screen) && remoteReads.isAccountLinkMutationInFlight,backIdentifier:ui.screen=="T06" ? "accountLinkBack":(["T08","T15"].contains(ui.screen) && ui.pending=="T08" ? "accountUnlinkBack":nil)){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
+    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ["T12","A13"].contains(ui.screen) ? nil:{back()};return WPage(title:data.title,back:navigationBack,backDisabled:(ui.screen=="A14" && socialLoginCompletionSubmitted) || (["T06","T08","T15"].contains(ui.screen) && remoteReads.isAccountLinkMutationInFlight),backIdentifier:ui.screen=="T06" ? "accountLinkBack":(["T08","T15"].contains(ui.screen) && ui.pending=="T08" ? "accountUnlinkBack":nil)){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
         if ui.screen=="T15",remoteReads.hasAccountLinkDependency,remoteReads.accountLinkMethods?.localPassword == true {
             SecureField("현재 비밀번호",text:$accountLinkPasswordInput)
                 .textContentType(.password)
@@ -263,31 +270,107 @@ extension WireframeRoot {
         let invocationID=UUID()
         socialLoginInvocationID=invocationID
         socialLoginBusy=true
-        Task { @MainActor in
+        ui.error=""
+        socialLoginTask=Task { @MainActor in
             defer {
-                if socialLoginInvocationID==invocationID{socialLoginBusy=false;socialLoginInvocationID=nil}
+                if socialLoginInvocationID==invocationID{socialLoginInvocationID=nil}
+                socialLoginBusy=false
+                socialLoginTask=nil
+            }
+            if socialLoginCompletionSubmitted {
+                guard let request=socialLoginPendingCompletion else{return}
+                do {
+                    _=try await coordinator.complete(request)
+                    guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
+                    socialLoginCompletionSubmitted=false
+                    socialLoginPendingCompletion=nil
+                    socialLoginPendingAttempt=nil
+                    socialLoginNextCompletionRequestID=nil
+                    ui.setLoggedIn(true);ui.save()
+                    socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    go("H00")
+                } catch let failure as SocialLoginFailure {
+                    guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
+                    if failure == .termsNotAccepted,socialLoginPendingAttempt != nil {
+                        socialLoginCompletionSubmitted=false
+                        socialLoginPendingCompletion=nil
+                        socialLoginNextCompletionRequestID=nil
+                        ui.consentTerms=false;ui.consentPrivacy=false;ui.error=""
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                        go("A02")
+                    } else if failure.completionWasRejected {
+                        socialLoginCompletionSubmitted=false
+                        socialLoginPendingCompletion=nil
+                        socialLoginNextCompletionRequestID=nil
+                        ui.error=failure.userMessage
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                        go("A04")
+                    } else {
+                        ui.error=failure.userMessage
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    }
+                } catch {
+                    guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
+                    ui.error=SocialLoginFailure.invalidResponse.userMessage
+                    socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                }
+                return
             }
             do {
-                let outcome=try await coordinator.authenticate(provider:provider,deviceID:UUID())
+                let attempt=try await coordinator.begin(provider:provider,deviceID:UUID())
                 guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
-                socialLoginBusy=false
-                socialLoginInvocationID=nil
-                switch outcome {
-                case .authenticated:
-                    ui.setLoggedIn(true);ui.save();go("H00")
-                case .signupRequired(let attempt):
-                    socialLoginPendingAttempt=attempt;ui.consentTerms=false;ui.consentPrivacy=false;ui.error="";go("A02")
+                socialLoginPendingAttempt=attempt
+                let request=SocialLoginCompletionRequest(
+                    socialSignupProof:attempt.proof.socialSignupProof,
+                    requestID:attempt.completionRequestID,
+                    deviceID:attempt.deviceID
+                )
+                socialLoginPendingCompletion=request
+                socialLoginCompletionSubmitted=true
+                do {
+                    _=try await coordinator.complete(request)
+                    guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
+                    socialLoginCompletionSubmitted=false
+                    socialLoginPendingCompletion=nil
+                    socialLoginPendingAttempt=nil
+                    ui.setLoggedIn(true);ui.save()
+                    socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    go("H00")
+                } catch let failure as SocialLoginFailure {
+                    guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
+                    if failure == .termsNotAccepted {
+                        socialLoginCompletionSubmitted=false
+                        socialLoginPendingCompletion=nil
+                        ui.consentTerms=false;ui.consentPrivacy=false;ui.error=""
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                        go("A02")
+                    } else if failure.completionWasRejected {
+                        socialLoginCompletionSubmitted=false
+                        socialLoginPendingCompletion=nil
+                        ui.error=failure.userMessage
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                        go("A04")
+                    } else {
+                        ui.error=failure.userMessage
+                        socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    }
                 }
             } catch let failure as SocialLoginFailure {
                 guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
-                socialLoginBusy=false
-                socialLoginInvocationID=nil
-                if failure == .cancelled {go("A01")} else {ui.error=failure.userMessage;go("A04")}
+                if failure == .cancelled {
+                    socialLoginPendingAttempt=nil;socialLoginPendingCompletion=nil
+                    socialLoginCompletionSubmitted=false
+                    socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    go("A01")
+                } else {
+                    ui.error=failure.userMessage
+                    socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
+                    go("A04")
+                }
             } catch {
                 guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
-                socialLoginBusy=false
-                socialLoginInvocationID=nil
                 ui.error=SocialLoginFailure.invalidResponse.userMessage
+                socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
                 go("A04")
             }
         }
