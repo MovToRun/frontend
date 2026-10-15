@@ -2747,6 +2747,25 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertNil(try store.loadSnapshot())
     }
 
+    func testPasswordResetRevocationAtomicallyClearsTheExistingSessionSnapshotAndRetriesStorageFailure() async throws {
+        let initial = try AuthSessionFixtures.session()
+        let store = AuthSessionFixtureStore(snapshot: initial, failReplacementAt: 1)
+
+        do {
+            try await AuthSessionPasswordResetRevocation.clear(store: store)
+            XCTFail("A failed persistent write must not report the session as cleared")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .storageUnavailable)
+        }
+        XCTAssertEqual(try store.loadSnapshot(), initial)
+
+        try await AuthSessionPasswordResetRevocation.clear(store: store)
+        XCTAssertNil(try store.loadSnapshot())
+        let writes = store.attemptedWrites()
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertNil(writes[1])
+    }
+
     func testMalformedJWTSubjectDoesNotCreateAnAuthenticatedMemberID() async throws {
         let store = AuthSessionFixtureStore()
         let invalidToken = AuthSessionFixtures.serverToken(memberID: "041")

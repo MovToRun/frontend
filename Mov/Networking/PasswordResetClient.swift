@@ -27,6 +27,7 @@ enum PasswordResetFailure: Error, Equatable, Sendable {
     case serviceUnavailable(requestID: String?)
     case serverFailure(statusCode: Int, requestID: String?)
     case invalidResponse
+    case sessionStorageUnavailable
     case transport(URLError.Code)
     case cancelled
 
@@ -35,7 +36,7 @@ enum PasswordResetFailure: Error, Equatable, Sendable {
         case .verificationFailed(let requestID), .tooManyRequests(let requestID), .serviceUnavailable(let requestID):
             requestID
         case .serverFailure(_, let requestID): requestID
-        case .invalidRequest, .invalidResponse, .transport, .cancelled: nil
+        case .invalidRequest, .invalidResponse, .sessionStorageUnavailable, .transport, .cancelled: nil
         }
     }
 
@@ -46,7 +47,7 @@ enum PasswordResetFailure: Error, Equatable, Sendable {
 
     var requiresExactRetry: Bool {
         switch self {
-        case .serviceUnavailable, .serverFailure, .invalidResponse, .transport, .cancelled:
+        case .serviceUnavailable, .serverFailure, .invalidResponse, .sessionStorageUnavailable, .transport, .cancelled:
             true
         case .invalidRequest, .verificationFailed, .tooManyRequests:
             false
@@ -65,6 +66,8 @@ enum PasswordResetFailure: Error, Equatable, Sendable {
             return "인증 서비스를 일시적으로 사용할 수 없어요. 같은 내용으로 다시 시도해 주세요."
         case .serverFailure, .invalidResponse:
             return "비밀번호 변경 결과를 확인하지 못했어요. 같은 내용으로 다시 시도해 주세요."
+        case .sessionStorageUnavailable:
+            return "비밀번호는 변경됐지만 이 기기의 로그인 정보를 정리하지 못했어요. 같은 내용으로 다시 시도해 주세요."
         case .transport:
             return "연결 상태를 확인한 뒤 같은 내용으로 다시 시도해 주세요."
         case .cancelled:

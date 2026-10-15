@@ -451,6 +451,7 @@ struct WireframeRemoteReadDependencies {
     let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
     let passwordResetService: (any PasswordResetServing)?
+    let authSessionStore: (any AuthSessionStoring)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
@@ -462,7 +463,8 @@ struct WireframeRemoteReadDependencies {
         runningProgressLoader: RunningProgressLoader? = nil,
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
         sessionLogoutRequester: (any SessionLogoutRequesting)? = nil,
-        passwordResetService: (any PasswordResetServing)? = nil
+        passwordResetService: (any PasswordResetServing)? = nil,
+        authSessionStore: (any AuthSessionStoring)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.memberProfileUpdater = memberProfileUpdater
@@ -474,6 +476,7 @@ struct WireframeRemoteReadDependencies {
         self.weeklyGoalWriter = weeklyGoalWriter
         self.sessionLogoutRequester = sessionLogoutRequester
         self.passwordResetService = passwordResetService
+        self.authSessionStore = authSessionStore
     }
 }
 
@@ -2366,6 +2369,8 @@ struct RootView:View {
                 failVerificationOnce:args.contains("-wire-password-reset-confirm-timeout-once"),
                 loseCompletionResponseOnce:args.contains("-wire-password-reset-completion-response-lost-once")
             ) : nil
+        let passwordResetSessionStore: (any AuthSessionStoring)? = WReviewMode.tools && args.contains("-wire-password-reset-session-store-fixture")
+            ? WireframePasswordResetSessionFixtureStore() : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
@@ -2373,7 +2378,7 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -2402,7 +2407,8 @@ struct RootView:View {
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
             sessionLogoutRequester:logoutFixture,
-            passwordResetService:passwordResetFixture
+            passwordResetService:passwordResetFixture,
+            authSessionStore:passwordResetSessionStore
         )
     }
 
@@ -2701,6 +2707,7 @@ struct WireframeRoot:View {
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
     @State var passwordResetService: (any PasswordResetServing)?
+    @State var authSessionStore: (any AuthSessionStoring)?
     @State var weeklyGoalDraftVersion:Int64?
     @State var weeklyGoalDraftScopeID:String?
     @State var weeklyGoalDraftDirty=false
@@ -2718,6 +2725,7 @@ struct WireframeRoot:View {
             return PasswordResetClient(apiClient:APIClient(configuration:configuration))
         }()
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService ?? bundledResetService)
+        _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         let args=ProcessInfo.processInfo.arguments
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults

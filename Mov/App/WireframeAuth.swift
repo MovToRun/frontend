@@ -1,4 +1,28 @@
 import SwiftUI
+
+/// A non-secret session snapshot used only by password-reset UI tests.
+final class WireframePasswordResetSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
+    private let lock = NSLock()
+    private var snapshot: AuthSessionSnapshot? = try? AuthSessionSnapshot(
+        accessToken: "fixture-access-token",
+        refreshToken: "fixture-refresh-token",
+        memberID: "41"
+    )
+
+    func loadSnapshot() throws -> AuthSessionSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshot
+    }
+
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        self.snapshot = snapshot
+    }
+}
+
 enum WLoginFailureCopy {
     static let title = "로그인"
     static let heading = "로그인을 마치지\n못했어요"
@@ -144,6 +168,18 @@ extension WireframeRoot {
         Task{@MainActor in
             do {
                 try await service.resetPassword(resetProof:completion.resetProof,requestID:completion.requestID,email:completion.email,password:completion.password)
+                guard let sessionStore=authSessionStore else {
+                    guard ui.screen=="A12" else{return}
+                    _ = ui.passwordReset.failCompletion(completion,failure:.sessionStorageUnavailable)
+                    return
+                }
+                do {
+                    try await AuthSessionPasswordResetRevocation.clear(store:sessionStore)
+                } catch {
+                    guard ui.screen=="A12" else{return}
+                    _ = ui.passwordReset.failCompletion(completion,failure:.sessionStorageUnavailable)
+                    return
+                }
                 guard ui.screen=="A12",ui.passwordReset.finishCompletion(completion) else{return}
                 ui.setLoggedIn(false);ui.save();ui.resetRemoteAccountScope()
             } catch let failure as PasswordResetFailure {
@@ -331,7 +367,7 @@ extension WireframeRoot {
                 try await service.requestCode(email:email)
                 let demoCode=await (service as? any WPasswordResetDemoServing)?.currentDemoCode()
                 guard ui.screen==sourceScreen,ui.passwordReset.finishChallengeRequest(operationID,now:Date(),demoCode:demoCode) else{return}
-                go("A28")
+                navigatePasswordReset("A28")
             } catch let failure as PasswordResetFailure {
                 _ = ui.passwordReset.failChallengeRequest(operationID,message:failure.userMessage)
             } catch {
