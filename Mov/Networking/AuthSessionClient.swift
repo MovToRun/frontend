@@ -93,6 +93,25 @@ protocol AuthSessionStoring: Sendable {
     func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws
 }
 
+enum AuthSessionPasswordResetRevocation {
+    /// Password reset revokes server sessions. Clear the matching persisted client
+    /// snapshot through the same coordinator used by login, refresh, and logout.
+    static func clear(store: any AuthSessionStoring) async throws {
+        let coordinator = store.mutationCoordinator
+        let lease = await coordinator.beginLogout()
+        do {
+            guard let snapshot = try store.loadSnapshot() else {
+                await coordinator.finishLogout(lease: lease)
+                return
+            }
+            try await coordinator.commitLogout(lease: lease, expected: snapshot, store: store)
+        } catch {
+            await coordinator.finishLogout(lease: lease)
+            throw AuthSessionFailure.storageUnavailable
+        }
+    }
+}
+
 /// Serializes ownership changes and shares a single refresh task across every client
 /// injected with one store. The store owns this coordinator for its full lifetime.
 actor AuthSessionMutationCoordinator {
