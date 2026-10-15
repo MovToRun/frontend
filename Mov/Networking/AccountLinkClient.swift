@@ -23,6 +23,18 @@ enum AccountLinkPurpose: String, Sendable {
     case unlink = "UNLINK"
 }
 
+enum AccountLinkMutation: Equatable, Sendable {
+    case link(AccountLinkProvider)
+    case unlink(AccountLinkProvider)
+
+    func isApplied(to methods: AccountLinkMethods) -> Bool {
+        switch self {
+        case .link(let provider): methods.socialProviders.contains(provider)
+        case .unlink(let provider): !methods.socialProviders.contains(provider)
+        }
+    }
+}
+
 enum AccountLinkCredentialPurpose: Hashable, Sendable {
     case reauthentication
     case link
@@ -73,6 +85,7 @@ protocol AccountLinkServing: Sendable {
     func verifyReauthentication(provider: AccountLinkProvider, challenge: AccountLinkChallenge, credential: String, purpose: AccountLinkPurpose) async throws -> AccountLinkReauthProof
     func issueLinkChallenge(provider: AccountLinkProvider) async throws -> AccountLinkChallenge
     func completeLink(provider: AccountLinkProvider, challenge: AccountLinkChallenge, credential: String, reauthProof: String, consent: Bool) async throws
+    func unlink(provider: AccountLinkProvider, reauthProof: String, consent: Bool) async throws
 }
 
 protocol AccountLinkCredentialProviding: Sendable {
@@ -82,11 +95,22 @@ protocol AccountLinkCredentialProviding: Sendable {
 
 protocol AccountLinkFlowServing: Sendable {
     func methods() async throws -> AccountLinkMethods
-    func reauthenticateWithPassword(_ password: String) async throws
-    func reauthenticate(using provider: AccountLinkProvider) async throws
+    func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws
+    func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws
     /// Returns false if cancellation won before the completion request was submitted.
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws
+    func unlink(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws
     func cancel() async
+}
+
+extension AccountLinkFlowServing {
+    func reauthenticateWithPassword(_ password: String) async throws {
+        try await reauthenticateWithPassword(password, purpose: .link)
+    }
+
+    func reauthenticate(using provider: AccountLinkProvider) async throws {
+        try await reauthenticate(using: provider, purpose: .link)
+    }
 }
 
 enum AccountLinkFailure: Error, Equatable, Sendable {
@@ -109,6 +133,7 @@ enum AccountLinkFailure: Error, Equatable, Sendable {
     case requestInProgress
     case reauthenticationRequired
     case alreadyLinked
+    case accountLinkNotFound
     case completionStatusUnknown
     case completionNotApplied
 
@@ -153,6 +178,8 @@ enum AccountLinkFailure: Error, Equatable, Sendable {
             "현재 계정을 먼저 확인해 주세요."
         case .alreadyLinked:
             "이미 이 계정에 연결된 로그인 수단이에요."
+        case .accountLinkNotFound:
+            "연결된 로그인 수단을 찾을 수 없어요. 목록을 다시 확인해 주세요."
         case .completionStatusUnknown:
             "연결 결과를 확인하지 못했어요. 로그인 수단 상태를 다시 확인해 주세요."
         case .completionNotApplied:
@@ -246,6 +273,17 @@ struct AccountLinkClient: AccountLinkServing {
                 reauthProof: reauthProof,
                 consent: consent
             ))
+        )
+        guard response.statusCode == 204 else { throw Self.mapFailure(response) }
+        guard response.data.isEmpty else { throw AccountLinkFailure.invalidResponse }
+    }
+
+    func unlink(provider: AccountLinkProvider, reauthProof: String, consent: Bool) async throws {
+        guard Self.isToken(reauthProof) else { throw AccountLinkFailure.invalidRequest }
+        let response = try await send(
+            path: "auth/account/links/\(provider.rawValue)",
+            method: "DELETE",
+            body: try Self.encode(UnlinkRequest(reauthProof: reauthProof, consent: consent))
         )
         guard response.statusCode == 204 else { throw Self.mapFailure(response) }
         guard response.data.isEmpty else { throw AccountLinkFailure.invalidResponse }
@@ -354,6 +392,7 @@ struct AccountLinkClient: AccountLinkServing {
         let reauthProof: String
         let consent: Bool
     }
+    private struct UnlinkRequest: Encodable { let reauthProof: String; let consent: Bool }
     private struct AccountLinkProblem: Decodable {
         let code: String?
         let requestId: String?
@@ -365,6 +404,7 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
     private let credentials: any AccountLinkCredentialProviding
     private var operationInProgress = false
     private var reauthProof: String?
+    private var reauthProofPurpose: AccountLinkPurpose?
     private var cancellationGeneration: UInt64 = 0
     private var mutationRequestSubmitted = false
 
@@ -377,37 +417,41 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
         try await service.methods()
     }
 
-    func reauthenticateWithPassword(_ password: String) async throws {
+    func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
         operationInProgress = true
         reauthProof = nil
+        reauthProofPurpose = nil
         defer { operationInProgress = false }
 
         let methods = try await service.methods()
         guard methods.localPassword else { throw AccountLinkFailure.invalidCredentials }
-        let proof = try await service.reauthenticateWithPassword(password, purpose: .link)
+        let proof = try await service.reauthenticateWithPassword(password, purpose: purpose)
         reauthProof = proof.reauthProof
+        reauthProofPurpose = purpose
     }
 
-    func reauthenticate(using provider: AccountLinkProvider) async throws {
+    func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
         operationInProgress = true
         reauthProof = nil
+        reauthProofPurpose = nil
         defer { operationInProgress = false }
 
         let methods = try await service.methods()
         guard methods.socialProviders.contains(provider) else { throw AccountLinkFailure.invalidCredentials }
-        let challenge = try await service.issueReauthChallenge(provider: provider, purpose: .link)
+        let challenge = try await service.issueReauthChallenge(provider: provider, purpose: purpose)
         guard let credential = try await credentials.credential(for: provider, purpose: .reauthentication, challenge: challenge) else {
             throw AccountLinkFailure.cancelled
         }
-        let proof = try await service.verifyReauthentication(provider: provider, challenge: challenge, credential: credential, purpose: .link)
+        let proof = try await service.verifyReauthentication(provider: provider, challenge: challenge, credential: credential, purpose: purpose)
         reauthProof = proof.reauthProof
+        reauthProofPurpose = purpose
     }
 
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
-        guard let proof = reauthProof else { throw AccountLinkFailure.reauthenticationRequired }
+        guard let proof = reauthProof, reauthProofPurpose == .link else { throw AccountLinkFailure.reauthenticationRequired }
         operationInProgress = true
         let startingCancellationGeneration = cancellationGeneration
         defer {
@@ -431,6 +475,7 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
             // Completion consumes both the reauthentication proof and provider challenge.
             // Do not reuse them after a failed or cancelled completion.
             reauthProof = nil
+            reauthProofPurpose = nil
             guard await onMutationRequestWillSubmit() else { throw AccountLinkFailure.cancelled }
             try Task.checkCancellation()
             guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
@@ -438,6 +483,37 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
             try await service.completeLink(provider: provider, challenge: challenge, credential: credential, reauthProof: proof, consent: true)
         } catch {
             reauthProof = nil
+            reauthProofPurpose = nil
+            throw error
+        }
+    }
+
+    func unlink(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
+        guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
+        guard let proof = reauthProof, reauthProofPurpose == .unlink else { throw AccountLinkFailure.reauthenticationRequired }
+        operationInProgress = true
+        let startingCancellationGeneration = cancellationGeneration
+        defer {
+            operationInProgress = false
+            mutationRequestSubmitted = false
+        }
+
+        do {
+            let methods = try await service.methods()
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
+            guard methods.socialProviders.contains(provider) else { throw AccountLinkFailure.accountLinkNotFound }
+            guard await onMutationRequestWillSubmit() else { throw AccountLinkFailure.cancelled }
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
+            // The one-time UNLINK proof is consumed by the mutation and must not be reused.
+            reauthProof = nil
+            reauthProofPurpose = nil
+            mutationRequestSubmitted = true
+            try await service.unlink(provider: provider, reauthProof: proof, consent: true)
+        } catch {
+            reauthProof = nil
+            reauthProofPurpose = nil
             throw error
         }
     }
@@ -446,6 +522,7 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
         guard !mutationRequestSubmitted else { return }
         cancellationGeneration &+= 1
         reauthProof = nil
+        reauthProofPurpose = nil
     }
 }
 

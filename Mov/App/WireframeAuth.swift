@@ -434,14 +434,19 @@ extension WireframeRoot {
                     Button {
                         ui.provider = providerName
                         if remoteReads.shouldUseAccountLinkUI {
-                            guard remoteReads.hasAccountLinkDependency, remoteReady, !linked,
-                                  remoteReads.canAuthorizeAccountLinkProvider,
-                                  AccountLinkProvider.allCases.contains(where:{$0.displayName == providerName}) else { return }
-                            ui.error = ""
-                            ui.settingsGrant = false
-                            ui.pending = "T06"
-                            ui.pendingBack = "T05"
-                            go("T15")
+                            guard remoteReads.hasAccountLinkDependency, remoteReady,
+                                  let provider=AccountLinkProvider.allCases.first(where:{$0.displayName == providerName}) else { return }
+                            if linked {
+                                guard remoteReads.canReauthenticateAccountLink else { return }
+                                go(remoteReads.isLastAccountLinkMethod(provider) ? "T09":"T08")
+                            } else {
+                                guard remoteReads.canAuthorizeAccountLinkProvider else { return }
+                                ui.error = ""
+                                ui.settingsGrant = false
+                                ui.pending = "T06"
+                                ui.pendingBack = "T05"
+                                go("T15")
+                            }
                         } else if providerName == "이메일" {
                             ui.pending = linked ? "A17":"A16";ui.pendingBack="T05";go("T15")
                         } else if linked {
@@ -457,10 +462,10 @@ extension WireframeRoot {
                                 WText(text:linked ? "이 계정에 연결됨":remoteReads.shouldUseAccountLinkUI && !remoteReady ? "확인 중":"연결되지 않음",small:true)
                             }
                             Spacer()
-                            Text(remoteReads.shouldUseAccountLinkUI && linked ? "연결됨":linked ? (providerName=="이메일" ? "관리":"해제"):"연결").font(W.font(12))
+                            Text(linked ? (providerName=="이메일" ? "관리":"해제"):"연결").font(W.font(12))
                         }.frame(minHeight:85).overlay(alignment:.bottom){W.line.frame(height:1)}
                     }
-                    .disabled(remoteReads.shouldUseAccountLinkUI && (!remoteReads.hasAccountLinkDependency || !remoteReady || linked || providerName == "이메일" || !remoteReads.canAuthorizeAccountLinkProvider))
+                    .disabled(remoteReads.shouldUseAccountLinkUI && (!remoteReads.hasAccountLinkDependency || !remoteReady || providerName == "이메일" || (linked ? !remoteReads.canReauthenticateAccountLink : !remoteReads.canAuthorizeAccountLinkProvider)))
                     .accessibilityIdentifier("account-link-method-\(providerName)")
                 }
             }

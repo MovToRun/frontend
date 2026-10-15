@@ -73,6 +73,13 @@ private actor AccountLinkServiceMock: AccountLinkServing {
         linkedProviders.append(provider)
     }
 
+    func unlink(provider: AccountLinkProvider, reauthProof: String, consent: Bool) async throws {
+        calls.append("unlink:\(provider.rawValue):\(consent)")
+        guard linkedProviders.contains(provider) else { throw AccountLinkFailure.accountLinkNotFound }
+        guard hasLocalPassword || linkedProviders.count > 1 else { throw AccountLinkFailure.accountMethodRequired }
+        linkedProviders.removeAll { $0 == provider }
+    }
+
     func recordedCalls() -> [String] { calls }
 
     private func token(_ prefix: String) -> String { prefix + String(repeating: "x", count: 42) }
@@ -179,6 +186,38 @@ final class AccountLinkClientTests: XCTestCase {
         XCTAssertEqual(body["purpose"] as? String, "LINK")
     }
 
+    func testUnlinkRequestMatchesBackendContract() async throws {
+        let api = AccountLinkResponseMock([response(204, "")])
+        let client = AccountLinkClient(apiClient: api, tokenProvider: AccountLinkTokenStub(token: "fixture-access"))
+        let proof = String(repeating: "p", count: 43)
+
+        try await client.unlink(provider: .google, reauthProof: proof, consent: true)
+
+        let requests = await api.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].path, "auth/account/links/google")
+        XCTAssertEqual(requests[0].method, "DELETE")
+        XCTAssertEqual(requests[0].headers["Authorization"], "Bearer fixture-access")
+        XCTAssertEqual(requests[0].headers["Cache-Control"], "no-store")
+        let body = try XCTUnwrap(requests[0].body).jsonObject()
+        XCTAssertEqual(body["reauthProof"] as? String, proof)
+        XCTAssertEqual(body["consent"] as? Bool, true)
+    }
+
+    func testLastAccountMethodFailureMapsToBackendConflict() async throws {
+        let api = AccountLinkResponseMock([
+            response(409, #"{"code":"ACCOUNT_METHOD_REQUIRED"}"#)
+        ])
+        let client = AccountLinkClient(apiClient: api, tokenProvider: AccountLinkTokenStub(token: "fixture-access"))
+
+        do {
+            try await client.unlink(provider: .google, reauthProof: String(repeating: "p", count: 43), consent: true)
+            XCTFail("The backend forbids unlinking the last account method")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .accountMethodRequired)
+        }
+    }
+
     func testLinkConflictDoesNotExposeAccountOwner() async throws {
         let api = AccountLinkResponseMock([
             response(409, #"{"code":"ACCOUNT_LINK_CONFLICT","requestId":"fixture-request"}"#)
@@ -224,6 +263,66 @@ final class AccountLinkClientTests: XCTestCase {
 
         let calls = await service.recordedCalls()
         XCTAssertTrue(calls.contains("reauth-password:LINK:fixture-password"))
+    }
+
+    func testFlowUnlinksAfterPurposeBoundUNLINKReauthentication() async throws {
+        let service = AccountLinkServiceMock(linkedProviders: [.kakao, .google])
+        let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
+
+        try await flow.reauthenticate(using: .kakao, purpose: .unlink)
+        try await flow.unlink(provider: .google, onMutationRequestWillSubmit: { true })
+        let methods = try await flow.methods()
+
+        XCTAssertEqual(methods.socialProviders, [.kakao])
+        let calls = await service.recordedCalls()
+        XCTAssertTrue(calls.contains("reauth-challenge:kakao:UNLINK"))
+        XCTAssertTrue(calls.contains("reauth-verify:kakao:UNLINK:fixture-reauth-credential"))
+        XCTAssertTrue(calls.contains("unlink:google:true"))
+    }
+
+    func testLINKProofCannotAuthorizeUnlink() async throws {
+        let service = AccountLinkServiceMock(linkedProviders: [.kakao, .google])
+        let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
+        try await flow.reauthenticate(using: .kakao, purpose: .link)
+
+        do {
+            try await flow.unlink(provider: .google, onMutationRequestWillSubmit: { true })
+            XCTFail("A LINK proof cannot authorize an UNLINK mutation")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .reauthenticationRequired)
+        }
+        let calls = await service.recordedCalls()
+        XCTAssertFalse(calls.contains { $0.hasPrefix("unlink:") })
+    }
+
+    func testServerProtectsLastAccountMethodDuringUnlink() async throws {
+        let service = AccountLinkServiceMock(linkedProviders: [.google])
+        let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
+        try await flow.reauthenticate(using: .google, purpose: .unlink)
+
+        do {
+            try await flow.unlink(provider: .google, onMutationRequestWillSubmit: { true })
+            XCTFail("A stale client method list must not bypass the server last-method guard")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .accountMethodRequired)
+        }
+        let methods = try await flow.methods()
+        XCTAssertEqual(methods.socialProviders, [.google])
+    }
+
+    func testUnlinkCancellationBeforeSubmissionDoesNotCallMutation() async throws {
+        let service = AccountLinkServiceMock(linkedProviders: [.kakao, .google])
+        let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
+        try await flow.reauthenticate(using: .kakao, purpose: .unlink)
+
+        do {
+            try await flow.unlink(provider: .google, onMutationRequestWillSubmit: { false })
+            XCTFail("Cancellation must stop before the unlink request is submitted")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        let calls = await service.recordedCalls()
+        XCTAssertFalse(calls.contains { $0.hasPrefix("unlink:") })
     }
 
     func testProviderCancellationDoesNotCompleteLink() async throws {
