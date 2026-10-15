@@ -528,6 +528,9 @@ enum WireframeAccountLinkState: Equatable {
     case linking(AccountLinkProvider)
     case submittingLink(AccountLinkProvider)
     case confirmingLinkStatus(AccountLinkProvider)
+    case unlinking(AccountLinkProvider)
+    case submittingUnlink(AccountLinkProvider)
+    case confirmingUnlinkStatus(AccountLinkProvider)
     case completed
     case cancelled
     case failed(AccountLinkFailure)
@@ -573,7 +576,8 @@ enum WireframeAccountLinkState: Equatable {
     @ObservationIgnored private var sessionLogoutTask: Task<Void, Never>?
     @ObservationIgnored private var accountLinkOperationID: UUID?
     @ObservationIgnored private var accountLinkOperationTask: Task<Void, Error>?
-    @ObservationIgnored private var unconfirmedAccountLinkProvider: AccountLinkProvider?
+    @ObservationIgnored private var accountLinkMethodsRefreshOperationID: UUID?
+    @ObservationIgnored private var unconfirmedAccountLinkMutation: AccountLinkMutation?
     @ObservationIgnored private var memberProfileWriteOperationID: UUID?
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var runRecordEditOperationID: UUID?
@@ -606,6 +610,7 @@ enum WireframeAccountLinkState: Equatable {
     private(set) var sessionLogoutState: SessionLogoutState = .idle
     private(set) var accountLinkMethods: AccountLinkMethods?
     private(set) var accountLinkState: WireframeAccountLinkState = .idle
+    private(set) var accountLinkCompletedMutation: AccountLinkMutation?
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
@@ -694,18 +699,29 @@ enum WireframeAccountLinkState: Equatable {
     var hasSessionLogoutDependency: Bool { sessionLogoutRequester != nil }
     var isLoggingOut: Bool { sessionLogoutState == .loggingOut }
     var hasAccountLinkDependency: Bool { accountLinkFlow != nil }
+    func isAccountLinkScreenActive(_ screen: String) -> Bool { activeScreen == screen }
     var shouldUseAccountLinkUI: Bool { hasAccountLinkDependency || accountLinkUnavailableFailure != nil }
     var canAuthorizeAccountLinkProvider: Bool { hasAccountLinkDependency && accountLinkProviderAuthorizationConfigured }
-    var hasUnconfirmedAccountLink: Bool { unconfirmedAccountLinkProvider != nil }
+    var hasUnconfirmedAccountLink: Bool { unconfirmedAccountLinkMutation != nil }
+    var canReauthenticateAccountLink: Bool {
+        hasAccountLinkDependency && (accountLinkMethods?.localPassword == true || accountLinkProviderAuthorizationConfigured)
+    }
+    func isLastAccountLinkMethod(_ provider: AccountLinkProvider) -> Bool {
+        guard let accountLinkMethods, accountLinkMethods.socialProviders.contains(provider) else { return false }
+        return !accountLinkMethods.localPassword && accountLinkMethods.socialProviders.count <= 1
+    }
     var isAccountLinkMutationInFlight: Bool {
         if hasUnconfirmedAccountLink { return true }
         if case .submittingLink = accountLinkState { return true }
         if case .confirmingLinkStatus = accountLinkState { return true }
+        if case .submittingUnlink = accountLinkState { return true }
+        if case .confirmingUnlinkStatus = accountLinkState { return true }
         return false
     }
     var isAccountLinkBusy: Bool {
         switch accountLinkState {
-        case .loadingMethods, .reauthenticating, .linking, .submittingLink, .confirmingLinkStatus: true
+        case .loadingMethods, .reauthenticating, .linking, .submittingLink, .confirmingLinkStatus,
+             .unlinking, .submittingUnlink, .confirmingUnlinkStatus: true
         case .idle, .ready, .completed, .cancelled, .failed: false
         }
     }
@@ -715,43 +731,65 @@ enum WireframeAccountLinkState: Equatable {
     }
     func canStartAccountLink(provider: AccountLinkProvider) -> Bool {
         guard shouldUseAccountLinkUI, hasAccountLinkDependency, canAuthorizeAccountLinkProvider,
-              accountLinkMethods != nil, !isAccountLinkBusy, unconfirmedAccountLinkProvider == nil else { return false }
+              accountLinkMethods != nil, !isAccountLinkBusy, unconfirmedAccountLinkMutation == nil else { return false }
         return !(accountLinkMethods?.socialProviders.contains(provider) ?? false)
     }
     var needsWeeklyGoalConflictRefresh: Bool { weeklyGoalNeedsRefresh }
     var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency || hasAccountLinkDependency }
 
-    func refreshAccountLinkMethods() async {
+    func refreshAccountLinkMethods(expectedScreen: String? = nil) async {
         guard let accountLinkFlow, !isAccountLinkBusy else { return }
+        let operationID=UUID()
+        let previousState=accountLinkState
+        accountLinkMethodsRefreshOperationID=operationID
         accountLinkState = .loadingMethods
+        defer {
+            if accountLinkMethodsRefreshOperationID==operationID { accountLinkMethodsRefreshOperationID=nil }
+        }
         do {
             let methods = try await accountLinkFlow.methods()
+            guard accountLinkMethodsRefreshOperationID==operationID else{return}
+            guard expectedScreen == nil || activeScreen == expectedScreen else {
+                if accountLinkState == .loadingMethods { accountLinkState=previousState }
+                return
+            }
             accountLinkMethods = methods
-            if let pending = unconfirmedAccountLinkProvider {
-                if methods.socialProviders.contains(pending) {
-                    unconfirmedAccountLinkProvider = nil
+            if let pending = unconfirmedAccountLinkMutation {
+                unconfirmedAccountLinkMutation = nil
+                if pending.isApplied(to: methods) {
+                    accountLinkCompletedMutation = pending
                     accountLinkState = .completed
                 } else {
-                    unconfirmedAccountLinkProvider = nil
-                    accountLinkState = .idle
+                    accountLinkState = .failed(.completionNotApplied)
                 }
             } else {
+                accountLinkCompletedMutation = nil
                 accountLinkState = .idle
             }
         } catch let failure as AccountLinkFailure {
+            guard accountLinkMethodsRefreshOperationID==operationID else{return}
+            guard expectedScreen == nil || activeScreen == expectedScreen else {
+                if accountLinkState == .loadingMethods { accountLinkState=previousState }
+                return
+            }
             accountLinkState = .failed(failure)
         } catch {
+            guard accountLinkMethodsRefreshOperationID==operationID else{return}
+            guard expectedScreen == nil || activeScreen == expectedScreen else {
+                if accountLinkState == .loadingMethods { accountLinkState=previousState }
+                return
+            }
             accountLinkState = .failed(.invalidResponse)
         }
     }
 
-    func reauthenticateAccountLink(using provider: AccountLinkProvider, accountScopeID: String, screen: String) async -> Bool {
+    func reauthenticateAccountLink(using provider: AccountLinkProvider, purpose: AccountLinkPurpose = .link, accountScopeID: String, screen: String) async -> Bool {
         guard let accountLinkFlow, !isAccountLinkBusy,
               self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T15" else { return false }
         let operationID = UUID()
         accountLinkOperationID = operationID
         accountLinkState = .reauthenticating(.provider(provider))
-        let task = Task { try await accountLinkFlow.reauthenticate(using: provider) }
+        let task = Task { try await accountLinkFlow.reauthenticate(using: provider, purpose: purpose) }
         accountLinkOperationTask = task
         do {
             try await task.value
@@ -776,13 +814,13 @@ enum WireframeAccountLinkState: Equatable {
         }
     }
 
-    func reauthenticateAccountLinkWithPassword(_ password: String, accountScopeID: String, screen: String) async -> Bool {
+    func reauthenticateAccountLinkWithPassword(_ password: String, purpose: AccountLinkPurpose = .link, accountScopeID: String, screen: String) async -> Bool {
         guard let accountLinkFlow, !isAccountLinkBusy, self.accountScopeID == accountScopeID,
               activeScreen == screen, screen == "T15" else { return false }
         let operationID = UUID()
         accountLinkOperationID = operationID
         accountLinkState = .reauthenticating(.password)
-        let task = Task { try await accountLinkFlow.reauthenticateWithPassword(password) }
+        let task = Task { try await accountLinkFlow.reauthenticateWithPassword(password, purpose: purpose) }
         accountLinkOperationTask = task
         do {
             try await task.value
@@ -812,6 +850,7 @@ enum WireframeAccountLinkState: Equatable {
               self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T06" else { return false }
         let operationID = UUID()
         accountLinkOperationID = operationID
+        accountLinkCompletedMutation = nil
         accountLinkState = .linking(provider)
         let task = Task { [weak self] in
             try await accountLinkFlow.link(provider: provider) {
@@ -833,7 +872,8 @@ enum WireframeAccountLinkState: Equatable {
                   self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
-            unconfirmedAccountLinkProvider = nil
+            unconfirmedAccountLinkMutation = nil
+            accountLinkCompletedMutation = .link(provider)
             accountLinkState = .completed
             do { accountLinkMethods = try await accountLinkFlow.methods() } catch { /* The confirmed 204 remains success. */ }
             return true
@@ -848,7 +888,7 @@ enum WireframeAccountLinkState: Equatable {
             }
             if mutationWasSubmitted {
                 return await reconcileAccountLinkCompletion(
-                    provider: provider,
+                    mutation: .link(provider),
                     originalFailure: failure,
                     operationID: operationID
                 )
@@ -857,57 +897,127 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationTask = nil
             accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
             if failure == .cancelled { await accountLinkFlow.cancel() }
-            if failure == .alreadyLinked { await refreshAccountLinkMethods() }
+            if failure == .alreadyLinked { await refreshAccountLinkMethods(expectedScreen:"T06") }
+            return false
+        }
+    }
+
+    func unlinkAccountMethod(provider: AccountLinkProvider, accountScopeID: String, screen: String) async -> Bool {
+        guard let accountLinkFlow, !isAccountLinkBusy, accountLinkState == .ready,
+              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T15",
+              accountLinkMethods?.socialProviders.contains(provider) == true else { return false }
+        let operationID = UUID()
+        accountLinkOperationID = operationID
+        accountLinkCompletedMutation = nil
+        accountLinkState = .unlinking(provider)
+        let task = Task { [weak self] in
+            try await accountLinkFlow.unlink(provider: provider) {
+                await MainActor.run {
+                    guard let self,
+                          self.accountLinkOperationID == operationID,
+                          self.accountScopeID == accountScopeID,
+                          self.activeScreen == screen,
+                          self.accountLinkState == .unlinking(provider) else { return false }
+                    self.accountLinkState = .submittingUnlink(provider)
+                    return true
+                }
+            }
+        }
+        accountLinkOperationTask = task
+        do {
+            try await task.value
+            guard accountLinkOperationID == operationID,
+                  self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
+            accountLinkOperationID = nil
+            accountLinkOperationTask = nil
+            unconfirmedAccountLinkMutation = nil
+            accountLinkCompletedMutation = .unlink(provider)
+            accountLinkState = .completed
+            do { accountLinkMethods = try await accountLinkFlow.methods() } catch { /* The confirmed 204 remains success. */ }
+            return true
+        } catch {
+            guard accountLinkOperationID == operationID else { return false }
+            let failure = (error as? AccountLinkFailure) ?? (error is CancellationError ? .cancelled : .invalidResponse)
+            let mutationWasSubmitted: Bool
+            if case .submittingUnlink(let submittedProvider) = accountLinkState, submittedProvider == provider {
+                mutationWasSubmitted = true
+            } else {
+                mutationWasSubmitted = false
+            }
+            if mutationWasSubmitted {
+                return await reconcileAccountLinkCompletion(
+                    mutation: .unlink(provider),
+                    originalFailure: failure,
+                    operationID: operationID
+                )
+            }
+            accountLinkOperationID = nil
+            accountLinkOperationTask = nil
+            accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
+            if failure == .cancelled { await accountLinkFlow.cancel() }
             return false
         }
     }
 
     private func reconcileAccountLinkCompletion(
-        provider: AccountLinkProvider,
+        mutation: AccountLinkMutation,
         originalFailure: AccountLinkFailure,
         operationID: UUID
     ) async -> Bool {
         guard let accountLinkFlow, accountLinkOperationID == operationID else { return false }
-        accountLinkState = .confirmingLinkStatus(provider)
+        switch mutation {
+        case .link(let provider): accountLinkState = .confirmingLinkStatus(provider)
+        case .unlink(let provider): accountLinkState = .confirmingUnlinkStatus(provider)
+        }
         do {
             let methods = try await accountLinkFlow.methods()
             guard accountLinkOperationID == operationID else { return false }
             accountLinkMethods = methods
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
-            if methods.socialProviders.contains(provider) {
-                unconfirmedAccountLinkProvider = nil
+            if mutation.isApplied(to: methods) {
+                unconfirmedAccountLinkMutation = nil
+                accountLinkCompletedMutation = mutation
                 accountLinkState = .completed
                 return true
             }
-            unconfirmedAccountLinkProvider = nil
+            unconfirmedAccountLinkMutation = nil
             accountLinkState = .failed(originalFailure == .cancelled ? .completionNotApplied : originalFailure)
             return false
         } catch {
             guard accountLinkOperationID == operationID else { return false }
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
-            unconfirmedAccountLinkProvider = provider
+            unconfirmedAccountLinkMutation = mutation
             accountLinkState = .failed(.completionStatusUnknown)
             return false
         }
     }
 
     func retryAccountLinkStatusConfirmation(accountScopeID: String, screen: String) async -> Bool {
-        guard let provider = unconfirmedAccountLinkProvider,
-              let accountLinkFlow, !isAccountLinkBusy,
-              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T06" else { return false }
+        guard let mutation = unconfirmedAccountLinkMutation, let accountLinkFlow, !isAccountLinkBusy,
+              self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
+        let expectedScreen: String
+        switch mutation {
+        case .link: expectedScreen = "T06"
+        case .unlink: expectedScreen = "T15"
+        }
+        guard screen == expectedScreen else { return false }
         let operationID = UUID()
         accountLinkOperationID = operationID
-        accountLinkState = .confirmingLinkStatus(provider)
+        switch mutation {
+        case .link(let provider): accountLinkState = .confirmingLinkStatus(provider)
+        case .unlink(let provider): accountLinkState = .confirmingUnlinkStatus(provider)
+        }
         do {
             let methods = try await accountLinkFlow.methods()
             guard accountLinkOperationID == operationID,
                   self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
             accountLinkMethods = methods
             accountLinkOperationID = nil
-            unconfirmedAccountLinkProvider = nil
-            if methods.socialProviders.contains(provider) {
+            unconfirmedAccountLinkMutation = nil
+            if mutation.isApplied(to: methods) {
+                accountLinkCompletedMutation = mutation
                 accountLinkState = .completed
                 return true
             }
@@ -1014,6 +1124,7 @@ enum WireframeAccountLinkState: Equatable {
         cancelSessionLogout()
         cancelAccountLinkFlow()
         accountLinkMethods = nil
+        accountLinkMethodsRefreshOperationID = nil
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
         cancelRunRecordEdit()
@@ -1044,7 +1155,15 @@ enum WireframeAccountLinkState: Equatable {
         dailyProgressState = .idle
     }
 
-    func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
+    func activate(
+        feature: WireframeRemoteReadFeature?,
+        accountScopeID: String,
+        runID: String? = nil,
+        screen: String? = nil,
+        routeIsCurrent: @MainActor () -> Bool = { true }
+    ) async {
+        let routeStillCurrent=routeIsCurrent()
+        guard !Task.isCancelled, routeStillCurrent else { return }
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
         let previousScreen = activeScreen
         let nextScreen = screen ?? feature?.rawValue
@@ -1090,12 +1209,14 @@ enum WireframeAccountLinkState: Equatable {
         activeFeature = feature
         activeScreen = nextScreen
 
+        let preserveUnlinkFailure = previousScreen == "T15" && nextScreen == "T08"
+            && { if case .failed = accountLinkState { return true }; return false }()
         if (previousScreen == "T15" || previousScreen == "T06"),
-           nextScreen != "T15", nextScreen != "T06", accountLinkState != .completed {
+           nextScreen != "T15", nextScreen != "T06", accountLinkState != .completed, !preserveUnlinkFailure {
             cancelAccountLinkFlow()
         }
         if nextScreen == "T05" {
-            await refreshAccountLinkMethods()
+            await refreshAccountLinkMethods(expectedScreen:"T05")
         }
 
         guard let feature else {
@@ -2634,24 +2755,35 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
     private var providers: [AccountLinkProvider]
     private let localPassword: Bool
     private var reauthProof: String?
+    private var reauthProofPurpose: AccountLinkPurpose?
     private var failCompletionOnce: Bool
+    private var failUnlinkWithMethodRequiredOnce: Bool
+    private var failUnlinkOnce: Bool
     private let cancelReauthentication: Bool
     private let cancelLinkCredential: Bool
     private let delaysLinkCompletion: Bool
+    private let delaysUnlinkCompletion: Bool
     private var loseCompletionResponseOnce: Bool
     private var loseCompletionStatusOnce: Bool
+    private var loseUnlinkResponseOnce: Bool
+    private var loseUnlinkStatusOnce: Bool
     private var loseNextStatusResponse = false
 
-    init(initiallyLinkedGoogle: Bool, localPassword: Bool, failCompletionOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool, loseCompletionResponseOnce: Bool, loseCompletionStatusOnce: Bool) {
-        providers = initiallyLinkedGoogle ? [.kakao, .google] : [.kakao]
+    init(initiallyLinkedGoogle: Bool, onlyGoogleLinked: Bool, localPassword: Bool, failCompletionOnce: Bool, failUnlinkWithMethodRequiredOnce: Bool, failUnlinkOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool, delaysUnlinkCompletion: Bool, loseCompletionResponseOnce: Bool, loseCompletionStatusOnce: Bool, loseUnlinkResponseOnce: Bool, loseUnlinkStatusOnce: Bool) {
+        providers = onlyGoogleLinked ? [.google] : initiallyLinkedGoogle ? [.kakao, .google] : [.kakao]
         self.localPassword = localPassword
         self.failCompletionOnce = failCompletionOnce
+        self.failUnlinkWithMethodRequiredOnce = failUnlinkWithMethodRequiredOnce
+        self.failUnlinkOnce = failUnlinkOnce
         self.cancelReauthentication = cancelReauthentication
         self.cancelLinkCredential = cancelLinkCredential
         self.delaysLinkCompletion = delaysLinkCompletion
+        self.delaysUnlinkCompletion = delaysUnlinkCompletion
         self.loseCompletionResponseOnce = loseCompletionResponseOnce
+        self.loseUnlinkResponseOnce = loseUnlinkResponseOnce
         self.loseNextStatusResponse = false
         self.loseCompletionStatusOnce = loseCompletionStatusOnce
+        self.loseUnlinkStatusOnce = loseUnlinkStatusOnce
     }
 
     func methods() async throws -> AccountLinkMethods {
@@ -2662,36 +2794,42 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
         return AccountLinkMethods(localPassword: localPassword, socialProviders: providers)
     }
 
-    func reauthenticateWithPassword(_ password: String) async throws {
+    func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws {
         guard localPassword, !password.isEmpty else { throw AccountLinkFailure.invalidCredentials }
         reauthProof = Self.token("r")
+        reauthProofPurpose = purpose
     }
 
-    func reauthenticate(using provider: AccountLinkProvider) async throws {
+    func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws {
         guard providers.contains(provider) else { throw AccountLinkFailure.invalidCredentials }
         if cancelReauthentication { throw AccountLinkFailure.cancelled }
         reauthProof = Self.token("r")
+        reauthProofPurpose = purpose
     }
 
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
-        guard reauthProof != nil else { throw AccountLinkFailure.reauthenticationRequired }
+        guard reauthProof != nil, reauthProofPurpose == .link else { throw AccountLinkFailure.reauthenticationRequired }
         guard !providers.contains(provider) else { throw AccountLinkFailure.alreadyLinked }
         if cancelLinkCredential {
             self.reauthProof = nil
+            self.reauthProofPurpose = nil
             throw AccountLinkFailure.cancelled
         }
         guard await onMutationRequestWillSubmit() else {
             self.reauthProof = nil
+            self.reauthProofPurpose = nil
             throw AccountLinkFailure.cancelled
         }
         if delaysLinkCompletion { try await Task.sleep(for: .seconds(6)) }
         if failCompletionOnce {
             failCompletionOnce = false
             self.reauthProof = nil
+            self.reauthProofPurpose = nil
             throw AccountLinkFailure.accountLinkConflict
         }
         providers.append(provider)
         self.reauthProof = nil
+        self.reauthProofPurpose = nil
         if loseCompletionResponseOnce {
             loseCompletionResponseOnce = false
             loseNextStatusResponse = loseCompletionStatusOnce
@@ -2700,8 +2838,50 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
         }
     }
 
+    func unlink(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
+        guard reauthProof != nil, reauthProofPurpose == .unlink else { throw AccountLinkFailure.reauthenticationRequired }
+        guard providers.contains(provider) else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountLinkNotFound
+        }
+        guard await onMutationRequestWillSubmit() else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.cancelled
+        }
+        if delaysUnlinkCompletion { try await Task.sleep(for: .seconds(6)) }
+        if failUnlinkWithMethodRequiredOnce {
+            failUnlinkWithMethodRequiredOnce = false
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountMethodRequired
+        }
+        if failUnlinkOnce {
+            failUnlinkOnce = false
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.serviceUnavailable
+        }
+        guard localPassword || providers.count > 1 else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountMethodRequired
+        }
+        providers.removeAll { $0 == provider }
+        reauthProof = nil
+        reauthProofPurpose = nil
+        if loseUnlinkResponseOnce {
+            loseUnlinkResponseOnce = false
+            loseNextStatusResponse = loseUnlinkStatusOnce
+            loseUnlinkStatusOnce = false
+            throw AccountLinkFailure.transport(.networkConnectionLost)
+        }
+    }
+
     func cancel() async {
         reauthProof = nil
+        reauthProofPurpose = nil
     }
 
     private static func token(_ prefix: String) -> String {
@@ -2765,13 +2945,19 @@ struct RootView:View {
         let accountLinkFixture: (any AccountLinkFlowServing)? = WReviewMode.tools && args.contains("-wire-account-link-fixture")
             ? WireframeAccountLinkFixture(
                 initiallyLinkedGoogle:args.contains("-wire-account-link-google-already-linked"),
+                onlyGoogleLinked:args.contains("-wire-account-unlink-last-method"),
                 localPassword:args.contains("-wire-account-link-local-password"),
                 failCompletionOnce:args.contains("-wire-account-link-fail-once"),
+                failUnlinkWithMethodRequiredOnce:args.contains("-wire-account-unlink-last-method-race"),
+                failUnlinkOnce:args.contains("-wire-account-unlink-fail-once"),
                 cancelReauthentication:args.contains("-wire-account-link-cancel-reauth"),
                 cancelLinkCredential:args.contains("-wire-account-link-cancel-target"),
                 delaysLinkCompletion:args.contains("-wire-account-link-delay-completion"),
+                delaysUnlinkCompletion:args.contains("-wire-account-unlink-delay-completion"),
                 loseCompletionResponseOnce:args.contains("-wire-account-link-response-lost-once"),
-                loseCompletionStatusOnce:args.contains("-wire-account-link-status-read-lost-once")
+                loseCompletionStatusOnce:args.contains("-wire-account-link-status-read-lost-once"),
+                loseUnlinkResponseOnce:args.contains("-wire-account-unlink-response-lost-once"),
+                loseUnlinkStatusOnce:args.contains("-wire-account-unlink-status-read-lost-once")
             ) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
@@ -3254,11 +3440,36 @@ struct WireframeRoot:View {
             .onChange(of:remoteReads.weeklyGoalWriteState){_,state in handleRemoteWeeklyGoalWriteStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalConflictRefreshState){_,state in handleRemoteWeeklyGoalConflictRefreshStateChange(state)}
             .onChange(of:remoteReads.sessionLogoutState){_,state in handleSessionLogoutStateChange(state)}
-            .onChange(of:remoteReads.accountLinkState){_,state in if state == .completed && ui.screen == "T06" { go("T17") }}
+            .onChange(of:remoteReads.accountLinkState){_,state in
+                guard state == .completed else{return}
+                switch remoteReads.accountLinkCompletedMutation {
+                case .link where ui.screen == "T06": go("T17")
+                case .unlink where ui.screen == "T15" && ui.pending == "T08": go("T17")
+                default: break
+                }
+            }
     }
     var rootTaskViews:some View {
         rootStyledLayers
-            .task(id:remoteReadTaskKey){await remoteReads.activate(feature:remoteReadFeature,accountScopeID:ui.remoteAccountScopeID,runID:ui.remoteSelectedRunID,screen:ui.screen)}
+            .task(id:remoteReadTaskKey){
+                let feature=remoteReadFeature
+                let scopeID=ui.remoteAccountScopeID
+                let runID=ui.remoteSelectedRunID
+                let screen=ui.screen
+                guard !Task.isCancelled,
+                      ui.screen==screen,
+                      ui.remoteAccountScopeID==scopeID,
+                      ui.remoteSelectedRunID==runID else{return}
+                await remoteReads.activate(
+                    feature:feature,
+                    accountScopeID:scopeID,
+                    runID:runID,
+                    screen:screen,
+                    routeIsCurrent:{
+                        ui.screen==screen && ui.remoteAccountScopeID==scopeID && ui.remoteSelectedRunID==runID
+                    }
+                )
+            }
             .task {
                 await configureRootForLaunch()
                 await store.recoverPendingRunUploads()
