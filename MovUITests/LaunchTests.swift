@@ -3440,6 +3440,34 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
     }
 
+    func testAccountLinkExpiredChallengeRequiresFreshReauthenticationAndLocksPendingMutation() {
+        openAccountLinkFixture(["-wire-account-link-expired-challenge-once","-wire-account-link-delay-completion"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+
+        let submit=app.buttons["accountLinkSubmit"]
+        let back=app.buttons["accountLinkBack"]
+        let cancel=app.buttons["accountLinkCancel"]
+        XCTAssertTrue(app.staticTexts["연결 요청을 처리하고 있어요"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(submit.isEnabled,"A submitted link request cannot be duplicated")
+        XCTAssertFalse(back.isEnabled,"Back stays locked while the server evaluates the expired challenge")
+        XCTAssertFalse(cancel.isEnabled,"Cancel stays locked after the link request is submitted")
+        back.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        submit.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        cancel.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].exists,"Disabled navigation and duplicate-submit taps cannot leave the pending mutation")
+
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:12),app.debugDescription)
+        XCTAssertTrue(back.isEnabled,"Navigation unlocks after the server confirms the expired challenge was not applied")
+        XCTAssertTrue(app.buttons["accountLinkRetry"].isEnabled,app.debugDescription)
+        tap("accountLinkRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
     func testAccountLinkAuthorizationCancellationReturnsToProviderListUnchanged() {
         openAccountLinkFixture(["-wire-account-link-cancel-target"])
         beginGoogleAccountLink()
@@ -3581,6 +3609,25 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5),app.debugDescription)
         tap("accountLinkReauthenticate-kakao")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountUnlinkExpiredProofRequiresFreshReauthentication() {
+        openAccountLinkFixture(["-wire-account-link-google-already-linked","-wire-account-unlink-expired-proof-once"])
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T08"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountUnlinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T08"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].exists,app.debugDescription)
+        XCTAssertTrue(app.buttons["accountUnlinkRetry"].isEnabled,app.debugDescription)
+        tap("accountUnlinkRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:8),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.buttons["account-link-method-Google"].label.contains("연결되지 않음"),app.debugDescription)
     }
 
     func testAccountUnlinkDuplicateSubmitAndNavigationAreLockedAfterSubmission() {

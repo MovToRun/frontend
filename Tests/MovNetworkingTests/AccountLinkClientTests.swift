@@ -204,6 +204,45 @@ final class AccountLinkClientTests: XCTestCase {
         XCTAssertEqual(body["consent"] as? Bool, true)
     }
 
+    func testExpiredReauthenticationProofUsesBackendUnauthenticatedContract() async throws {
+        let api = AccountLinkResponseMock([
+            response(401, #"{"code":"UNAUTHENTICATED"}"#)
+        ])
+        let client = AccountLinkClient(apiClient: api, tokenProvider: AccountLinkTokenStub(token: "fixture-access"))
+
+        do {
+            try await client.unlink(provider: .google, reauthProof: String(repeating: "p", count: 43), consent: true)
+            XCTFail("An expired one-time reauthentication proof is rejected by the backend")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+    }
+
+    func testExpiredLinkChallengeUsesBackendUnauthenticatedContract() async throws {
+        let api = AccountLinkResponseMock([
+            response(401, #"{"code":"UNAUTHENTICATED"}"#)
+        ])
+        let client = AccountLinkClient(apiClient: api, tokenProvider: AccountLinkTokenStub(token: "fixture-access"))
+        let challenge = AccountLinkChallenge(
+            state: String(repeating: "s", count: 43),
+            nonce: String(repeating: "n", count: 43),
+            expiresInSeconds: 600
+        )
+
+        do {
+            try await client.completeLink(
+                provider: .google,
+                challenge: challenge,
+                credential: "mock-provider-credential",
+                reauthProof: String(repeating: "p", count: 43),
+                consent: true
+            )
+            XCTFail("An expired link challenge is rejected by the backend")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+    }
+
     func testLastAccountMethodFailureMapsToBackendConflict() async throws {
         let api = AccountLinkResponseMock([
             response(409, #"{"code":"ACCOUNT_METHOD_REQUIRED"}"#)
