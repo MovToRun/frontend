@@ -1,6 +1,74 @@
 import SwiftUI
 import PhotosUI
 
+private struct WCommunityCourseMap:View {
+    var hideEnds:Bool
+    var playback:Double?=nil
+    var duration:Double=1
+    private static let route:[CGPoint]=[
+        CGPoint(x:28,y:146),CGPoint(x:48,y:120),CGPoint(x:65,y:62),CGPoint(x:118,y:42),
+        CGPoint(x:176,y:63),CGPoint(x:218,y:45),CGPoint(x:262,y:90),CGPoint(x:240,y:139),
+        CGPoint(x:174,y:145),CGPoint(x:117,y:128),CGPoint(x:63,y:148)
+    ]
+    var body:some View {
+        GeometryReader{_ in
+            Canvas{context,size in
+                let sx=size.width/300,sy=size.height/180
+                var background=Path();background.addRect(CGRect(origin:.zero,size:size))
+                context.fill(background,with:.color(Color.wire(0xF4F4F4,0x262626)))
+                for y in [48.0,136.0] {
+                    var grid=Path();grid.move(to:CGPoint(x:0,y:y*sy));grid.addLine(to:CGPoint(x:size.width,y:y*sy))
+                    context.stroke(grid,with:.color(Color.wire(0xDDDDDD,0x373737)),lineWidth:12*sy)
+                }
+                for x in [62.0,236.0] {
+                    var grid=Path();grid.move(to:CGPoint(x:x*sx,y:0));grid.addLine(to:CGPoint(x:x*sx,y:size.height))
+                    context.stroke(grid,with:.color(Color.wire(0xDDDDDD,0x373737)),lineWidth:12*sx)
+                }
+                let points=hideEnds ? Array(Self.route.dropFirst().dropLast()):Self.route
+                var line=Path()
+                if let first=points.first {
+                    line.move(to:CGPoint(x:first.x*sx,y:first.y*sy))
+                    for point in points.dropFirst(){line.addLine(to:CGPoint(x:point.x*sx,y:point.y*sy))}
+                }
+                context.stroke(line,with:.color(Color.wire(0x5EF76D,0x5EF76D)),style:StrokeStyle(lineWidth:5*sx,lineCap:.round,lineJoin:.round))
+                if let playback {
+                    let first=Self.pointAt(playback/max(1,duration),hideEnds:hideEnds)
+                    let second=Self.pointAt(min(1,playback*0.89/max(1,duration)),hideEnds:hideEnds)
+                    let p1=CGPoint(x:first.x*sx,y:first.y*sy),p2=CGPoint(x:second.x*sx,y:second.y*sy),radius=6*sx
+                    var diamond=Path();diamond.move(to:CGPoint(x:p1.x,y:p1.y-radius));diamond.addLine(to:CGPoint(x:p1.x+radius,y:p1.y));diamond.addLine(to:CGPoint(x:p1.x,y:p1.y+radius));diamond.addLine(to:CGPoint(x:p1.x-radius,y:p1.y));diamond.closeSubpath()
+                    context.fill(diamond,with:.color(Color.wire(0x77B7FF,0x77B7FF)))
+                    var dot=Path();dot.addEllipse(in:CGRect(x:p2.x-5*sx,y:p2.y-5*sy,width:10*sx,height:10*sy))
+                    context.fill(dot,with:.color(Color.wire(0x202925,0xF1F1F1)))
+                }
+                context.draw(Text("예시 지도").font(W.font(9)).foregroundColor(W.muted),at:CGPoint(x:size.width-10,y:size.height-8),anchor:.bottomTrailing)
+            }
+        }
+        .aspectRatio(5/3,contentMode:.fit)
+        .clipShape(RoundedRectangle(cornerRadius:16))
+        .padding(.vertical,2)
+        .accessibilityElement(children:.ignore)
+        .accessibilityLabel("가상 예시 코스 지도")
+    }
+    private static func pointAt(_ ratio:Double,hideEnds:Bool)->CGPoint {
+        let points=hideEnds ? Array(route.dropFirst().dropLast()):route
+        let fraction=min(1,max(0,ratio))*Double(points.count-1)
+        let index=min(points.count-2,Int(floor(fraction))),part=fraction-Double(index)
+        return CGPoint(x:points[index].x+(points[index+1].x-points[index].x)*part,y:points[index].y+(points[index+1].y-points[index].y)*part)
+    }
+}
+
+private struct WCommunityCourseToggleStyle:ToggleStyle {
+    func makeBody(configuration:Configuration)->some View {
+        Button{configuration.isOn.toggle()}label:{
+            HStack(spacing:10){
+                Image(systemName:"checkmark").font(.system(size:13,weight:.bold)).foregroundStyle(configuration.isOn ? Color.wire(0x5EF76D,0x5EF76D):W.muted).frame(width:20,height:20)
+                configuration.label.font(W.font(13)).foregroundStyle(W.ink)
+                Spacer(minLength:0)
+            }.frame(maxWidth:.infinity,minHeight:48,alignment:.leading).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+}
+
 struct WCommunityComment:Identifiable {
     let id:String
     var author:String
@@ -2631,9 +2699,9 @@ extension WireframeRoot {
 
     var communityVerificationForm:some View {
         WPage(title:"계정 인증",back:back){
-            WHeading(text:"나의 러닝 활동을\n소개해 주세요")
-            WText(text:"운영자가 신청 내용을 검토해요. 계정 인증은 러닝 등급과 별개예요.")
-            WField(label:"활동 소개",text:$ui.communityVerification.note,limit:300,multiline:true).accessibilityIdentifier("communityVerificationNote")
+            Text("나의 러닝 활동을\n소개해 주세요").font(W.font(26,.bold)).kerning(-0.78).lineSpacing(5).fixedSize(horizontal:false,vertical:true).padding(.top,6).padding(.bottom,3)
+            Text("운영자가 신청 내용을 검토해요. 계정 인증은 러닝 등급과 별개예요.").font(W.font(13)).lineSpacing(7).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
+            WField(label:"활동 소개",text:$ui.communityVerification.note,limit:300,multiline:true,multilineHeight:132,textSize:15,labelSize:13,softFieldStyle:true).accessibilityIdentifier("communityVerificationNote")
             if !ui.communityVerificationError.isEmpty{WNotice(text:ui.communityVerificationError,danger:true).accessibilityIdentifier("communityVerificationError")}
         }actions:{
             Button("인증 신청"){if ui.submitCommunityVerification(){go("C11")}}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityVerificationSubmit")
@@ -2647,13 +2715,12 @@ extension WireframeRoot {
     var communityCourseDetail:some View {
         let course=ui.communitySelectedCourse ?? WCommunityCourseFixtures.sample
         return WPage(title:"공유 코스",back:back){
-            Text(course.title).font(W.font(23,.semibold)).accessibilityIdentifier("communityCourseTitle")
-            Button{openCommunityCard(for:course.authorMemberID,origin:"C12")}label:{HStack(spacing:8){communityAvatar(course.authorName);Text(course.authorName).font(W.font(13,.medium));communityVerifiedBadge(memberID:course.authorMemberID,identifier:"communityCourseAuthorBadge");Text(course.authorRank).font(W.font(10)).foregroundStyle(W.muted);Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.frame(minHeight:42)}.buttonStyle(.plain).accessibilityIdentifier("communityCourseAuthor")
-            WMap(route:true).frame(height:270).clipShape(RoundedRectangle(cornerRadius:14)).accessibilityIdentifier("communityCourseMap")
+            Text(course.title).font(W.font(26,.semibold)).kerning(-0.78).lineSpacing(5).accessibilityIdentifier("communityCourseTitle")
+            Button{openCommunityCard(for:course.authorMemberID,origin:"C12")}label:{HStack(spacing:5){Text(course.authorName).font(W.font(13,.medium));communityVerifiedBadge(memberID:course.authorMemberID,identifier:"communityCourseAuthorBadge");Spacer(minLength:0)}.frame(maxWidth:.infinity,minHeight:28,alignment:.leading)}.buttonStyle(.plain).accessibilityIdentifier("communityCourseAuthor")
+            WCommunityCourseMap(hideEnds:course.hideEnds).accessibilityIdentifier("communityCourseMap")
             HStack(alignment:.top,spacing:0){courseFact("거리","\(MovNumber.display(course.record.distance)) km");courseFact("기록 시간",RunRecord.clock(course.record.seconds));courseFact("페이스",WCommunityCoursePolicy.pace(distance:course.record.distance,seconds:course.record.seconds))}
-            WText(text:course.introduction,small:true)
-            WNotice(text:course.hideEnds ? "시작·끝 위치 숨김을 적용한 예시 경로예요.":"시작·끝을 포함한 예시 경로예요.")
-            WText(text:"기록 · \(course.record.title) · \(course.record.recordedAt.formatted(date:.numeric,time:.shortened))",small:true).accessibilityIdentifier("communityCourseSourceRecord")
+            Text(course.introduction).font(W.font(13)).lineSpacing(6).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
+            Text(course.hideEnds ? "시작·끝 위치 숨김을 적용한 예시 경로예요.":"시작·끝을 포함한 예시 경로예요.").font(W.font(13)).lineSpacing(6).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
         }actions:{
             Button("따라달리기"){ui.communitySelectedCourse=course;ui.communityCourseHideEnds=course.hideEnds;ui.communityCoursePlayback=0;ui.communityCoursePlaying=false;go("C14")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCourseFollowRun")
         }
@@ -2665,41 +2732,39 @@ extension WireframeRoot {
             if !ui.communityAccountVerified {
                 VStack(alignment:.leading,spacing:12){Text("계정 인증이 필요해요").font(W.font(18,.semibold));WText(text:"운영자의 인증 승인을 받은 뒤 코스를 공유할 수 있어요.")}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,32).accessibilityIdentifier("communityCourseNeedsVerification")
             } else {
-                WText(text:"유효 기록을 선택해 코스와 러닝 기록을 함께 공유해요.",small:true)
-                Text("러닝 기록").font(W.font(13,.medium))
-                Picker("러닝 기록",selection:$ui.communityCourseRecordID){Text("기록 선택").tag("");ForEach(eligible){record in Text("\(record.title) · \(MovNumber.display(record.kilometers)) km").tag(record.id.uuidString)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityCourseRecordPicker")
+                Text("유효 기록을 선택해 코스와 러닝 기록을 함께 공유해요.").font(W.font(13)).lineSpacing(6).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
+                VStack(alignment:.leading,spacing:8){
+                    Text("러닝 기록").font(W.font(13))
+                    Picker("러닝 기록",selection:$ui.communityCourseRecordID){Text("기록 선택").tag("");ForEach(eligible){record in Text("\(record.title) · \(MovNumber.display(record.kilometers)) km").tag(record.id.uuidString)}}.pickerStyle(.menu).frame(maxWidth:.infinity,minHeight:50,alignment:.leading).padding(.horizontal,14).background(Color.wire(0xF4F4F4,0x262626),in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Color.wire(0xDDDDDD,0x373737))).accessibilityIdentifier("communityCourseRecordPicker")
+                }
                 if eligible.isEmpty{WNotice(text:"공유할 유효 기록이 없어요.")}
-                WField(label:"코스 이름",text:$ui.communityCourseTitle,placeholder:"코스 이름을 입력해 주세요",limit:60,accessibilityID:"communityCourseName")
-                WField(label:"코스 소개",text:$ui.communityCourseIntroduction,placeholder:"코스를 소개해 주세요",limit:2000,multiline:true).accessibilityIdentifier("communityCourseIntroduction")
-                Toggle(isOn:$ui.communityCourseHideEnds){Text("시작·끝 위치 숨기기").font(W.font(14))}.tint(W.lime).accessibilityIdentifier("communityCourseHideEnds")
-                WNotice(text:"가상 코스와 기록은 이 기기에서만 확인돼요. 실제 위치 공유나 서버 게시 기능은 연결되어 있지 않아요.")
+                WField(label:"코스 이름",text:$ui.communityCourseTitle,placeholder:"코스 이름을 입력해 주세요",limit:60,textSize:15,labelSize:13,accessibilityID:"communityCourseName",softFieldStyle:true)
+                WField(label:"코스 소개",text:$ui.communityCourseIntroduction,placeholder:"코스를 소개해 주세요",limit:2000,multiline:true,multilineHeight:132,textSize:15,labelSize:13,softFieldStyle:true).accessibilityIdentifier("communityCourseIntroduction")
+                Toggle(isOn:$ui.communityCourseHideEnds){Text("시작·끝 위치 숨기기")}.toggleStyle(WCommunityCourseToggleStyle()).accessibilityIdentifier("communityCourseHideEnds")
                 if !ui.communityCourseError.isEmpty{WNotice(text:ui.communityCourseError,danger:true).accessibilityIdentifier("communityCourseError")}
             }
         }actions:{
-            if ui.communityAccountVerified{Button("미리보기"){let result=WCommunityCoursePolicy.publicationResult(accountVerified:ui.communityAccountVerified,draftOwnerID:ui.communityCourseDraftOwnerID,viewerID:ui.communityViewerMemberID,selectedRecordID:ui.communityCourseRecordID,records:store.records);guard case .eligible(let record)=result else{ui.communityCourseError=eligible.isEmpty ? "공유할 유효 기록이 없어요.":"선택한 러닝 기록을 다시 확인해 주세요.";return};guard !ui.communityCourseTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,!ui.communityCourseIntroduction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityCourseError="코스 이름과 소개를 입력해 주세요.";return};ui.communityCourseDistance=record.kilometers;ui.communityCourseSeconds=record.seconds;ui.communityCourseDraft=true;ui.communityCourseError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(eligible.isEmpty).accessibilityIdentifier("communityCoursePreview");Button("취소"){cancelCommunityCourseDraft()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCourseCancel")}
-            else{Button("계정 인증 확인"){ui.communityCourseDraft=false;go("C11")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCourseVerify");Button("취소"){cancelCommunityCourseDraft()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCourseCancel")}
+            if ui.communityAccountVerified{Button("미리보기"){let result=WCommunityCoursePolicy.publicationResult(accountVerified:ui.communityAccountVerified,draftOwnerID:ui.communityCourseDraftOwnerID,viewerID:ui.communityViewerMemberID,selectedRecordID:ui.communityCourseRecordID,records:store.records);guard case .eligible(let record)=result else{ui.communityCourseError=eligible.isEmpty ? "공유할 유효 기록이 없어요.":"선택한 러닝 기록을 다시 확인해 주세요.";return};guard !ui.communityCourseTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,!ui.communityCourseIntroduction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityCourseError="코스 이름과 소개를 입력해 주세요.";return};ui.communityCourseDistance=record.kilometers;ui.communityCourseSeconds=record.seconds;ui.communityCourseDraft=true;ui.communityCourseError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(eligible.isEmpty).accessibilityIdentifier("communityCoursePreview")}
+            else{Button("계정 인증 확인"){ui.communityCourseDraft=false;go("C11")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCourseVerify")}
         }.onChange(of:ui.communityCourseTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:60);if limited != value{ui.communityCourseTitle=limited}}
          .onChange(of:ui.communityCourseIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:2000);if limited != value{ui.communityCourseIntroduction=limited}}
          .onAppear{if ui.communityCourseRecordID.isEmpty,let record=eligible.first{ui.communityCourseRecordID=record.id.uuidString};captureCommunityComposerBaseline(for:"C13")}
     }
 
-    func cancelCommunityCourseDraft(){selectRootTab("C01")}
-
     var communityGhostRun:some View {
-        let course=ui.communitySelectedCourse ?? WCommunityCourseFixtures.sample,duration=ui.communitySelectedCourse?.record.seconds ?? WCommunityCourseFixtures.sample.record.seconds
+        let duration=ui.communitySelectedCourse?.record.seconds ?? WCommunityCourseFixtures.sample.record.seconds
         return WPage(title:"따라달리기 미리보기",back:back){
-            GeometryReader{geo in ZStack(alignment:.topLeading){WMap(route:true).frame(width:geo.size.width,height:300).clipShape(RoundedRectangle(cornerRadius:14));Circle().fill(Color.wire(0x3D74FF,0x7EA2FF)).frame(width:14,height:14).overlay(Circle().stroke(W.paper,lineWidth:3)).position(x:20+(geo.size.width-40)*CGFloat(min(1,ui.communityCoursePlayback/max(1,duration))),y:150)}.accessibilityIdentifier("communityGhostMap")}.frame(height:300)
-            HStack(spacing:8){Label("저장된 기록",systemImage:"circle.fill").foregroundStyle(W.muted);Spacer();Label("나의 위치 예시",systemImage:"circle.fill").foregroundStyle(Color.blue)}.font(W.font(11))
-            Text(course.title).font(W.font(14,.medium)).accessibilityIdentifier("communityGhostCourseTitle")
-            Text("\(RunRecord.clock(ui.communityCoursePlayback)) / \(RunRecord.clock(duration))").font(W.font(22,.semibold)).monospacedDigit().accessibilityIdentifier("communityGhostClock")
-            VStack(alignment:.leading,spacing:8){Text("기록 재생 위치").font(W.font(13,.medium));Slider(value:$ui.communityCoursePlayback,in:0...max(1,duration),step:1).tint(W.lime).accessibilityIdentifier("communityGhostTimeline")}
-            HStack(spacing:14){Button(ui.communityCoursePlaying ? "일시 정지":"재생"){ui.communityCoursePlaying.toggle()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityGhostPlayPause");Button("처음부터"){ui.communityCoursePlaying=false;ui.communityCoursePlayback=0}.font(W.font(13,.medium)).accessibilityIdentifier("communityGhostReset")}
-            WNotice(text:"60배속 예시 재생 · 실제 GPS나 실시간 상대가 아니에요.")
-            Toggle(isOn:$ui.communityCourseHideEnds){Text("시작·끝 위치 숨기기").font(W.font(14))}.tint(W.lime).accessibilityIdentifier("communityGhostHideEnds")
+            WCommunityCourseMap(hideEnds:ui.communityCourseHideEnds,playback:ui.communityCoursePlayback,duration:duration).accessibilityIdentifier("communityGhostMap")
+            HStack(spacing:20){HStack(spacing:6){Rectangle().fill(Color.wire(0x77B7FF,0x77B7FF)).frame(width:7,height:7).rotationEffect(.degrees(45));Text("저장된 기록")};HStack(spacing:6){Circle().fill(W.ink).frame(width:7,height:7);Text("나의 위치 예시")}}.font(W.font(12)).foregroundStyle(W.muted)
+            HStack(alignment:.firstTextBaseline,spacing:4){Text(RunRecord.clock(ui.communityCoursePlayback)).font(W.font(28,.semibold)).monospacedDigit();Text("/ \(RunRecord.clock(duration))").font(W.font(15)).foregroundStyle(W.muted).monospacedDigit()}.padding(.vertical,8).accessibilityElement(children:.ignore).accessibilityLabel("\(RunRecord.clock(ui.communityCoursePlayback)) / \(RunRecord.clock(duration))").accessibilityIdentifier("communityGhostClock")
+            VStack(alignment:.leading,spacing:8){Text("기록 재생 위치").font(W.font(13));Slider(value:$ui.communityCoursePlayback,in:0...max(1,duration),step:1).tint(W.lime).frame(minHeight:44).accessibilityIdentifier("communityGhostTimeline")}
+            HStack(spacing:14){Button(ui.communityCoursePlaying ? "일시 정지":"재생"){ui.communityCoursePlaying.toggle()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityGhostPlayPause");Button("처음부터"){ui.communityCoursePlaying=false;ui.communityCoursePlayback=0}.font(W.font(13)).frame(minHeight:44).accessibilityIdentifier("communityGhostReset")}
+            Text("60배속 예시 재생 · 실제 GPS나 실시간 상대가 아니에요.").font(W.font(13)).lineSpacing(6).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
+            Toggle(isOn:$ui.communityCourseHideEnds){Text("시작·끝 위치 숨기기")}.toggleStyle(WCommunityCourseToggleStyle()).accessibilityIdentifier("communityGhostHideEnds")
         }actions:{Button("선택 해제하고 돌아가기"){ui.communityCoursePlaying=false;back()}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityGhostClear")}
         .task(id:ui.communityCoursePlaying){while ui.communityCoursePlaying {try? await Task.sleep(for:.seconds(1));guard ui.communityCoursePlaying else{break};let step=WCommunityCoursePolicy.playbackStep(ui.communityCoursePlayback,duration:duration);ui.communityCoursePlayback=step.time;if step.finished{ui.communityCoursePlaying=false}}}
     }
-    private func courseFact(_ title:String,_ value:String)->some View{VStack(alignment:.leading,spacing:7){Text(title).font(W.font(11)).foregroundStyle(W.muted);Text(value).font(W.font(15,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,12).accessibilityElement(children:.combine).accessibilityIdentifier("communityCourseFact-\(title)")}
+    private func courseFact(_ title:String,_ value:String)->some View{VStack(alignment:.leading,spacing:7){Text(title).font(W.font(11)).foregroundStyle(W.muted);Text(value).font(W.font(17,.semibold)).monospacedDigit()}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,12).accessibilityElement(children:.combine).accessibilityIdentifier("communityCourseFact-\(title)")}
 
     var communityLikedPosts:some View {
         let posts=communityLikedVisiblePosts
