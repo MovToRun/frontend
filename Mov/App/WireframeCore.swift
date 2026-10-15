@@ -536,6 +536,61 @@ enum WireframeAccountLinkState: Equatable {
     case failed(AccountLinkFailure)
 }
 
+#if DEBUG
+enum AccountLinkDiagnosticClass: String {
+    case unauthenticated
+    case credentialsRejected = "credentials-rejected"
+    case server
+    case transport
+    case cancelled
+    case accountLink = "account-link"
+    case unexpected
+
+    static func classify(_ failure: AccountLinkFailure) -> Self {
+        switch failure {
+        case .unauthenticated:
+            .unauthenticated
+        case .invalidCredentials:
+            .credentialsRejected
+        case .serverFailure:
+            .server
+        case .transport:
+            .transport
+        case .cancelled:
+            .cancelled
+        default:
+            .accountLink
+        }
+    }
+
+    static func classify(_ error: Error) -> Self {
+        if error is CancellationError { return .cancelled }
+        guard let failure = error as? AccountLinkFailure else { return .unexpected }
+        return classify(failure)
+    }
+}
+
+extension WireframeAccountLinkState {
+    var testTraceLabel: String {
+        switch self {
+        case .idle: "idle"
+        case .loadingMethods: "loading-methods"
+        case .reauthenticating: "reauthenticating"
+        case .ready: "ready"
+        case .linking: "linking"
+        case .submittingLink: "submitting-link"
+        case .confirmingLinkStatus: "confirming-link-status"
+        case .unlinking: "unlinking"
+        case .submittingUnlink: "submitting-unlink"
+        case .confirmingUnlinkStatus: "confirming-unlink-status"
+        case .completed: "completed"
+        case .cancelled: "cancelled"
+        case .failed(let failure): "failed:\(AccountLinkDiagnosticClass.classify(failure).rawValue)"
+        }
+    }
+}
+#endif
+
 @MainActor @Observable final class WireframeRemoteReadBridge {
     private enum ManualOperationKind: Equatable {
         case profileRetry
@@ -611,14 +666,17 @@ enum WireframeAccountLinkState: Equatable {
     private(set) var accountLinkMethods: AccountLinkMethods?
     private(set) var accountLinkState: WireframeAccountLinkState = .idle
     private(set) var accountLinkCompletedMutation: AccountLinkMutation?
+#if DEBUG
     private let accountLinkTestTraceEnabled = ProcessInfo.processInfo.arguments.contains("-wire-account-link-action-trace")
     private(set) var accountLinkTestTrace = ""
 
     var exposesAccountLinkTestTrace:Bool { accountLinkTestTraceEnabled }
-    func recordAccountLinkTestTrace(_ event:String) {
+    func recordAccountLinkTestTrace(_ event: @autoclosure () -> String) {
         guard accountLinkTestTraceEnabled else{return}
+        let event = event()
         accountLinkTestTrace = accountLinkTestTrace.isEmpty ? event : accountLinkTestTrace+" | "+event
     }
+#endif
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
@@ -810,10 +868,14 @@ enum WireframeAccountLinkState: Equatable {
     func reauthenticateAccountLink(using provider: AccountLinkProvider, purpose: AccountLinkPurpose = .link, accountScopeID: String, screen: String) async -> Bool {
         guard let accountLinkFlow, !isAccountLinkBusy,
               self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T15" else {
+#if DEBUG
             recordAccountLinkTestTrace("reauth-core-guard-rejected:flow=\(accountLinkFlow != nil),busy=\(isAccountLinkBusy),scope=\(self.accountScopeID == accountScopeID),active=\(activeScreen ?? "nil"),screen=\(screen)")
+#endif
             return false
         }
-        recordAccountLinkTestTrace("reauth-core-start:\(provider.rawValue):\(purpose)")
+#if DEBUG
+        recordAccountLinkTestTrace("reauth-core-start:\(provider.rawValue):\(purpose.rawValue)")
+#endif
         let operationID = UUID()
         let operationGeneration=generation
         accountLinkOperationID = operationID
@@ -829,7 +891,9 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
             accountLinkState = .ready
+#if DEBUG
             recordAccountLinkTestTrace("reauth-core-succeeded")
+#endif
             return true
         } catch let failure as AccountLinkFailure {
             guard accountLinkOperationID == operationID,
@@ -839,7 +903,9 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
             accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
-            recordAccountLinkTestTrace("reauth-core-failed:\(failure)")
+#if DEBUG
+            recordAccountLinkTestTrace("reauth-core-failed:\(AccountLinkDiagnosticClass.classify(failure).rawValue)")
+#endif
             if failure == .cancelled { await accountLinkFlow.cancel() }
             return false
         } catch {
@@ -850,7 +916,9 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
             accountLinkState = .failed(.invalidResponse)
-            recordAccountLinkTestTrace("reauth-core-error:\(String(describing:error))")
+#if DEBUG
+            recordAccountLinkTestTrace("reauth-core-error:\(AccountLinkDiagnosticClass.classify(error).rawValue)")
+#endif
             return false
         }
     }
@@ -974,10 +1042,14 @@ enum WireframeAccountLinkState: Equatable {
         guard let accountLinkFlow, !isAccountLinkBusy, accountLinkState == .ready,
               self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T15",
               accountLinkMethods?.socialProviders.contains(provider) == true else {
-            recordAccountLinkTestTrace("unlink-core-guard-rejected:flow=\(accountLinkFlow != nil),busy=\(isAccountLinkBusy),state=\(accountLinkState),scope=\(self.accountScopeID == accountScopeID),active=\(activeScreen ?? "nil"),screen=\(screen),methodLinked=\(accountLinkMethods?.socialProviders.contains(provider) == true)")
+#if DEBUG
+            recordAccountLinkTestTrace("unlink-core-guard-rejected:flow=\(accountLinkFlow != nil),busy=\(isAccountLinkBusy),state=\(accountLinkState.testTraceLabel),scope=\(self.accountScopeID == accountScopeID),active=\(activeScreen ?? "nil"),screen=\(screen),methodLinked=\(accountLinkMethods?.socialProviders.contains(provider) == true)")
+#endif
             return false
         }
+#if DEBUG
         recordAccountLinkTestTrace("unlink-core-start:\(provider.rawValue)")
+#endif
         let operationID = UUID()
         let operationGeneration=generation
         accountLinkOperationID = operationID
@@ -992,11 +1064,15 @@ enum WireframeAccountLinkState: Equatable {
                           self.generation == operationGeneration,
                           self.activeScreen == screen,
                           self.accountLinkState == .unlinking(provider) else {
-                        self.recordAccountLinkTestTrace("unlink-submit-guard-rejected:op=\(self.accountLinkOperationID == operationID),scope=\(self.accountScopeID == accountScopeID),generation=\(self.generation == operationGeneration),active=\(self.activeScreen ?? "nil"),state=\(self.accountLinkState)")
+#if DEBUG
+                        self.recordAccountLinkTestTrace("unlink-submit-guard-rejected:op=\(self.accountLinkOperationID == operationID),scope=\(self.accountScopeID == accountScopeID),generation=\(self.generation == operationGeneration),active=\(self.activeScreen ?? "nil"),state=\(self.accountLinkState.testTraceLabel)")
+#endif
                         return false
                     }
                     self.accountLinkState = .submittingUnlink(provider)
+#if DEBUG
                     self.recordAccountLinkTestTrace("unlink-submit-accepted")
+#endif
                     return true
                 }
             }
@@ -1018,7 +1094,9 @@ enum WireframeAccountLinkState: Equatable {
                 )
             }
             accountLinkState = .completed
+#if DEBUG
             recordAccountLinkTestTrace("unlink-core-confirmed-response")
+#endif
             await refreshAccountLinkMethodsAfterConfirmedMutation(
                 operationID:operationID,
                 accountScopeID:accountScopeID,
@@ -1037,7 +1115,9 @@ enum WireframeAccountLinkState: Equatable {
                 mutationWasSubmitted = false
             }
             if mutationWasSubmitted {
-                recordAccountLinkTestTrace("unlink-response-error-after-submit:\(failure)")
+#if DEBUG
+                recordAccountLinkTestTrace("unlink-response-error-after-submit:\(AccountLinkDiagnosticClass.classify(failure).rawValue)")
+#endif
                 return await reconcileAccountLinkCompletion(
                     mutation: .unlink(provider),
                     originalFailure: failure,
@@ -1050,7 +1130,9 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationID = nil
             accountLinkOperationTask = nil
             accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
-            recordAccountLinkTestTrace("unlink-failed-before-confirmation:\(failure)")
+#if DEBUG
+            recordAccountLinkTestTrace("unlink-failed-before-confirmation:\(AccountLinkDiagnosticClass.classify(failure).rawValue)")
+#endif
             if failure == .cancelled { await accountLinkFlow.cancel() }
             return false
         }
@@ -1085,12 +1167,16 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkMethods=methods
             accountLinkOperationID=nil
             accountLinkOperationTask=nil
+#if DEBUG
             recordAccountLinkTestTrace("confirmed-mutation-methods-refresh-succeeded")
+#endif
         } catch {
             guard accountLinkOperationID==operationID else{return}
             accountLinkOperationID=nil
             accountLinkOperationTask=nil
-            recordAccountLinkTestTrace("confirmed-mutation-methods-refresh-failed:\(String(describing:error));state=\(accountLinkState)")
+#if DEBUG
+            recordAccountLinkTestTrace("confirmed-mutation-methods-refresh-failed:\(AccountLinkDiagnosticClass.classify(error).rawValue);state=\(accountLinkState.testTraceLabel)")
+#endif
         }
     }
 
@@ -1107,7 +1193,9 @@ enum WireframeAccountLinkState: Equatable {
               self.accountScopeID==accountScopeID,
               generation==operationGeneration,
               activeScreen==screen else { return false }
+#if DEBUG
         recordAccountLinkTestTrace("unlink-reconciliation-start")
+#endif
         switch mutation {
         case .link(let provider): accountLinkState = .confirmingLinkStatus(provider)
         case .unlink(let provider): accountLinkState = .confirmingUnlinkStatus(provider)
@@ -1125,12 +1213,16 @@ enum WireframeAccountLinkState: Equatable {
                 unconfirmedAccountLinkMutation = nil
                 accountLinkCompletedMutation = mutation
                 accountLinkState = .completed
+#if DEBUG
                 recordAccountLinkTestTrace("mutation-reconciliation-confirmed")
+#endif
                 return true
             }
             unconfirmedAccountLinkMutation = nil
             accountLinkState = .failed(originalFailure == .cancelled ? .completionNotApplied : originalFailure)
-            recordAccountLinkTestTrace("mutation-reconciliation-not-applied:\(originalFailure)")
+#if DEBUG
+            recordAccountLinkTestTrace("mutation-reconciliation-not-applied:\(AccountLinkDiagnosticClass.classify(originalFailure).rawValue)")
+#endif
             return false
         } catch {
             guard accountLinkOperationID == operationID,
@@ -1141,7 +1233,9 @@ enum WireframeAccountLinkState: Equatable {
             accountLinkOperationTask = nil
             unconfirmedAccountLinkMutation = mutation
             accountLinkState = .failed(.completionStatusUnknown)
-            recordAccountLinkTestTrace("mutation-reconciliation-status-read-failed:\(String(describing:error))")
+#if DEBUG
+            recordAccountLinkTestTrace("mutation-reconciliation-status-read-failed:\(AccountLinkDiagnosticClass.classify(error).rawValue)")
+#endif
             return false
         }
     }
@@ -2922,7 +3016,7 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
     private var failUnlinkOnce: Bool
     private let cancelReauthentication: Bool
     private let cancelLinkCredential: Bool
-    private let delaysLinkCompletion: Bool
+    private var delaysLinkCompletion: Bool
     private let delaysUnlinkCompletion: Bool
     private let delaysMethodsAfterUnlinkForAccountSwitch: Bool
     private var loseCompletionResponseOnce: Bool
@@ -2930,12 +3024,14 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
     private var loseUnlinkResponseOnce: Bool
     private var loseUnlinkStatusOnce: Bool
     private var failMethodsAfterUnlinkOnce:Bool
+    private var expireLinkChallengeOnce:Bool
+    private var expireUnlinkProofOnce:Bool
     private var loseNextStatusResponse = false
     private var unlinkHasCompleted = false
     private var delayNextUnlinkMethodsRead = false
     private var postUnlinkMethodsReadCount = 0
 
-    init(initiallyLinkedGoogle: Bool, onlyGoogleLinked: Bool, localPassword: Bool, failCompletionOnce: Bool, failUnlinkWithMethodRequiredOnce: Bool, failUnlinkOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool, delaysUnlinkCompletion: Bool, delaysMethodsAfterUnlinkForAccountSwitch:Bool, loseCompletionResponseOnce: Bool, loseCompletionStatusOnce: Bool, loseUnlinkResponseOnce: Bool, loseUnlinkStatusOnce: Bool, failMethodsAfterUnlinkOnce:Bool) {
+    init(initiallyLinkedGoogle: Bool, onlyGoogleLinked: Bool, localPassword: Bool, failCompletionOnce: Bool, failUnlinkWithMethodRequiredOnce: Bool, failUnlinkOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool, delaysUnlinkCompletion: Bool, delaysMethodsAfterUnlinkForAccountSwitch:Bool, loseCompletionResponseOnce: Bool, loseCompletionStatusOnce: Bool, loseUnlinkResponseOnce: Bool, loseUnlinkStatusOnce: Bool, failMethodsAfterUnlinkOnce:Bool, expireLinkChallengeOnce:Bool, expireUnlinkProofOnce:Bool) {
         providers = onlyGoogleLinked ? [.google] : initiallyLinkedGoogle ? [.kakao, .google] : [.kakao]
         self.localPassword = localPassword
         self.failCompletionOnce = failCompletionOnce
@@ -2952,6 +3048,8 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
         self.loseCompletionStatusOnce = loseCompletionStatusOnce
         self.loseUnlinkStatusOnce = loseUnlinkStatusOnce
         self.failMethodsAfterUnlinkOnce=failMethodsAfterUnlinkOnce
+        self.expireLinkChallengeOnce=expireLinkChallengeOnce
+        self.expireUnlinkProofOnce=expireUnlinkProofOnce
     }
 
     func methods() async throws -> AccountLinkMethods {
@@ -3005,7 +3103,16 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
             self.reauthProofPurpose = nil
             throw AccountLinkFailure.cancelled
         }
-        if delaysLinkCompletion { try await Task.sleep(for: .seconds(6)) }
+        if delaysLinkCompletion {
+            delaysLinkCompletion=false
+            try await Task.sleep(for: .seconds(6))
+        }
+        if expireLinkChallengeOnce {
+            expireLinkChallengeOnce=false
+            reauthProof=nil
+            reauthProofPurpose=nil
+            throw AccountLinkFailure.unauthenticated
+        }
         if failCompletionOnce {
             failCompletionOnce = false
             self.reauthProof = nil
@@ -3036,6 +3143,12 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
             throw AccountLinkFailure.cancelled
         }
         if delaysUnlinkCompletion { try await Task.sleep(for: .seconds(6)) }
+        if expireUnlinkProofOnce {
+            expireUnlinkProofOnce=false
+            reauthProof=nil
+            reauthProofPurpose=nil
+            throw AccountLinkFailure.unauthenticated
+        }
         if failUnlinkWithMethodRequiredOnce {
             failUnlinkWithMethodRequiredOnce = false
             reauthProof = nil
@@ -3146,7 +3259,9 @@ struct RootView:View {
                 loseCompletionStatusOnce:args.contains("-wire-account-link-status-read-lost-once"),
                 loseUnlinkResponseOnce:args.contains("-wire-account-unlink-response-lost-once"),
                 loseUnlinkStatusOnce:args.contains("-wire-account-unlink-status-read-lost-once"),
-                failMethodsAfterUnlinkOnce:args.contains("-wire-account-link-methods-fail-after-unlink-once")
+                failMethodsAfterUnlinkOnce:args.contains("-wire-account-link-methods-fail-after-unlink-once"),
+                expireLinkChallengeOnce:args.contains("-wire-account-link-expired-challenge-once"),
+                expireUnlinkProofOnce:args.contains("-wire-account-unlink-expired-proof-once")
             ) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
@@ -3711,6 +3826,7 @@ struct WireframeRoot:View {
                         .transition(routeScreenTransition)
                 }
             }
+#if DEBUG
             if remoteReads.exposesAccountLinkTestTrace {
                 Text(remoteReads.accountLinkTestTrace.isEmpty ? "trace-pending" : remoteReads.accountLinkTestTrace)
                     .font(.system(size:1))
@@ -3721,6 +3837,7 @@ struct WireframeRoot:View {
                     .accessibilityIdentifier("accountLinkActionTrace")
                     .allowsHitTesting(false)
             }
+#endif
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}
             if splash {WSplash().frame(maxWidth:.infinity,maxHeight:.infinity).background(W.paper)}
             if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
