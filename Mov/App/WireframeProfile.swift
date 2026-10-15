@@ -26,8 +26,8 @@ extension WireframeRoot {
                 guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
                 if failure == .signupProofInvalid {
                     socialLoginPendingAttempt=nil
-                    ui.error=failure.userMessage
                     go("A04")
+                    ui.error=failure.userMessage
                 } else {
                     ui.error=failure.userMessage
                 }
