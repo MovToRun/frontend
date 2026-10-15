@@ -2887,6 +2887,12 @@ struct WireframeRoot:View {
                 if WReviewMode.tools && args.contains("-wire-community-not-member"){ui.communityJoinedCrewIDs.removeAll()}
                 if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-crew"),args.indices.contains(i+1){ui.communitySelectedCrewID=args[i+1]}
                 if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-board"),args.indices.contains(i+1){ui.communityCrewBoardID=args[i+1]}
+                if reviewTools && args.contains("-wire-community-crew-data-test"),var crew=WCommunityCrewFixtures.values.first(where:{$0.id=="dawn"}) {
+                    crew=WCommunityCrewFixtures.informationReviewFixture(crew,introduction:"선택된 크루 소개",ownerMemberID:"fixture-member-ga-on",level:7,boards:Array(crew.boards.prefix(1)));ui.communityCrewOverrides[crew.id]=crew
+                }
+                if reviewTools && args.contains("-wire-community-review55-crew-info"),let crew=WCommunityCrewFixtures.values.first(where:{$0.id=="dawn"}) {
+                    ui.communityCrewOverrides[crew.id]=WCommunityCrewFixtures.informationReviewFixture(crew,introduction:"가볍게 하루를 여는 사람들",level:1);ui.profile.nickname="이메일데모"
+                }
                 if reviewTools && args.contains("-wire-empty-community-notifications"){ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[])}
                 if reviewTools && args.contains("-wire-community-notification-samples"){prepareCommunityNotificationSamples()}
                 if reviewTools && args.contains("-wire-community-notification-missing-target") {ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[WCommunityNotification(id:"missing-post",title:"게시물 알림 예시",text:"삭제되었거나 접근할 수 없는 게시물입니다.",target:.post(postID:"deleted-post"))])}

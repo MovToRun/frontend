@@ -863,7 +863,7 @@ import UIKit
         XCTAssertTrue(app.staticTexts["0:00"].exists,"Legacy records with no distance, time, or segments use the same zero placeholder as the header")
     }
 
-    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,largeText:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,photoDraftFixture:Bool=false,photoPostFixture:Bool=false,videoPostFixture:Bool=false,videoDraftFixture:Bool=false) {
+    func launchCommunity(_ screen:String,appearance:String="light",compact:Bool=false,largeText:Bool=false,anonymousPost:Bool=false,emptyHot:Bool=false,verificationStatus:String?=nil,twoCourseRecords:Bool=false,viewerID:String?=nil,crewID:String?=nil,crewBoardID:String?=nil,crewDataFixture:Bool=false,review55CrewInfoFixture:Bool=false,photoDraftFixture:Bool=false,photoPostFixture:Bool=false,videoPostFixture:Bool=false,videoDraftFixture:Bool=false) {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-\(UUID().uuidString)","-wire-reset","-appearance",appearance]
         if compact{app.launchArguments.append("-wire-compact-review")}
         if largeText{app.launchArguments.append("-wire-large")}
@@ -874,6 +874,8 @@ import UIKit
         if let viewerID{app.launchArguments += ["-wire-community-viewer",viewerID]}
         if let crewID{app.launchArguments += ["-wire-community-crew",crewID]}
         if let crewBoardID{app.launchArguments += ["-wire-community-board",crewBoardID]}
+        if crewDataFixture{app.launchArguments.append("-wire-community-crew-data-test")}
+        if review55CrewInfoFixture{app.launchArguments.append("-wire-community-review55-crew-info")}
         if photoDraftFixture{app.launchArguments.append("-wire-community-photo-draft-fixture")}
         if photoPostFixture{app.launchArguments.append("-wire-community-photo-post-fixture")}
         if videoPostFixture{app.launchArguments.append("-wire-community-video-post-fixture")}
@@ -999,7 +1001,7 @@ import UIKit
     }
 
     func testCommunityCrewInformationMatchesWireframeAndRoutesFromDetailAndBoard() {
-        launchCommunity("C01")
+        launchCommunity("C01",review55CrewInfoFixture:true)
         app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         app.buttons["communityCrewOpen-dawn"].tap()
@@ -1017,6 +1019,7 @@ import UIKit
         XCTAssertFalse(app.descendants(matching:.any)["communityCrewInfoBoards"].label.contains("활성"))
         XCTAssertFalse(app.descendants(matching:.any)["communityCrewInfoLocalNotice"].exists)
         XCTAssertTrue(app.staticTexts["communityCrewInfoGuidance"].label.contains("처음 오신 분도 편하게 인사해 주세요."))
+        capture("C32-review55-isolated-fixture")
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
         app.buttons["communityCrewEnterBoard"].tap()
@@ -1024,6 +1027,26 @@ import UIKit
         app.buttons["communityCrewInformationFromBoard"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts["communityCrewInfoName"].label,"모브 새벽 크루")
+    }
+
+    func testCommunityCrewInformationUsesSelectedCrewData() {
+        launchCommunity("C32",crewID:"dawn")
+        XCTAssertEqual(app.staticTexts["communityCrewInfoIntroduction"].label,"가볍게 하루를 여는 러너들이 함께 달려요.")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoLevel"].label.contains("—"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoOwner"].label.contains("새벽러너"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoBoards"].label.contains("4/5개"))
+        XCTAssertFalse(app.staticTexts["이메일데모"].exists)
+        capture("C32-default-crew-data")
+
+        launchCommunity("C32",appearance:"dark",crewID:"dawn",crewDataFixture:true)
+        XCTAssertEqual(app.staticTexts["communityCrewInfoName"].label,"모브 새벽 크루")
+        XCTAssertEqual(app.staticTexts["communityCrewInfoIntroduction"].label,"선택된 크루 소개")
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoLevel"].label.contains("Lv.7"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoOwner"].label.contains("가온러너"))
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewInfoBoards"].label.contains("1/5개"))
+        XCTAssertFalse(app.staticTexts["이메일데모"].exists,"Review55-only owner copy must not leak into the selected crew data fixture")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewInfoLocalNotice"].exists)
+        capture("C32-selected-crew-data-dark")
     }
 
     func testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation() {

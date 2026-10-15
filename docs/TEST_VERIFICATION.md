@@ -70,12 +70,21 @@
 - Result bundle: `/tmp/mov-community-crew-info-suite.xcresult`.
 - Historical note: `운영 기준 미정` was an implementation assumption, not user-approved product policy. It does not override the Review55 C32 value `Lv.1`; the follow-up below corrects that display and removes the C32/C33 local-demo notices that are absent from the wireframe. C33 state changes remain local and do not contact or notify a server.
 
-### Review55 C32/C33 wireframe follow-up (2026-10-15)
+### Historical Review55 C32/C33 wireframe follow-up (2026-10-15)
 
 - The C32 copy now matches the wireframe: introduction `가볍게 하루를 여는 사람들`, level `Lv.1`, crew owner `이메일데모`, and row label `게시판 4/5개`. The C32 local-only notice and C33 local-application notice were removed. C32/C33 layout, safe-area title, and C33 empty text were checked on the existing iPhone 17 Pro (`6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`); captures are in `docs/F002-F003-live-review-20261015/`.
 - `Mov` scheme built app target `Mov` and UI test bundle target `MovUITests` from the updated checkout. Compiled source/test tree: `5018edc4533aec322f3d911b8b64ff98fe3c2038`; product app: `/private/tmp/Mov-C32-C33-wireframe-20261015-derived/Build/Products/Debug-iphonesimulator/Mov.app`. The installed bundle reports `com.movtorun.mov`, version `1.0` (build `1`), Xcode build `17C529`.
 - Focused UI run: 2/2 passed, including `testCommunityCrewInformationMatchesWireframeAndRoutesFromDetailAndBoard` and `testCommunityCrewApplicationListOpensStatusAndConfirmsLocalCancellation`. Result bundle: `/private/tmp/Mov-C32-C33-wireframe-20261015.xcresult`.
 - The earlier 5/5 bundle `/private/tmp/Mov-F002-F003-live-review-20261015-retry.xcresult` was built before these C32/C33 changes, from checkout commit `56f447913ed12f150d65eeb0ae9fd063de309ca0` (tree `fe2e50f92f3632cd72c303cc92005af5ab24c4cd`, identical to then-current `main`). It covers navigation/scroll, dark/short-screen community layout, and H00/H07–H09 behavior, not the corrected C32 copy.
+
+The follow-up above was superseded after review found its exact wireframe sample values had entered the default crew fixture. The current patch uses selected crew data for C32 and keeps those examples behind isolated `-wire-fixture` launch arguments.
+
+### Data-driven C32 follow-up (2026-10-15)
+
+- `WCommunityCrew` now carries optional level data. C32 renders introduction, level, owner name, active-board count, and other values from the selected crew and owner records. The normal crew fixture retains its own introduction and does not contain Review55 sample values.
+- The Review55 sample is created only by `-wire-community-review55-crew-info` in the isolated review launch; a separate test fixture changes the selected crew introduction, level, owner ID, and board list to verify those values are data-driven. Existing crew edits preserve the optional level.
+- Focused UI run passed 3/3 on the existing iPhone 17 Pro `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`, with `-parallel-testing-enabled NO`: selected/default crew data in light mode and altered selected-crew data in dark mode, isolated Review55 fixture with C16/C19 routes, and C33 application status/cancellation. Tested source subtree `Mov`: `a72644e20bf0441c52dc6a127abf1384bc90f957`; UI-test subtree `MovUITests`: `64d68001a31323692816e9b1cd0863d8c39b7e1a`. Result bundle: `/private/tmp/Mov-C32-data-driven-20261015-final2.xcresult`.
+- Normal installed-app C32 was opened in light mode and captured on the same simulator without clearing app data. Captures for the live selected crew, isolated Review55 fixture, and altered selected-data fixture in dark mode are in `docs/F002-F003-live-review-20261015/`.
 
 ## Crew settings and board lifecycle (C36–C40)
 
