@@ -89,6 +89,9 @@ private actor SocialLoginCredentialMock: SocialLoginCredentialProviding {
     private(set) var requestedProviders: [SocialLoginProvider] = []
     private var continuation: CheckedContinuation<String?, Error>?
     private var startedContinuation: CheckedContinuation<Void, Never>?
+    private var cancellationWasObserved = false
+    private var cancellationObservedContinuation: CheckedContinuation<Bool, Never>?
+    private var cancellationObservationTimeout: Task<Void, Never>?
 
     init(result: String?, holdsCredential: Bool = false) {
         self.result = result
@@ -98,10 +101,14 @@ private actor SocialLoginCredentialMock: SocialLoginCredentialProviding {
     func credential(for provider: SocialLoginProvider, challenge: SocialLoginChallenge) async throws -> String? {
         requestedProviders.append(provider)
         guard holdsCredential else { return result }
-        return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            startedContinuation?.resume()
-            startedContinuation = nil
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                startedContinuation?.resume()
+                startedContinuation = nil
+            }
+        } onCancel: {
+            Task { await self.markCredentialCancellationObserved() }
         }
     }
 
@@ -113,6 +120,32 @@ private actor SocialLoginCredentialMock: SocialLoginCredentialProviding {
     func releaseCredential() {
         continuation?.resume(returning: result)
         continuation = nil
+    }
+
+    func waitUntilCredentialCancellationIsObserved() async -> Bool {
+        if cancellationWasObserved { return true }
+        return await withCheckedContinuation { continuation in
+            cancellationObservedContinuation = continuation
+            cancellationObservationTimeout = Task {
+                // This only bounds a broken test gate; the success path is opened by the cancellation callback.
+                try? await Task.sleep(for: .seconds(2))
+                await expireCredentialCancellationWait()
+            }
+        }
+    }
+
+    private func markCredentialCancellationObserved() {
+        cancellationWasObserved = true
+        cancellationObservationTimeout?.cancel()
+        cancellationObservationTimeout = nil
+        cancellationObservedContinuation?.resume(returning: true)
+        cancellationObservedContinuation = nil
+    }
+
+    private func expireCredentialCancellationWait() {
+        cancellationObservationTimeout = nil
+        cancellationObservedContinuation?.resume(returning: false)
+        cancellationObservedContinuation = nil
     }
 }
 
@@ -324,13 +357,16 @@ final class SocialLoginClientTests: XCTestCase {
     }
 
     func testCancellationWithLateCredentialStopsBeforeVerification() async throws {
-        let service=SocialLoginServiceMock()
-        let credentials=SocialLoginCredentialMock(result:"late-fixture-credential",holdsCredential:true)
-        let coordinator=SocialLoginCoordinator(service:service,credentials:credentials)
-        let begin=Task { try await coordinator.begin(provider:.google,deviceID:UUID()) }
+        let service = SocialLoginServiceMock()
+        let credentials = SocialLoginCredentialMock(result: "late-fixture-credential", holdsCredential: true)
+        let coordinator = SocialLoginCoordinator(service: service, credentials: credentials)
+        let begin = Task { try await coordinator.begin(provider: .google, deviceID: UUID()) }
 
         await credentials.waitUntilCredentialStarts()
         begin.cancel()
+        // The provider must observe cancellation before the deliberately late credential is released.
+        let cancellationObserved = await credentials.waitUntilCredentialCancellationIsObserved()
+        XCTAssertTrue(cancellationObserved, "Cancellation must reach the suspended provider before it returns a credential")
         await credentials.releaseCredential()
 
         do {
@@ -339,8 +375,8 @@ final class SocialLoginClientTests: XCTestCase {
         } catch let failure as SocialLoginFailure {
             XCTAssertEqual(failure,.cancelled)
         }
-        let calls=await service.recordedCalls()
-        XCTAssertEqual(calls.count,1)
+        let calls = await service.recordedCalls()
+        XCTAssertEqual(calls.count, 1, "Only the challenge request may be sent after cancellation")
         XCTAssertTrue(calls[0].hasPrefix("challenge:"))
     }
 
