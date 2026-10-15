@@ -1868,8 +1868,6 @@ extension WireframeRoot {
             if let crew,let draft,draft.kind == .guidance,communityCrewCanManage(crew){
                 Text("가입 신청 화면에서 안내할 내용을 적어 주세요.").font(W.font(13)).foregroundStyle(W.muted).lineSpacing(4)
                 WField(label:"가입 안내",text:textBinding,limit:WCommunityCrewPolicy.guidanceLimit,multiline:true,multilineHeight:190,textSize:14,labelSize:13,accessibilityID:"communityCrewGuidanceText")
-                Text("\(draft.text.count)/\(WCommunityCrewPolicy.guidanceLimit)자").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing).accessibilityIdentifier("communityCrewGuidanceCount")
-                WNotice(text:"안내는 이 기기의 로컬 예시로 저장돼요. 실제 가입 신청자에게 전송되지는 않아요.").accessibilityIdentifier("communityCrewGuidanceLocalNotice")
                 if !ui.communityCrewManageError.isEmpty{WNotice(text:ui.communityCrewManageError,danger:true).accessibilityIdentifier("communityCrewManageError")}
             }else{WNotice(text:"크루장·운영자만 가입 안내를 관리할 수 있어요.",danger:true).accessibilityIdentifier("communityCrewGuidanceRestricted")}
         }actions:{
@@ -1926,8 +1924,6 @@ extension WireframeRoot {
             if let crew,let draft,draft.kind == .announcement,communityCrewCanManage(crew){
                 WField(label:"제목",text:titleBinding,limit:WCommunityCrewPolicy.announcementTitleLimit,multiline:false,textSize:15,labelSize:13,accessibilityID:"communityCrewAnnouncementTitle")
                 WField(label:"내용",text:textBinding,limit:WCommunityCrewPolicy.announcementTextLimit,multiline:true,multilineHeight:145,textSize:14,labelSize:13,accessibilityID:"communityCrewAnnouncementText")
-                Text("받는 사람 · 크루 멤버 \(crew.memberIDs.count)명").font(W.font(12)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewAnnouncementAudience")
-                WNotice(text:"전송은 이 기기 안의 로컬 예시로만 표시돼요. 실제 푸시 알림이나 서버 요청은 보내지 않습니다.").accessibilityIdentifier("communityCrewAnnouncementLocalNotice")
                 if !ui.communityCrewManageError.isEmpty{WNotice(text:ui.communityCrewManageError,danger:true).accessibilityIdentifier("communityCrewManageError")}
             }else{WNotice(text:"크루장·운영자만 크루 알림을 작성할 수 있어요.",danger:true).accessibilityIdentifier("communityCrewAnnouncementRestricted")}
         }actions:{
@@ -1939,12 +1935,10 @@ extension WireframeRoot {
         let crew=communityCrew(),pending=ui.communityCrewApplications.filter{$0.crewID==crew?.id && $0.status == .pending}
         return WPage(title:"가입 신청",back:back){
             if let crew,communityCrewCanManage(crew){
-                Text("대기 중인 신청 \(pending.count)건").font(W.font(13,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewPendingApplicationCount")
-                WNotice(text:"신청 메모와 상태는 기기의 예시예요. 검토 결과 알림은 실제로 전송되지 않아요.").accessibilityIdentifier("communityCrewPendingApplicationsLocalNotice")
                 if pending.isEmpty{Text("대기 중인 신청이 없어요").font(W.font(14)).foregroundStyle(W.muted).frame(maxWidth:.infinity,minHeight:120,alignment:.center).accessibilityIdentifier("communityCrewPendingApplicationsEmpty")}
-                else{VStack(spacing:0){ForEach(pending){application in let runner=communityRunner(application.applicantMemberID);Button{openCommunityCrewRequest(application.id,crew:crew)}label:{HStack(spacing:12){communityAvatar(runner.name);VStack(alignment:.leading,spacing:4){Text(runner.name).font(W.font(14,.semibold));Text(application.memo.isEmpty ? "메모 없음":application.memo).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)};Spacer();WChevron().stroke(W.muted,style:StrokeStyle(lineWidth:1.5,lineCap:.round,lineJoin:.round)).frame(width:9,height:15)}.frame(maxWidth:.infinity,minHeight:64,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewPendingRequest-\(application.id)");W.line.frame(height:1)}}}
+                else{VStack(spacing:0){ForEach(pending){application in let runner=communityRunner(application.applicantMemberID);Button{openCommunityCrewRequest(application.id,crew:crew)}label:{HStack(spacing:12){VStack(alignment:.leading,spacing:4){Text(runner.name).font(W.font(14,.semibold));Text(application.memo.isEmpty ? "메모 없음":application.memo).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)};Spacer();WChevron().stroke(W.muted,style:StrokeStyle(lineWidth:1.5,lineCap:.round,lineJoin:.round)).frame(width:9,height:15)}.frame(maxWidth:.infinity,minHeight:64,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityCrewPendingRequest-\(application.id)");W.line.frame(height:1)}}}
             }else{WNotice(text:"크루장·운영자만 가입 신청을 볼 수 있어요.",danger:true).accessibilityIdentifier("communityCrewPendingApplicationsRestricted")}
-        }actions:{Button("크루 관리",action:back).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("communityCrewPendingApplicationsBack")}
+        }actions:{}
     }
 
     var communityCrewMemberList:some View {

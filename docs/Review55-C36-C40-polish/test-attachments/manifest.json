@@ -1,0 +1,41 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "6EB4A7AD-63C1-471F-BB5F-9147DEEC404B",
+        "deviceName" : "iPhone 17 Pro",
+        "exportedFileName" : "CF69384E-6245-47F6-9984-D9AB82D6FBCA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Wire-C39-announcement-editor_0_EEAB223E-E103-42A6-92E6-C56162B61555.png",
+        "timestamp" : 1792047182.006
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "6EB4A7AD-63C1-471F-BB5F-9147DEEC404B",
+        "deviceName" : "iPhone 17 Pro",
+        "exportedFileName" : "6D06FABC-B3B0-4CAA-82BE-DA6CDD525834.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Wire-C36-guidance_0_BB5734C0-C305-4C5B-AEEC-CA7EF4646861.png",
+        "timestamp" : 1792047145.22
+      }
+    ],
+    "testIdentifier" : "LaunchTests/testCommunityCrewGuidanceBoardsAndAnnouncementsUseLocalFlows()",
+    "testIdentifierURL" : "test://com.apple.xcode/Mov/MovUITests/LaunchTests/testCommunityCrewGuidanceBoardsAndAnnouncementsUseLocalFlows"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "6EB4A7AD-63C1-471F-BB5F-9147DEEC404B",
+        "deviceName" : "iPhone 17 Pro",
+        "exportedFileName" : "15B00D6A-D815-4CCA-A0A4-CFCC6A574423.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "Wire-C40-pending-applications_0_DC604BB1-2B4C-4D78-BF10-BEFE87D25951.png",
+        "timestamp" : 1792047198.029
+      }
+    ],
+    "testIdentifier" : "LaunchTests/testCommunityCrewManagerReviewsPendingApplicationsLocally()",
+    "testIdentifierURL" : "test://com.apple.xcode/Mov/MovUITests/LaunchTests/testCommunityCrewManagerReviewsPendingApplicationsLocally"
+  }
+]

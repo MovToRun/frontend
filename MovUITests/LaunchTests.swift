@@ -1225,6 +1225,11 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
         app.buttons["communityCrewPendingApplications"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["communityCrewPendingApplicationCount"].exists,"C40 follows the wireframe without a pending-count summary")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewPendingApplicationsLocalNotice"].exists,"C40 has no local-only notice")
+        let firstRequest=app.buttons["communityCrewPendingRequest-fixture-request-dawn-early"]
+        XCTAssertTrue(firstRequest.label.contains("새벽러너") && firstRequest.label.contains("주 1회 함께 달리고 싶어요."),"A request row shows the applicant name and memo")
+        capture("C40-pending-applications")
         app.buttons["communityCrewPendingRequest-fixture-request-dawn-early"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C22"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts["communityCrewApplicantName"].label,"새벽러너")
@@ -1232,12 +1237,15 @@ import UIKit
         XCTAssertTrue(app.staticTexts["communityCrewReviewLocalNotice"].exists || app.descendants(matching:.any)["communityCrewReviewLocalNotice"].exists)
         app.buttons["communityCrewApproveApplication"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:5))
-        XCTAssertEqual(app.staticTexts["communityCrewPendingApplicationCount"].label,"대기 중인 신청 1건")
+        XCTAssertFalse(app.buttons["communityCrewPendingRequest-fixture-request-dawn-early"].exists)
+        XCTAssertTrue(app.buttons["communityCrewPendingRequest-fixture-request-dawn-ga-on"].exists)
         app.buttons["communityCrewPendingRequest-fixture-request-dawn-ga-on"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C22"].waitForExistence(timeout:5))
         app.buttons["communityCrewRejectApplication"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["communityCrewPendingApplicationsEmpty"].exists,"Resolved requests leave the pending list")
+        XCTAssertFalse(app.staticTexts["communityCrewPendingApplicationCount"].exists)
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewPendingApplicationsLocalNotice"].exists)
     }
 
     func testCommunityCrewGuidanceBoardsAndAnnouncementsUseLocalFlows() {
@@ -1247,6 +1255,10 @@ import UIKit
 
         app.buttons["communityCrewGuidance"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C36"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["communityCrewGuidanceCount"].exists,"C36 uses WField's built-in count only")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewGuidanceLocalNotice"].exists,"C36 omits the extra local-only notice")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format:"label MATCHES %@", "^[0-9]+/500$")).count,1,"C36 shows one character counter")
+        capture("C36-guidance")
         replaceInput(app.textViews["communityCrewGuidanceText"],"처음 오신 분은 게시판 일정을 먼저 확인해 주세요.")
         app.buttons["communityCrewGuidanceSave"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
@@ -1296,6 +1308,9 @@ import UIKit
         app.buttons["communityCrewBoardsBackToManage"].tap()
         app.buttons["communityCrewAnnouncements"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C39"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.staticTexts["communityCrewAnnouncementAudience"].exists,"C39 omits the extra audience line")
+        XCTAssertFalse(app.descendants(matching:.any)["communityCrewAnnouncementLocalNotice"].exists,"C39 omits the review-only notice")
+        capture("C39-announcement-editor")
         app.textFields["communityCrewAnnouncementTitle"].tap()
         app.textFields["communityCrewAnnouncementTitle"].typeText("토요일 아침 모임")
         app.textViews["communityCrewAnnouncementText"].tap()
@@ -1317,7 +1332,7 @@ import UIKit
         app.buttons["communityCrewPendingRequest-fixture-request-dawn-early"].tap()
         app.buttons["communityCrewApproveApplication"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:5))
-        app.buttons["communityCrewPendingApplicationsBack"].tap()
+        app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
 
         app.buttons["communityCrewMembers"].tap()
