@@ -79,32 +79,81 @@ struct WPage<Content:View,Actions:View>:View {
     var title:String
     var back:(()->Void)?
     var trailing:AnyView=AnyView(EmptyView())
+    var onCommunityScrollOffset:((CGFloat)->Void)?=nil
     @ViewBuilder var content:Content
     @ViewBuilder var actions:Actions
     var body:some View {
         VStack(spacing:0){
             WHeader(title:title,back:back,mark:title=="시뮬레이션 완료",trailing:trailing)
-            ScrollView { VStack(alignment:.leading,spacing:18){content}.frame(maxWidth:.infinity,alignment:.leading).padding(24) }.scrollDismissesKeyboard(.interactively).modifier(WAuthBodyMotion())
+            ScrollView {
+                if onCommunityScrollOffset != nil {WCommunityScrollOffsetProbe(coordinateSpace:"community-page-scroll")}
+                VStack(alignment:.leading,spacing:18){content}
+                    .frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(24)
+                    .padding(.bottom,onCommunityScrollOffset == nil ? 0:WCommunityBottomTab.barHeight+24)
+            }
+            .coordinateSpace(name:"community-page-scroll")
+            .wObserveCommunityScrollOffset{onCommunityScrollOffset?($0)}
+            .scrollDismissesKeyboard(.interactively)
+            .modifier(WAuthBodyMotion())
             if Actions.self != EmptyView.self { VStack(spacing:10){actions}.padding(.horizontal,24).padding(.top,16).padding(.bottom,24).overlay(alignment:.top){W.line.frame(height:1)} }
         }.background(W.paper)
     }
 }
+private struct WCommunityScrollOffsetPreferenceKey:PreferenceKey {
+    static let defaultValue:CGFloat=0
+    static func reduce(value:inout CGFloat,nextValue:()->CGFloat){value=nextValue()}
+}
+struct WCommunityScrollOffsetProbe:View {
+    let coordinateSpace:String
+    var body:some View {
+        GeometryReader{geometry in
+            Color.clear.preference(key:WCommunityScrollOffsetPreferenceKey.self,value:geometry.frame(in:.named(coordinateSpace)).minY)
+        }.frame(height:0)
+    }
+}
+extension View {
+    @ViewBuilder func wAccessibilityIdentifier(_ identifier:String?)->some View {
+        if let identifier { accessibilityIdentifier(identifier) } else { self }
+    }
+    func wOnCommunityScrollOffset(_ action:@escaping (CGFloat)->Void)->some View {
+        onPreferenceChange(WCommunityScrollOffsetPreferenceKey.self,perform:action)
+    }
+    func wObserveCommunityScrollOffset(_ action:@escaping (CGFloat)->Void)->some View {
+        modifier(WCommunityScrollObserver(action:action))
+    }
+}
+private struct WCommunityScrollObserver:ViewModifier {
+    let action:(CGFloat)->Void
+    @ViewBuilder func body(content:Content)->some View {
+        if #available(iOS 18.0,*) {
+            content.onScrollGeometryChange(for:CGFloat.self,of:{geometry in geometry.contentOffset.y}){_,offset in action(-offset)}
+        } else {
+            content.wOnCommunityScrollOffset(action)
+        }
+    }
+}
+private struct WOutgoingRouteAccessibility:ViewModifier {
+    let hidden:Bool
+    func body(content:Content)->some View {content.accessibilityHidden(hidden)}
+}
 struct WHeader:View {
     var title:String
     var back:(()->Void)? = nil
+    var backIdentifier:String? = nil
     var root=false
     var showRootMark=true
     var mark=false
     var trailing:AnyView = AnyView(EmptyView())
     var body:some View {
         HStack {
-            if let back { Button(action:back){WBackIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.2,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:44,height:44)}.accessibilityLabel("뒤로") }
+            if let back { Button(action:back){WBackIcon().stroke(W.ink,style:StrokeStyle(lineWidth:1.2,lineCap:.round,lineJoin:.round)).frame(width:18,height:18).frame(width:44,height:44)}.accessibilityLabel("뒤로").wAccessibilityIdentifier(backIdentifier) }
             else if root ? showRootMark : mark {BrandMark(size:root ? 30:28).frame(width:root ? 30:28,height:44).accessibilityIdentifier(root ? "rootHeaderBrandMark":"completionBrandMark")}
             else {Color.clear.frame(width:44,height:44)}
             Spacer();trailing
         }.padding(.horizontal,root ? 16:10).frame(height:root ? 64:68)
             .overlay{Text(title).font(W.font(17,.medium)).lineLimit(2).minimumScaleFactor(0.65).frame(maxWidth:220).allowsHitTesting(false)}
-            .background(W.paper).overlay(alignment:.bottom){if !(root && title=="내 정보"){W.line.frame(height:1)}}
+            .background(W.paper.ignoresSafeArea(edges:.top)).overlay(alignment:.bottom){if !(root && title=="내 정보"){W.line.frame(height:1)}}
     }
 }
 struct WHeading:View {let text:String;@Environment(\.authPageMotion) var authMotion;var body:some View {Text(text).font(W.font(27,.bold)).kerning(authMotion.enabled ? -0.945:0).lineSpacing(5).fixedSize(horizontal:false,vertical:true).padding(.top,6).padding(.bottom,3)}}
@@ -348,6 +397,15 @@ enum WRootTab: Int, CaseIterable {
 
     var route: String { ["POINTS", "H01", "H00", "C01", "M01"][rawValue] }
     var assetName: String? { [nil, "run", nil, "community", "profile"][rawValue] }
+}
+
+enum WCommunityBottomTab:Int,CaseIterable {
+    static let barHeight:CGFloat=64
+    case feed,boards,home,crew,profile
+    var title:String {switch self{case .feed:"피드";case .boards:"게시판";case .home:"홈";case .crew:"크루";case .profile:"내 프로필"}}
+    var route:String {switch self{case .feed:"C01";case .boards:"C02";case .home:"H00";case .crew:"C15";case .profile:"C08"}}
+    var accessibilityID:String {switch self{case .feed:"community-tab-feed";case .boards:"community-tab-boards";case .home:"community-tab-home";case .crew:"community-tab-crew";case .profile:"community-tab-profile"}}
+    var systemImage:String? {switch self{case .feed:"text.bubble";case .boards:"square.grid.2x2";case .home:nil;case .crew:"person.3";case .profile:"person.crop.circle"}}
 }
 
 enum WireframeRemoteReadFeature: String, Equatable, Sendable {
@@ -2679,6 +2737,9 @@ struct WireframeRoot:View {
     @State var communityCrewPendingArchiveBoardID:String?
     @State var showingCommunityCrewApplicationCancelConfirmation=false
     @State var communityCrewPendingCancellationApplicationID:String?
+    @State var communityBottomBarVisible=true
+    @State var communityScrollToTopVisible=false
+    @State var lastCommunityScrollOffset:CGFloat?
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @FocusState var communitySearchFocused:Bool
@@ -2704,6 +2765,14 @@ struct WireframeRoot:View {
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
+    var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C15" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
+    var routeScreenTransition:AnyTransition {
+        guard !isAccountScreen else{return .identity}
+        let insertion:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .trailing:.leading)
+        let removal:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .leading:.trailing)
+        let hideOutgoing=AnyTransition.modifier(active:WOutgoingRouteAccessibility(hidden:true),identity:WOutgoingRouteAccessibility(hidden:false))
+        return .asymmetric(insertion:insertion,removal:hideOutgoing.combined(with:removal))
+    }
     var body:some View {
         rootCommunityManageUpdates.alert("변경사항을 버릴까요?",isPresented:$showingCommunityDiscardConfirmation){
             Button("계속 편집",role:.cancel){clearCommunityDiscardDestinations()}
@@ -2746,41 +2815,50 @@ struct WireframeRoot:View {
             }
     }
     var rootStyledLayers:some View {
-        rootLayers.background(W.paper).foregroundStyle(W.ink).tint(W.ink)
+        rootLayers.foregroundStyle(W.ink).tint(W.ink)
             .preferredColorScheme(ThemePreference(rawValue:appearance)?.colorScheme)
             .clipShape(WScreenClip(extendMap:["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen)))
+            // Keep the theme-aware canvas outside the route clip; only the content is clipped.
+            .background { W.paper.ignoresSafeArea(.container,edges:.all) }
     }
     var rootLayers:some View {
         ZStack {
             VStack(spacing:0){
-                GeometryReader { geo in
-                    ZStack {
-                        if ui.screen=="L01" {
-                            recordsRoot
-                        } else {
-                        home.accessibilityElement(children:.contain).offset(x:ui.rootIndex==2 ? 0:ui.rootIndex>2 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==2 || ui.previousRootIndex==2 ? 1:0).accessibilityHidden(ui.rootIndex != 2 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 2 && isRoot && !splash)
-                        ready.accessibilityElement(children:.contain).offset(x:ui.rootIndex==1 ? 0:ui.rootIndex>1 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==1 || ui.previousRootIndex==1 ? 1:0).accessibilityHidden(ui.rootIndex != 1 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 1 && isRoot && !splash)
-                        points.accessibilityElement(children:.contain).offset(x:ui.rootIndex==0 ? 0:ui.rootIndex>0 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==0 || ui.previousRootIndex==0 ? 1:0).accessibilityHidden(ui.rootIndex != 0 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 0 && isRoot && !splash)
-                        community.accessibilityElement(children:.contain).offset(x:ui.rootIndex==3 ? 0:ui.rootIndex>3 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==3 || ui.previousRootIndex==3 ? 1:0).accessibilityHidden(ui.rootIndex != 3 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 3 && isRoot && !splash)
-                        profile.accessibilityElement(children:.contain).offset(x:ui.rootIndex==4 ? 0:ui.rootIndex>4 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==4 || ui.previousRootIndex==4 ? 1:0).accessibilityHidden(ui.rootIndex != 4 || !isRoot || splash).allowsHitTesting(ui.rootIndex == 4 && isRoot && !splash)
+                if isRoot {
+                    GeometryReader { geo in
+                        ZStack {
+                            if ui.screen=="L01" {
+                                recordsRoot
+                            } else {
+                                home.accessibilityElement(children:.contain).offset(x:ui.rootIndex==2 ? 0:ui.rootIndex>2 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==2 || ui.previousRootIndex==2 ? 1:0).accessibilityHidden(ui.rootIndex != 2 || splash).allowsHitTesting(ui.rootIndex == 2 && !splash)
+                                ready.accessibilityElement(children:.contain).offset(x:ui.rootIndex==1 ? 0:ui.rootIndex>1 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==1 || ui.previousRootIndex==1 ? 1:0).accessibilityHidden(ui.rootIndex != 1 || splash).allowsHitTesting(ui.rootIndex == 1 && !splash)
+                                points.accessibilityElement(children:.contain).offset(x:ui.rootIndex==0 ? 0:ui.rootIndex>0 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==0 || ui.previousRootIndex==0 ? 1:0).accessibilityHidden(ui.rootIndex != 0 || splash).allowsHitTesting(ui.rootIndex == 0 && !splash)
+                                community.accessibilityElement(children:.contain).offset(x:ui.rootIndex==3 ? 0:ui.rootIndex>3 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==3 || ui.previousRootIndex==3 ? 1:0).accessibilityHidden(ui.rootIndex != 3 || splash).allowsHitTesting(ui.rootIndex == 3 && !splash)
+                                profile.accessibilityElement(children:.contain).offset(x:ui.rootIndex==4 ? 0:ui.rootIndex>4 ? -geo.size.width:geo.size.width).opacity(ui.rootIndex==4 || ui.previousRootIndex==4 ? 1:0).accessibilityHidden(ui.rootIndex != 4 || splash).allowsHitTesting(ui.rootIndex == 4 && !splash)
+                            }
+                        }.frame(width:geo.size.width,height:geo.size.height).clipped()
                         }
-                    }.frame(width:geo.size.width,height:geo.size.height).clipped()
+                    if !isCommunityPrimaryTabScreen { nav }
                 }
-                nav
-            }.opacity(isRoot && !splash ? 1:0).allowsHitTesting(isRoot && !splash).accessibilityHidden(!isRoot || splash).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
+            }
+            .opacity(!splash ? 1:0)
+            .allowsHitTesting(!splash)
+            .accessibilityElement(children:.contain)
+            .accessibilityIdentifier("screen-"+ui.screen)
+            .accessibilityHidden(splash)
             if !isRoot && !splash {
                 if ui.screen=="C20" {
                     VStack(spacing:0){
                         screenView.id(ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
                             .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
-                            .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                            .transition(routeScreenTransition)
                             .frame(maxHeight:.infinity)
                         nav
                     }.zIndex(10)
                 }else{
                     screenView.id(["R01","R02","R03","R04","R05","R07","R08","R10"].contains(ui.screen) ? "run-map":ui.screen).accessibilityElement(children:.contain).accessibilityIdentifier("screen-"+ui.screen)
                         .environment(\.authPageMotion,WAuthMotionContext(enabled:isAccountScreen,reduced:reduceMotion,forward:ui.forward))
-                        .transition(isAccountScreen ? .identity:reduceMotion ? .opacity:.asymmetric(insertion:.move(edge:ui.forward ? .trailing:.leading),removal:.move(edge:ui.forward ? .leading:.trailing)))
+                        .transition(routeScreenTransition)
                 }
             }
             if ui.otpSuccess && ["A02","A15"].contains(ui.screen){WOTPSuccess(reduced:reduceMotion).padding(.horizontal,22).frame(maxHeight:.infinity,alignment:.bottom).padding(.bottom,112).allowsHitTesting(false)}
@@ -2788,7 +2866,12 @@ struct WireframeRoot:View {
             if let menu=ui.communityMoreMenu{communityModerationMenu(menu).zIndex(50)}
             if let dialog=ui.communityModerationDialog{communityModerationDialogView(dialog).zIndex(60)}
             if let postID=ui.communityPostDeleteConfirmationID{communityPostDeleteConfirmationView(postID).zIndex(70)}
-        }
+            if isCommunityPrimaryTabScreen && communityBottomBarVisible && !splash {
+                VStack(spacing:0){Spacer(minLength:0);communityNav}
+                    .frame(maxWidth:.infinity,maxHeight:.infinity)
+                    .transition(.move(edge:.bottom).combined(with:.opacity)).zIndex(40)
+            }
+        }.onChange(of:ui.screen){_,_ in resetCommunityScrollPresentation()}
     }
     func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
@@ -2800,7 +2883,7 @@ struct WireframeRoot:View {
                 if reviewTools && args.contains("-wire-community-notification-samples"){prepareCommunityNotificationSamples()}
                 if reviewTools && args.contains("-wire-community-notification-missing-target") {ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[WCommunityNotification(id:"missing-post",title:"게시물 알림 예시",text:"삭제되었거나 접근할 수 없는 게시물입니다.",target:.post(postID:"deleted-post"))])}
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
-                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
+                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (isCommunityPrimaryTabScreen ? 3:ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot,crewID:original.crewID)}
                     if reviewTools && args.contains("-wire-community-crew-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}){ui.communityPosts[index].crewID="dawn";ui.communityPosts[index].crewBoardID="dawn-board-2";ui.communityPosts[index].isCrewOnly=true;ui.communityPosts[index].comments.append(WCommunityComment(id:"c1-reply",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"네, 다음에 함께 달려요.",date:"10.05 08:50",parentID:"c1"))}
@@ -2946,7 +3029,7 @@ struct WireframeRoot:View {
     func performNavigation(_ route:String){if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}};if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()};let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"];let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24;prepare(route);withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}}
     func back(){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return};performBack()}
     func performBack(){if ui.screen=="L07"{remoteReads.cancelRunRecordDeletion()};if ["H04","H10"].contains(ui.screen){remoteReads.cancelWeeklyGoalMutation()};if ["M02","T02"].contains(ui.screen){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()};withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}}
-    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];go(route)}
+    func selectRootTab(_ route:String){if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return};if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return};if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return};if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"tab:\(route)");return};ui.path=[];if ["C02","C08","C15"].contains(route),ui.rootIndex != 3{ui.forward=3>ui.rootIndex;ui.previousRootIndex=ui.rootIndex;ui.rootIndex=3};go(route)}
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
         if screen=="C13"{return WCommunityComposerSnapshot(screen:screen,board:"",crewID:nil,postID:nil,title:ui.communityCourseTitle,body:ui.communityCourseIntroduction,recordID:ui.communityCourseRecordID,hideEnds:ui.communityCourseHideEnds)}
@@ -2995,7 +3078,7 @@ struct WireframeRoot:View {
     func completeCommunityProfileExit(_ destination:String){
         if destination=="stay"{return}
         if destination=="back"{performBack();return}
-        if destination.hasPrefix("tab:"){ui.path=[];performNavigation(String(destination.dropFirst(4)));return}
+        if destination.hasPrefix("tab:"){selectRootTab(String(destination.dropFirst(4)));return}
         if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
     }
     func communityCrewDraftHasChanges()->Bool {
@@ -3137,8 +3220,74 @@ struct WireframeRoot:View {
         .accessibilityHidden(!tabsEnabled || splash)
         .allowsHitTesting(tabsEnabled && !splash)
     }
+    var communityNav:some View {
+        HStack(spacing:0){
+            ForEach(WCommunityBottomTab.allCases,id:\.rawValue){tab in
+                let selected=tab == .profile ? ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID:ui.screen==tab.route
+                Button{selectCommunityTab(tab.route)}label:{
+                    VStack(spacing:3){
+                        ZStack{
+                            Color.clear.frame(height:3)
+                            if selected{Capsule().fill(W.lime).frame(width:20,height:3)}
+                        }
+                        ZStack{
+                            if tab == .home {BrandMark(size:WRootTab.homeMarkSize).accessibilityIdentifier("communityHomeTabBrandMark")}
+                            else if let symbol=tab.systemImage {Image(systemName:symbol).font(.system(size:22,weight:.regular)).foregroundStyle(selected ? W.ink:W.muted)}
+                        }.frame(width:WRootTab.homeMarkSize,height:WRootTab.homeMarkSize)
+                        Text(tab.title).font(W.font(11,.medium)).lineLimit(1).minimumScaleFactor(0.75).foregroundStyle(selected ? W.ink:W.muted)
+                    }
+                    .padding(.top,3)
+                    .frame(maxWidth:.infinity,minHeight:64,maxHeight:64)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityIdentifier(tab.accessibilityID)
+                .accessibilityAddTraits(selected ? .isSelected:[])
+            }
+        }
+        .padding(.horizontal,8)
+        .background(W.paper)
+        .overlay(alignment:.top){W.line.frame(height:1)}
+    }
+    func selectCommunityTab(_ route:String){
+        if route=="C08" {
+            if ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID{return}
+            ui.communitySelectedUserID=ui.communityViewerMemberID
+            ui.communityCardOriginAnonymous=false
+        }
+        if route=="H00"{selectRootTab(route);return}
+        if route=="C15"{ui.communityCrewTab="my"}
+        selectRootTab(route)
+    }
+    func resetCommunityScrollPresentation(){
+        lastCommunityScrollOffset=nil
+        communityBottomBarVisible=true
+        communityScrollToTopVisible=false
+    }
+    func handleCommunityScrollOffset(_ offset:CGFloat){
+        let previous=lastCommunityScrollOffset
+        lastCommunityScrollOffset=offset
+        let shouldShowTop=ui.screen=="C01" && offset < -120
+        if shouldShowTop != communityScrollToTopVisible{communityScrollToTopVisible=shouldShowTop}
+        if shouldShowTop && communityBottomBarVisible{withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=false}}
+        guard let previous else{
+            if offset < -8 && communityBottomBarVisible{withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=false}}
+            return
+        }
+        if ui.screen=="C08" && ui.communityProfileEditing {
+            if !communityBottomBarVisible{withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=true}}
+            return
+        }
+        let delta=offset-previous
+        if offset > -8 || delta > 1.5 {
+            if !communityBottomBarVisible{withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=true}}
+        }else if delta < -1.5,communityBottomBarVisible{
+            withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=false}
+        }
+    }
     func button(_ text:String,_ target:String,kind:Int=0)->some View {Button(text){go(target)}.buttonStyle(WButtonStyle(kind:kind))}
-    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil,notificationRoute:String?=nil,notificationIdentifier:String?=nil)->some View {let communityNotifications=notificationRoute != nil;let unread=communityNotifications ? ui.hasUnreadCommunityNotifications:ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";let notificationID=notificationIdentifier ?? (run ? "openRecords":"notificationBell");return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":notificationRoute ?? "N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(communityNotifications ? Color.wire(0xFF5A5F,0xFF5A5F):W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":communityNotifications ? "커뮤니티 알림":"알림").accessibilityIdentifier(notificationID).accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communitySettings":"communityOwnProfileSettings")}}))}
+    func rootHeader(_ title:String,run:Bool=false,showMark:Bool=true,settingsRoute:String?=nil,notificationRoute:String?=nil,notificationIdentifier:String?=nil)->some View {let communityNotifications=notificationRoute != nil;let unread=communityNotifications ? ui.hasUnreadCommunityNotifications:ui.hasUnreadNotifications;let destination=settingsRoute ?? "T01";let notificationID=notificationIdentifier ?? (run ? "openRecords":"notificationBell");return WHeader(title:title,root:true,showRootMark:showMark,trailing:AnyView(HStack(spacing:0){Button{go(run ? "L01":notificationRoute ?? "N01")}label:{AssetIcon(name:run ? "records":"bell",size:20).frame(width:44,height:44).contentShape(Rectangle()).overlay(alignment:.topTrailing){if !run && unread{Circle().fill(communityNotifications ? Color.wire(0xFF5A5F,0xFF5A5F):W.lime).frame(width:5,height:5).padding(.top,8).padding(.trailing,10)}}}.accessibilityLabel(run ? "기록 보기":communityNotifications ? "커뮤니티 알림":"알림").accessibilityIdentifier(notificationID).accessibilityValue(run ? "":"\(unread ? "읽지 않음":"읽음")");if title=="내 정보" || settingsRoute != nil{Button{go(destination)}label:{AssetIcon(name:"settings",size:20).frame(width:44,height:44).contentShape(Rectangle())}.accessibilityLabel("설정").accessibilityIdentifier(settingsRoute=="C28" ? "communityOwnProfileSettings":"profileSettings")}}))}
     @ViewBuilder var screenView:some View {
         switch ui.screen {
         case "E01":BrandMark(size:84).frame(maxWidth:.infinity,maxHeight:.infinity)
