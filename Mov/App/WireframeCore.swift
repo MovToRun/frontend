@@ -192,10 +192,11 @@ struct WField:View {
     var secondaryLabel=""
     var placeholderColor:Color? = nil
     var accessibilityID:String? = nil
+    var softFieldStyle=false
     var body:some View {
         VStack(alignment:.leading,spacing:0){
             (Text(label).font(W.font(labelSize,labelSize==13 ? .regular:.medium))+Text(secondaryLabel.isEmpty ? "":"  "+secondaryLabel).font(W.font(10)).foregroundColor(W.muted)).frame(height:labelSize==13 ? 19:21,alignment:.leading).padding(.bottom,8)
-            if multiline{TextEditor(text:$text).font(W.font(textSize)).scrollContentBackground(.hidden).lineSpacing(textSize==16 ? 8:4.2).frame(height:multilineHeight-12).padding(.horizontal,9).padding(.vertical,6).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
+            if multiline{TextEditor(text:$text).font(W.font(textSize)).scrollContentBackground(.hidden).lineSpacing(textSize==16 ? 8:4.2).frame(height:multilineHeight-12).padding(.horizontal,9).padding(.vertical,6).background(softFieldStyle ? W.soft:W.paper,in:RoundedRectangle(cornerRadius:softFieldStyle ? 12:10)).overlay(RoundedRectangle(cornerRadius:softFieldStyle ? 12:10).stroke(softFieldStyle ? W.line:W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
             else{TextField(placeholder,text:$text,prompt:placeholderColor.map{Text(placeholder).foregroundColor($0)}).font(W.font(textSize)).padding(14).frame(minHeight:54).background(W.paper,in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(W.controlBorder)).accessibilityIdentifier(accessibilityID ?? "")}
             if let limit{Text("\(text.count)/\(limit)").font(W.font(11)).foregroundStyle(text.count>limit ? .red:W.muted).frame(maxWidth:.infinity,minHeight:18,alignment:.trailing).padding(.top,6)}
         }
