@@ -2771,6 +2771,22 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertNil(writes[1])
     }
 
+    func testPasswordResetUIFixtureStoreKeepsOriginalSnapshotWhenItsFirstDeleteFails() async throws {
+        let store = WireframePasswordResetSessionFixtureStore(failReplacementOnce: true)
+        let initial = try XCTUnwrap(try store.loadSnapshot())
+
+        do {
+            try await AuthSessionPasswordResetRevocation.clear(store: store)
+            XCTFail("The one-shot fixture write failure must be surfaced")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .storageUnavailable)
+        }
+        XCTAssertEqual(try store.loadSnapshot(), initial)
+
+        try await AuthSessionPasswordResetRevocation.clear(store: store)
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
     func testMalformedJWTSubjectDoesNotCreateAnAuthenticatedMemberID() async throws {
         let store = AuthSessionFixtureStore()
         let invalidToken = AuthSessionFixtures.serverToken(memberID: "041")

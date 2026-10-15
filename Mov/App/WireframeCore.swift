@@ -2370,7 +2370,7 @@ struct RootView:View {
                 loseCompletionResponseOnce:args.contains("-wire-password-reset-completion-response-lost-once")
             ) : nil
         let passwordResetSessionStore: (any AuthSessionStoring)? = WReviewMode.tools && args.contains("-wire-password-reset-session-store-fixture")
-            ? WireframePasswordResetSessionFixtureStore() : nil
+            ? WireframePasswordResetSessionFixtureStore(failReplacementOnce:args.contains("-wire-password-reset-session-store-fail-once")) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),

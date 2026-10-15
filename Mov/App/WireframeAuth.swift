@@ -4,11 +4,16 @@ import SwiftUI
 final class WireframePasswordResetSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
     let mutationCoordinator = AuthSessionMutationCoordinator()
     private let lock = NSLock()
+    private var failReplacementOnce: Bool
     private var snapshot: AuthSessionSnapshot? = try? AuthSessionSnapshot(
         accessToken: "fixture-access-token",
         refreshToken: "fixture-refresh-token",
         memberID: "41"
     )
+
+    init(failReplacementOnce: Bool = false) {
+        self.failReplacementOnce = failReplacementOnce
+    }
 
     func loadSnapshot() throws -> AuthSessionSnapshot? {
         lock.lock()
@@ -19,6 +24,10 @@ final class WireframePasswordResetSessionFixtureStore: AuthSessionStoring, @unch
     func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
         lock.lock()
         defer { lock.unlock() }
+        if failReplacementOnce {
+            failReplacementOnce = false
+            throw AuthSessionFailure.storageUnavailable
+        }
         self.snapshot = snapshot
     }
 }
