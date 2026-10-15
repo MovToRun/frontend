@@ -168,17 +168,14 @@ extension WireframeRoot {
         Task{@MainActor in
             do {
                 try await service.resetPassword(resetProof:completion.resetProof,requestID:completion.requestID,email:completion.email,password:completion.password)
-                guard let sessionStore=authSessionStore else {
-                    guard ui.screen=="A12" else{return}
-                    _ = ui.passwordReset.failCompletion(completion,failure:.sessionStorageUnavailable)
-                    return
-                }
-                do {
-                    try await AuthSessionPasswordResetRevocation.clear(store:sessionStore)
-                } catch {
-                    guard ui.screen=="A12" else{return}
-                    _ = ui.passwordReset.failCompletion(completion,failure:.sessionStorageUnavailable)
-                    return
+                if let sessionStore=authSessionStore {
+                    do {
+                        try await AuthSessionPasswordResetRevocation.clear(store:sessionStore)
+                    } catch {
+                        guard ui.screen=="A12" else{return}
+                        _ = ui.passwordReset.failCompletion(completion,failure:.sessionStorageUnavailable)
+                        return
+                    }
                 }
                 guard ui.screen=="A12",ui.passwordReset.finishCompletion(completion) else{return}
                 ui.setLoggedIn(false);ui.save();ui.resetRemoteAccountScope()

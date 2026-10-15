@@ -3088,18 +3088,14 @@ extension LaunchTests {
         tap("로그인으로");XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:5))
     }
 
-    func testResetDoesNotShowCompletionWithoutPersistentSessionStore() {
+    func testResetCompletesInNormalRootViewWhenNoServerSessionIsPersisted() {
         launch()
         tap("비밀번호 찾기");tap("가상 예시값 채우기");tapPrimary()
         tap("계속");tap("fillDemoResetCode")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].waitForExistence(timeout:5))
         tap("가상 예시값 채우기");tapPrimary()
-        XCTAssertTrue(app.staticTexts["비밀번호는 변경됐지만 이 기기의 로그인 정보를 정리하지 못했어요. 같은 내용으로 다시 시도해 주세요."].waitForExistence(timeout:5))
-        XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].exists)
-        XCTAssertFalse(app.descendants(matching:.any)["screen-A13"].exists)
-        tapPrimary()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-A12"].exists,"The same idempotent completion stays retryable until persistent auth state can be cleared")
-        XCTAssertFalse(app.descendants(matching:.any)["screen-A13"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A13"].waitForExistence(timeout:5),"A password reset succeeds without an authenticated token session to clear")
+        XCTAssertTrue(app.staticTexts["이제 로그인해 주세요"].exists)
     }
 }
 

@@ -2748,6 +2748,11 @@ final class AuthSessionClientSessionTests: XCTestCase {
     }
 
     func testPasswordResetRevocationAtomicallyClearsTheExistingSessionSnapshotAndRetriesStorageFailure() async throws {
+        let emptyStore = AuthSessionFixtureStore()
+        try await AuthSessionPasswordResetRevocation.clear(store: emptyStore)
+        XCTAssertNil(try emptyStore.loadSnapshot())
+        XCTAssertTrue(emptyStore.attemptedWrites().isEmpty,"An absent server session needs no persistent delete")
+
         let initial = try AuthSessionFixtures.session()
         let store = AuthSessionFixtureStore(snapshot: initial, failReplacementAt: 1)
 
