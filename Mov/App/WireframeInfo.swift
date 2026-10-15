@@ -333,26 +333,62 @@ extension WireframeRoot {
         ui.profile.providers.removeAll{$0==ui.provider};ui.save();go("T05")
     case "reauth":guard ui.screen=="T15" else{return};ui.settingsGrant=true;go(ui.pending)
     case let action where action.hasPrefix("reauth:"):
-        guard ui.screen=="T15" else{return}
+        remoteReads.recordAccountLinkTestTrace("reauth-button-action-received:action=\(action),ui=\(ui.screen),active=\(remoteReads.activeScreen ?? "nil"),busy=\(remoteReads.isAccountLinkBusy),state=\(remoteReads.accountLinkState)")
+        guard ui.screen=="T15" else {
+            remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:ui-screen")
+            return
+        }
         let scopeID=ui.remoteAccountScopeID
         let purpose:AccountLinkPurpose=ui.pending=="T08" ? .unlink:.link
         Task {
-            guard ui.remoteAccountScopeID==scopeID,ui.screen=="T15",remoteReads.isAccountLinkScreenActive("T15") else{return}
+            guard ui.remoteAccountScopeID==scopeID else {
+                remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:account-scope")
+                return
+            }
+            guard ui.screen=="T15" else {
+                remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:ui-screen-after-task")
+                return
+            }
+            guard remoteReads.isAccountLinkScreenActive("T15") else {
+                remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:active-screen-\(remoteReads.activeScreen ?? "nil")")
+                return
+            }
+            remoteReads.recordAccountLinkTestTrace("reauth-action-route-accepted:purpose=\(purpose)")
             let authenticated:Bool
             if action=="reauth:password" {
                 let password=accountLinkPasswordInput
-                guard !password.isEmpty else{return}
+                guard !password.isEmpty else {
+                    remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:empty-password")
+                    return
+                }
                 accountLinkPasswordInput=""
+                remoteReads.recordAccountLinkTestTrace("reauth-request-started:password")
                 authenticated=await remoteReads.reauthenticateAccountLinkWithPassword(password,purpose:purpose,accountScopeID:scopeID,screen:"T15")
             } else {
-                guard let provider=AccountLinkProvider(rawValue:String(action.dropFirst("reauth:".count))) else{return}
+                guard let provider=AccountLinkProvider(rawValue:String(action.dropFirst("reauth:".count))) else {
+                    remoteReads.recordAccountLinkTestTrace("reauth-action-rejected:unknown-provider")
+                    return
+                }
+                remoteReads.recordAccountLinkTestTrace("reauth-request-started:provider=\(provider.rawValue)")
                 authenticated=await remoteReads.reauthenticateAccountLink(using:provider,purpose:purpose,accountScopeID:scopeID,screen:"T15")
             }
-            guard ui.remoteAccountScopeID==scopeID,ui.screen=="T15" else{return}
+            remoteReads.recordAccountLinkTestTrace("reauth-request-returned:\(authenticated),state=\(remoteReads.accountLinkState),failure=\(remoteReads.accountLinkFailure.map(String.init(describing:)) ?? "none")")
+            guard ui.remoteAccountScopeID==scopeID,ui.screen=="T15" else {
+                remoteReads.recordAccountLinkTestTrace("reauth-response-rejected:account-or-screen-changed")
+                return
+            }
             if authenticated && purpose == .unlink {
-                guard let target=AccountLinkProvider.allCases.first(where:{$0.displayName==ui.provider}) else{return}
+                guard let target=AccountLinkProvider.allCases.first(where:{$0.displayName==ui.provider}) else {
+                    remoteReads.recordAccountLinkTestTrace("unlink-action-rejected:unknown-target-provider")
+                    return
+                }
+                remoteReads.recordAccountLinkTestTrace("unlink-request-started:provider=\(target.rawValue)")
                 let unlinked=await remoteReads.unlinkAccountMethod(provider:target,accountScopeID:scopeID,screen:"T15")
-                guard ui.remoteAccountScopeID==scopeID,ui.screen=="T15" else{return}
+                remoteReads.recordAccountLinkTestTrace("unlink-request-returned:\(unlinked),state=\(remoteReads.accountLinkState),failure=\(remoteReads.accountLinkFailure.map(String.init(describing:)) ?? "none")")
+                guard ui.remoteAccountScopeID==scopeID,ui.screen=="T15" else {
+                    remoteReads.recordAccountLinkTestTrace("unlink-response-rejected:account-or-screen-changed")
+                    return
+                }
                 if unlinked { go("T17") }
                 else if remoteReads.accountLinkFailure == .completionStatusUnknown { return }
                 else if remoteReads.accountLinkFailure == .accountMethodRequired {

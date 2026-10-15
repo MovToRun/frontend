@@ -3345,7 +3345,6 @@ extension LaunchTests {
         tap("로그인 수단 확인")
         tap("account-link-method-카카오")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T09"].waitForExistence(timeout:5))
-        capture("T09-last-method-protected")
     }
 }
 
@@ -3602,12 +3601,43 @@ extension LaunchTests {
     }
 
     func testAccountUnlinkLostResponseReconcilesMethodsToCompleted() {
-        openAccountLinkFixture(["-wire-account-link-google-already-linked","-wire-account-unlink-response-lost-once"])
+        openAccountLinkFixture(["-wire-account-link-google-already-linked","-wire-account-unlink-response-lost-once","-wire-account-link-action-trace"])
         tap("account-link-method-Google")
         tap("accountUnlinkSubmit")
-        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any).matching(identifier:"screen-T15").firstMatch.waitForExistence(timeout:5),app.debugDescription)
         tap("accountLinkReauthenticate-kakao")
-        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        let traceElement=app.descendants(matching:.any).matching(identifier:"accountLinkActionTrace").firstMatch
+        let actionReceived=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in
+            traceElement.label.contains("reauth-button-action-received")
+        },object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[actionReceived],timeout:2),.completed,"The button tap must reach infoAction. trace=\(traceElement.label)\n\(app.debugDescription)")
+        let completion=app.descendants(matching:.any).matching(identifier:"screen-T17").firstMatch
+        XCTAssertTrue(completion.waitForExistence(timeout:8),"The unlink should reconcile after the lost response. trace=\(traceElement.label)\n\(app.debugDescription)")
+        let trace=traceElement.label
+        XCTAssertTrue(trace.contains("reauth-action-route-accepted"),trace)
+        XCTAssertTrue(trace.contains("reauth-core-succeeded"),trace)
+        XCTAssertTrue(trace.contains("unlink-submit-accepted"),trace)
+        XCTAssertTrue(trace.contains("unlink-response-error-after-submit"),trace)
+        XCTAssertTrue(trace.contains("mutation-reconciliation-confirmed"),trace)
+    }
+
+    func testConfirmedUnlinkRemainsCompletedWhenMethodsRefreshFails() {
+        openAccountLinkFixture(["-wire-account-link-google-already-linked","-wire-account-link-methods-fail-after-unlink-once","-wire-account-link-action-trace"])
+        tap("account-link-method-Google")
+        tap("accountUnlinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any).matching(identifier:"screen-T15").firstMatch.waitForExistence(timeout:5),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        let completion=app.descendants(matching:.any).matching(identifier:"screen-T17").firstMatch
+        let traceElement=app.descendants(matching:.any).matching(identifier:"accountLinkActionTrace").firstMatch
+        XCTAssertTrue(completion.waitForExistence(timeout:8),"A confirmed unlink remains complete when the follow-up methods read fails. trace=\(traceElement.label)\n\(app.debugDescription)")
+        let trace=traceElement.label
+        XCTAssertTrue(trace.contains("unlink-core-confirmed-response"),trace)
+        XCTAssertTrue(trace.contains("confirmed-mutation-methods-refresh-failed"),trace)
+        XCTAssertTrue(trace.contains("state=completed"),trace)
+        XCTAssertTrue(app.staticTexts["Google 연결을\n해제했어요"].exists,app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.debugDescription)
     }
 
     func testAccountUnlinkUnknownResponseRequiresStatusConfirmation() {
