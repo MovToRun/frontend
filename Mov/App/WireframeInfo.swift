@@ -158,6 +158,9 @@ extension WireframeRoot {
             } else {
                 page.notice=remoteReads.shouldUseAccountLinkUI ? "이 계정에 로그인 수단이 연결됐어요.":""
             }
+            if ProcessInfo.processInfo.arguments.contains("-wire-account-link-scope-switch-regression") {
+                page.buttons.append(("테스트 계정 전환","test-account-scope-switch",3))
+            }
             return page
         default:return reviewInfo
         }
@@ -290,6 +293,12 @@ extension WireframeRoot {
         }
         store.cancelPendingRunUploadDrain()
         ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
+    case "test-account-scope-switch":
+        guard ui.screen=="T17",
+              ProcessInfo.processInfo.arguments.contains("-wire-account-link-scope-switch-regression") else{return}
+        ui.resetRemoteAccountScope()
+        remoteReads.accountDidChange(to:ui.remoteAccountScopeID)
+        go("T05")
     case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.setLoggedIn(true);ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
     case "link":
         guard ui.screen=="T06" else{return}

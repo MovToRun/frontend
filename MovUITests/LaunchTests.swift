@@ -3350,6 +3350,50 @@ extension LaunchTests {
 }
 
 extension LaunchTests {
+    func testAccountLinkCanBeUnlinkedImmediatelyInSameSession() {
+        openAccountLinkFixture()
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.debugDescription)
+
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T08"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountUnlinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Google 연결을\n해제했어요"].exists,app.debugDescription)
+
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.debugDescription)
+    }
+
+    func testLateUnlinkMethodsReadCannotReplaceMethodsAfterAccountSwitch() {
+        openAccountLinkFixture(["-wire-account-link-google-already-linked","-wire-account-link-scope-switch-regression"])
+        tap("account-link-method-Google")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T08"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountUnlinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T15"].waitForExistence(timeout:5),app.debugDescription)
+        tap("accountLinkReauthenticate-kakao")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+
+        tap("테스트 계정 전환")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:8),app.debugDescription)
+        let google=app.buttons["account-link-method-Google"]
+        XCTAssertTrue(google.label.contains("연결됨"),google.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-카카오"].label.contains("연결됨"),app.debugDescription)
+
+        let staleReadWindow=expectation(description:"Delayed methods response from the previous account has returned")
+        DispatchQueue.main.asyncAfter(deadline:.now()+6) { staleReadWindow.fulfill() }
+        wait(for:[staleReadWindow],timeout:7)
+        XCTAssertTrue(google.label.contains("연결됨"),google.debugDescription)
+        XCTAssertFalse(app.buttons["account-link-method-카카오"].label.contains("연결됨"),app.debugDescription)
+    }
+
     private func openAccountLinkFixture(_ extraArguments:[String]=[]) {
         let suite=makeFixtureStoreSuite("mov.wireframe.test.account-link")
         accountLinkFixtureSuiteForCleanup=suite
