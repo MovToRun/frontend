@@ -84,12 +84,16 @@ protocol AccountLinkFlowServing: Sendable {
     func methods() async throws -> AccountLinkMethods
     func reauthenticateWithPassword(_ password: String) async throws
     func reauthenticate(using provider: AccountLinkProvider) async throws
-    func link(provider: AccountLinkProvider) async throws
+    /// Returns false if cancellation won before the completion request was submitted.
+    func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws
     func cancel() async
 }
 
 enum AccountLinkFailure: Error, Equatable, Sendable {
     case accessTokenUnavailable
+    case apiEnvironmentUnavailable
+    case authenticationUnavailable
+    case providerAuthorizationUnavailable
     case invalidRequest
     case invalidResponse
     case unauthenticated
@@ -105,6 +109,8 @@ enum AccountLinkFailure: Error, Equatable, Sendable {
     case requestInProgress
     case reauthenticationRequired
     case alreadyLinked
+    case completionStatusUnknown
+    case completionNotApplied
 
     var requestID: String? {
         if case .serverFailure(_, let requestID) = self { return requestID }
@@ -113,6 +119,12 @@ enum AccountLinkFailure: Error, Equatable, Sendable {
 
     var userMessage: String {
         switch self {
+        case .apiEnvironmentUnavailable:
+            "API 환경이 설정되지 않아 로그인 수단을 확인할 수 없어요."
+        case .authenticationUnavailable:
+            "인증 세션 저장소가 준비되지 않아 로그인 수단을 확인할 수 없어요."
+        case .providerAuthorizationUnavailable:
+            "제공자 인증이 설정되지 않아 새 로그인 수단을 연결할 수 없어요."
         case .accessTokenUnavailable, .unauthenticated:
             "로그인 상태를 확인한 뒤 다시 시도해 주세요."
         case .invalidRequest:
@@ -141,6 +153,10 @@ enum AccountLinkFailure: Error, Equatable, Sendable {
             "현재 계정을 먼저 확인해 주세요."
         case .alreadyLinked:
             "이미 이 계정에 연결된 로그인 수단이에요."
+        case .completionStatusUnknown:
+            "연결 결과를 확인하지 못했어요. 로그인 수단 상태를 다시 확인해 주세요."
+        case .completionNotApplied:
+            "연결 요청이 완료되지 않았어요. 현재 계정을 다시 확인한 뒤 시도해 주세요."
         }
     }
 }
@@ -349,6 +365,8 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
     private let credentials: any AccountLinkCredentialProviding
     private var operationInProgress = false
     private var reauthProof: String?
+    private var cancellationGeneration: UInt64 = 0
+    private var mutationRequestSubmitted = false
 
     init(service: any AccountLinkServing, credentials: any AccountLinkCredentialProviding) {
         self.service = service
@@ -387,22 +405,36 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
         reauthProof = proof.reauthProof
     }
 
-    func link(provider: AccountLinkProvider) async throws {
+    func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
         guard let proof = reauthProof else { throw AccountLinkFailure.reauthenticationRequired }
         operationInProgress = true
-        defer { operationInProgress = false }
+        let startingCancellationGeneration = cancellationGeneration
+        defer {
+            operationInProgress = false
+            mutationRequestSubmitted = false
+        }
 
         do {
             let methods = try await service.methods()
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
             guard !methods.socialProviders.contains(provider) else { throw AccountLinkFailure.alreadyLinked }
             let challenge = try await service.issueLinkChallenge(provider: provider)
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
             guard let credential = try await credentials.credential(for: provider, purpose: .link, challenge: challenge) else {
                 throw AccountLinkFailure.cancelled
             }
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
             // Completion consumes both the reauthentication proof and provider challenge.
             // Do not reuse them after a failed or cancelled completion.
             reauthProof = nil
+            guard await onMutationRequestWillSubmit() else { throw AccountLinkFailure.cancelled }
+            try Task.checkCancellation()
+            guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
+            mutationRequestSubmitted = true
             try await service.completeLink(provider: provider, challenge: challenge, credential: credential, reauthProof: proof, consent: true)
         } catch {
             reauthProof = nil
@@ -411,6 +443,39 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
     }
 
     func cancel() {
+        guard !mutationRequestSubmitted else { return }
+        cancellationGeneration &+= 1
         reauthProof = nil
+    }
+}
+
+enum AccountLinkFlowResolution {
+    case available(flow: any AccountLinkFlowServing, providerAuthorizationConfigured: Bool)
+    case unavailable(AccountLinkFailure)
+}
+
+private struct UnavailableAccountLinkCredentialProvider: AccountLinkCredentialProviding {
+    func credential(for provider: AccountLinkProvider, purpose: AccountLinkCredentialPurpose, challenge: AccountLinkChallenge) async throws -> String? {
+        throw AccountLinkFailure.providerAuthorizationUnavailable
+    }
+}
+
+enum AccountLinkFlowFactory {
+    static func resolve(
+        configuration: APIClientConfiguration?,
+        authSessionStore: (any AuthSessionStoring)?,
+        credentialProvider: (any AccountLinkCredentialProviding)?
+    ) -> AccountLinkFlowResolution {
+        guard let configuration else { return .unavailable(.apiEnvironmentUnavailable) }
+        guard let authSessionStore else { return .unavailable(.authenticationUnavailable) }
+
+        let apiClient = APIClient(configuration: configuration)
+        let tokenProvider = AuthSessionClient(apiClient: apiClient, sessionStore: authSessionStore)
+        let service = AccountLinkClient(apiClient: apiClient, tokenProvider: tokenProvider)
+        let flow = AccountLinkFlowCoordinator(
+            service: service,
+            credentials: credentialProvider ?? UnavailableAccountLinkCredentialProvider()
+        )
+        return .available(flow: flow, providerAuthorizationConfigured: credentialProvider != nil)
     }
 }

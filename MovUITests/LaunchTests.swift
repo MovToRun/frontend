@@ -3435,7 +3435,53 @@ extension LaunchTests {
         let submit=app.buttons["accountLinkSubmit"]
         let disabled=XCTNSPredicateExpectation(predicate:NSPredicate(format:"isEnabled == false"),object:submit)
         XCTAssertEqual(XCTWaiter.wait(for:[disabled],timeout:3),.completed,app.debugDescription)
+        let back=app.buttons["accountLinkBack"]
+        let cancel=app.buttons["accountLinkCancel"]
+        XCTAssertTrue(back.waitForExistence(timeout:3),app.debugDescription)
+        XCTAssertFalse(back.isEnabled,"Back is locked after the server mutation is submitted")
+        XCTAssertFalse(cancel.isEnabled,"Cancel is locked after the server mutation is submitted")
+        back.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        cancel.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T06"].exists,"Back and cancel taps cannot leave a submitted mutation unresolved")
         XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkLostCompletionResponseReconcilesLinkedMethods() {
+        openAccountLinkFixture(["-wire-account-link-response-lost-once"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+        tap("로그인 수단 확인")
+        XCTAssertTrue(app.buttons["account-link-method-Google"].label.contains("연결됨"),app.debugDescription)
+    }
+
+    func testAccountLinkUnknownCompletionRequiresStatusConfirmationBeforeLeaving() {
+        openAccountLinkFixture(["-wire-account-link-response-lost-once","-wire-account-link-status-read-lost-once"])
+        beginGoogleAccountLink()
+        tap("accountLinkSubmit")
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:8),app.debugDescription)
+        let back=app.buttons["accountLinkBack"]
+        let cancel=app.buttons["accountLinkCancel"]
+        let retry=app.buttons["accountLinkStatusRetry"]
+        XCTAssertFalse(back.isEnabled,"An unresolved server mutation keeps navigation locked")
+        XCTAssertFalse(cancel.isEnabled,"An unresolved server mutation cannot be cancelled")
+        XCTAssertTrue(retry.isEnabled,app.debugDescription)
+        tap("accountLinkStatusRetry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T17"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testAccountLinkConfigurationMissingShowsDisabledUnavailableState() {
+        let suite=makeFixtureStoreSuite("mov.wireframe.test.account-link-unconfigured")
+        accountLinkFixtureSuiteForCleanup=suite
+        app.launchArguments=["-wire-screen","T05","-wire-fixture","-wire-account-link-unconfigured","-wire-test-store-suite",suite,"-wire-reset"]
+        if app.state != .notRunning { app.terminate() }
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T05"].waitForExistence(timeout:15),app.debugDescription)
+        let google=app.buttons["account-link-method-Google"]
+        XCTAssertTrue(google.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(google.isEnabled,"Provider links must be disabled until API, auth, and OAuth dependencies are configured")
+        XCTAssertTrue(app.staticTexts["accountLinkFailure"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["accountLinkSubmit"].exists,"An unavailable connection must not expose a fake or live submit action")
     }
 
     func testA02ConsentReviewPartialRequiredAndCompletion() {

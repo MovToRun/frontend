@@ -423,18 +423,19 @@ extension WireframeRoot {
         let managedNames = remoteReads.accountLinkMethods.map { methods in
             Set(methods.socialProviders.map(\.displayName) + (methods.localPassword ? ["이메일"] : []))
         }
-        let rows = remoteReads.hasAccountLinkDependency ? ["이메일","카카오","네이버","Google"] : ["이메일","카카오","네이버","Google","Apple"]
+        let rows = remoteReads.shouldUseAccountLinkUI ? ["이메일","카카오","네이버","Google"] : ["이메일","카카오","네이버","Google","Apple"]
         return WPage(title:"로그인 수단",back:back){
             Text("하나의 계정에 연결해요").font(W.font(22,.semibold))
             WText(text:"이름이나 이메일만으로\n계정을 합치지 않아요.")
             VStack(spacing:0){
                 ForEach(rows,id:\.self){providerName in
-                    let linked = managedNames.map { $0.contains(providerName) } ?? ui.profile.providers.contains(providerName)
-                    let remoteReady = !remoteReads.hasAccountLinkDependency || remoteReads.accountLinkMethods != nil
+                    let linked = managedNames.map { $0.contains(providerName) } ?? (remoteReads.shouldUseAccountLinkUI ? false : ui.profile.providers.contains(providerName))
+                    let remoteReady = !remoteReads.shouldUseAccountLinkUI || remoteReads.accountLinkMethods != nil
                     Button {
                         ui.provider = providerName
-                        if remoteReads.hasAccountLinkDependency {
-                            guard remoteReady, !linked,
+                        if remoteReads.shouldUseAccountLinkUI {
+                            guard remoteReads.hasAccountLinkDependency, remoteReady, !linked,
+                                  remoteReads.canAuthorizeAccountLinkProvider,
                                   AccountLinkProvider.allCases.contains(where:{$0.displayName == providerName}) else { return }
                             ui.error = ""
                             ui.settingsGrant = false
@@ -453,18 +454,22 @@ extension WireframeRoot {
                             providerMark(providerName)
                             VStack(alignment:.leading,spacing:6){
                                 Text(providerName=="이메일" ? "이메일 · 비밀번호":providerName).font(W.font(14,.medium))
-                                WText(text:linked ? "이 계정에 연결됨":remoteReads.hasAccountLinkDependency && !remoteReady ? "확인 중":"연결되지 않음",small:true)
+                                WText(text:linked ? "이 계정에 연결됨":remoteReads.shouldUseAccountLinkUI && !remoteReady ? "확인 중":"연결되지 않음",small:true)
                             }
                             Spacer()
-                            Text(remoteReads.hasAccountLinkDependency && linked ? "연결됨":linked ? (providerName=="이메일" ? "관리":"해제"):"연결").font(W.font(12))
+                            Text(remoteReads.shouldUseAccountLinkUI && linked ? "연결됨":linked ? (providerName=="이메일" ? "관리":"해제"):"연결").font(W.font(12))
                         }.frame(minHeight:85).overlay(alignment:.bottom){W.line.frame(height:1)}
                     }
-                    .disabled(remoteReads.hasAccountLinkDependency && (!remoteReady || linked || providerName == "이메일"))
+                    .disabled(remoteReads.shouldUseAccountLinkUI && (!remoteReads.hasAccountLinkDependency || !remoteReady || linked || providerName == "이메일" || !remoteReads.canAuthorizeAccountLinkProvider))
                     .accessibilityIdentifier("account-link-method-\(providerName)")
                 }
             }
-            if remoteReads.hasAccountLinkDependency, remoteReads.accountLinkMethods == nil, remoteReads.accountLinkFailure != nil {
-                WAuthNotice(text:remoteReads.accountLinkFailure?.userMessage ?? "로그인 수단을 불러오지 못했어요.",danger:true)
+            if remoteReads.shouldUseAccountLinkUI && (remoteReads.accountLinkMethods == nil || !remoteReads.canAuthorizeAccountLinkProvider) {
+                let message=remoteReads.accountLinkUnavailableFailure?.userMessage
+                    ?? remoteReads.accountLinkFailure?.userMessage
+                    ?? (!remoteReads.canAuthorizeAccountLinkProvider ? AccountLinkFailure.providerAuthorizationUnavailable.userMessage : nil)
+                    ?? "로그인 수단을 불러오지 못했어요."
+                WAuthNotice(text:message,danger:true)
                     .accessibilityIdentifier("accountLinkFailure")
             } else {
                 WAuthNotice(text:"현재 계정을 확인한 뒤 새 로그인 수단을 연결해요.",sourceWrapping:true)

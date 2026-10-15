@@ -17,7 +17,7 @@ extension WireframeRoot {
     }
     var info:WInfo {
         if let remoteDeleteInfo = remoteRunRecordDeleteInfo { return remoteDeleteInfo }
-        if reviewTools && !(remoteReads.hasAccountLinkDependency && ["T06","T15","T17"].contains(ui.screen)){return reviewInfo}
+        if reviewTools && !(remoteReads.shouldUseAccountLinkUI && ["T06","T15","T17"].contains(ui.screen)){return reviewInfo}
         switch ui.screen {
         case "A06":return .init(title:"동의 내용",heading:ui.consentTopic,text:"서비스 이용과 개인정보 처리 내용을 확인해 주세요.",notice:"운동 기록과 프로필은 이 기기에 저장돼요. 앱 삭제 시 복구가 어려울 수 있어요.",buttons:[("확인했어요","consent-reviewed",0)])
         case "A11":return .init(title:"재설정 요청",heading:"새 비밀번호를 설정해요",text:"계속해서 새 비밀번호를 입력해 주세요.",buttons:[("계속","reset-verification",0),("이메일 다시 입력","reset-email",1),("취소하고 돌아가기","reset-cancel",3)])
@@ -34,13 +34,32 @@ extension WireframeRoot {
         case "L07":var page=reviewInfo;page.notice="삭제한 기록은 복구할 수 없어요. 이 기기의 합계와 통계에서도 제외돼요.";return page
         case "T06":
             var page=reviewInfo
-            if remoteReads.hasAccountLinkDependency {
+            if remoteReads.shouldUseAccountLinkUI {
                 page.title="로그인 수단 연결"
                 page.heading="\(ui.provider)을 연결할까요?"
                 page.text="현재 계정에 \(ui.provider) 로그인 수단을 추가해요."
                 page.notice="이름이나 이메일이 같다는 이유로 다른 계정에 연결하지 않아요."
-                if case .linking = remoteReads.accountLinkState {
-                    page.buttons=[("연결 중…","link",0),("취소","T05",1)]
+                if !remoteReads.hasAccountLinkDependency {
+                    page.notice=remoteReads.accountLinkFailure?.userMessage ?? "계정 연결을 사용할 수 없어요."
+                    page.buttons=[("로그인 수단으로 돌아가기","T05",0)]
+                } else if !remoteReads.canAuthorizeAccountLinkProvider {
+                    page.notice=AccountLinkFailure.providerAuthorizationUnavailable.userMessage
+                    page.buttons=[("로그인 수단으로 돌아가기","T05",0)]
+                } else if case .linking = remoteReads.accountLinkState {
+                    page.heading="\(ui.provider) 인증을 기다리고 있어요"
+                    page.text="연결 요청은 인증이 끝난 뒤에 제출돼요."
+                    page.buttons=[("인증 중…","link",0),("취소","cancel-link",1)]
+                } else if case .submittingLink = remoteReads.accountLinkState {
+                    page.heading="연결 요청을 처리하고 있어요"
+                    page.text="서버에서 처리 결과를 확인할 때까지 기다려 주세요."
+                    page.buttons=[("처리 중…","link",0),("취소","cancel-link",1)]
+                } else if case .confirmingLinkStatus = remoteReads.accountLinkState {
+                    page.heading="연결 상태를 확인하고 있어요"
+                    page.text="현재 계정의 로그인 수단을 다시 확인해요."
+                    page.buttons=[("상태 확인 중…","confirm-link-status",0),("취소","cancel-link",1)]
+                } else if remoteReads.accountLinkFailure == .completionStatusUnknown {
+                    page.notice=remoteReads.accountLinkFailure?.userMessage ?? "연결 상태를 확인해 주세요."
+                    page.buttons=[("연결 상태 다시 확인","confirm-link-status",0),("취소","cancel-link",1)]
                 } else if let failure=remoteReads.accountLinkFailure {
                     page.notice=failure.userMessage
                     page.buttons=[("다시 계정 확인","reauth-link-retry",0),("취소","T05",1)]
@@ -66,7 +85,15 @@ extension WireframeRoot {
         case "T12":return .init(title:"탈퇴 완료",heading:"프로필을 초기화했어요",text:"로그인 화면에서 다시 시작할 수 있어요.",buttons:[("로그인으로","A01",0)])
         case "T13":var page=reviewInfo;page.notice="이 기기에 저장된 모든 러닝 기록을 삭제해요. 프로필과 로그인 수단은 유지돼요. 삭제한 기록은 복구할 수 없어요.";page.buttons=[("기기 기록 삭제","clear-device",2),("기록 유지","T04",1)];return page
         case "T15":
-            if remoteReads.hasAccountLinkDependency {
+            if remoteReads.shouldUseAccountLinkUI {
+                if !remoteReads.hasAccountLinkDependency {
+                    return .init(
+                        title:"현재 계정 확인",
+                        heading:"계정 연결 설정을 확인해 주세요",
+                        text:remoteReads.accountLinkUnavailableFailure?.userMessage ?? "계정 연결을 사용할 수 없어요.",
+                        buttons:[("로그인 수단으로 돌아가기","T05",1)]
+                    )
+                }
                 let linkedProviders=remoteReads.accountLinkMethods?.socialProviders ?? []
                 let reauthenticating:Bool = if case .reauthenticating = remoteReads.accountLinkState { true } else { false }
                 let reauthButtons=linkedProviders.map { provider in
@@ -85,7 +112,7 @@ extension WireframeRoot {
             return .init(title:"현재 계정 확인",heading:"지금 계정을\n먼저 확인해요",text:"연결된 로그인 수단으로 계속해 주세요.",buttons:[((ui.profile.providers.first ?? "카카오")+"로 계속","reauth",0),("취소","cancel-reauth",1)])
         case "T16":return .init(title:"탈퇴 확인",heading:"탈퇴를\n마칠까요?",text:"현재 프로필과 로그인 수단을 초기화해요.",buttons:[("탈퇴하기","delete-account-demo",0),("취소","T01",1)])
         case "T17":
-            var page=reviewInfo;page.notice=remoteReads.hasAccountLinkDependency ? "이 계정에 로그인 수단이 연결됐어요.":"";return page
+            var page=reviewInfo;page.notice=remoteReads.shouldUseAccountLinkUI ? "이 계정에 로그인 수단이 연결됐어요.":"";return page
         default:return reviewInfo
         }
     }
@@ -157,7 +184,7 @@ extension WireframeRoot {
         default:return .init(title:"화면 확인",heading:"화면을 확인해 주세요",text:"",buttons:[("홈으로","H00",0)])
         }
     }
-    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ["T12","A13"].contains(ui.screen) ? nil:{back()};return WPage(title:data.title,back:navigationBack){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
+    var informationPage:some View {let data=info;let navigationBack:(()->Void)? = ["T12","A13"].contains(ui.screen) ? nil:{back()};return WPage(title:data.title,back:navigationBack,backDisabled:ui.screen=="T06" && remoteReads.isAccountLinkMutationInFlight,backIdentifier:ui.screen=="T06" ? "accountLinkBack":nil){if ["A14","T06","T07","T08","T15","T17"].contains(ui.screen){providerMark(ui.screen=="T15" ? ui.profile.providers.first ?? "카카오":ui.screen=="T07" ? "카카오":ui.provider).padding(.top,["T06","T07","T08","T17"].contains(ui.screen) ? 10:0)};if ui.screen=="A06"{Text(data.heading).font(W.font(22,.semibold)).padding(.top,12)}else{WHeading(text:data.heading).padding(.top,ui.screen=="A14" ? 20:["L07","A04","T09","T10","T12","T13","T14","T16"].contains(ui.screen) ? 9:0)};if !data.text.isEmpty{if ui.screen=="T13"{WAuthSourceParagraph(text:data.text,size:14,lineHeight:24.5).offset(y:-6).padding(.bottom,-4)}else{WText(text:data.text)}}
         if ui.screen=="T15",remoteReads.hasAccountLinkDependency,remoteReads.accountLinkMethods?.localPassword == true {
             SecureField("현재 비밀번호",text:$accountLinkPasswordInput)
                 .textContentType(.password)
@@ -179,7 +206,7 @@ extension WireframeRoot {
         if ui.screen=="H10"{weeklyGoalConflictRecovery}
         if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
-    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3 && !(ui.screen=="T15" && item.1.hasPrefix("reauth:")) && !(ui.screen=="T06" && ["link","reauth-link-retry"].contains(item.1)){Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else if ui.screen=="L07" && item.1=="L04"{Button(item.0){back()}.buttonStyle(WButtonStyle(kind:item.2))}else if ui.screen=="L07",let runID=ui.remoteSelectedRunID,item.1=="delete-record"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isDeletingRunRecord || !remoteReads.canDeleteRunRecord(runID)).accessibilityIdentifier("confirmDeleteRecord")}else if ui.screen=="T15" && item.1.hasPrefix("reauth:"){Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || (item.1=="reauth:password" && accountLinkPasswordInput.isEmpty)).accessibilityIdentifier("accountLinkReauthenticate-\(item.1.dropFirst(7))")}else if ui.screen=="T06" && item.1=="link"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || remoteReads.accountLinkState != .ready).accessibilityIdentifier("accountLinkSubmit")}else if ui.screen=="T06" && item.1=="reauth-link-retry"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy).accessibilityIdentifier("accountLinkRetry")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
+    }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3 && !(ui.screen=="T15" && item.1.hasPrefix("reauth:")) && !(ui.screen=="T06" && ["link","reauth-link-retry"].contains(item.1)){Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else if ui.screen=="L07" && item.1=="L04"{Button(item.0){back()}.buttonStyle(WButtonStyle(kind:item.2))}else if ui.screen=="L07",let runID=ui.remoteSelectedRunID,item.1=="delete-record"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isDeletingRunRecord || !remoteReads.canDeleteRunRecord(runID)).accessibilityIdentifier("confirmDeleteRecord")}else if ui.screen=="T15" && item.1.hasPrefix("reauth:"){Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || (item.1=="reauth:password" && accountLinkPasswordInput.isEmpty) || (item.1 != "reauth:password" && !remoteReads.canAuthorizeAccountLinkProvider)).accessibilityIdentifier("accountLinkReauthenticate-\(item.1.dropFirst(7))")}else if ui.screen=="T06" && item.1=="link"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || remoteReads.accountLinkState != .ready).accessibilityIdentifier("accountLinkSubmit")}else if ui.screen=="T06" && item.1=="confirm-link-status"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy).accessibilityIdentifier("accountLinkStatusRetry")}else if ui.screen=="T06" && item.1=="cancel-link"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkMutationInFlight).accessibilityIdentifier("accountLinkCancel")}else if ui.screen=="T06" && item.1=="reauth-link-retry"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || !remoteReads.canAuthorizeAccountLinkProvider).accessibilityIdentifier("accountLinkRetry")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)))}}}}
     func infoAction(_ action:String){switch action {
     case "reset-cancel":
         if ui.screen=="A13"{guard ui.passwordReset.completed else{return};go("A01")}
@@ -220,12 +247,14 @@ extension WireframeRoot {
     case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty else{return};ui.verified=true;if ui.profile.providers.contains(ui.provider){ui.setLoggedIn(true);ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
     case "link":
         guard ui.screen=="T06" else{return}
-        if remoteReads.hasAccountLinkDependency {
+        if remoteReads.shouldUseAccountLinkUI {
+            guard remoteReads.hasAccountLinkDependency else{return}
             guard let provider=AccountLinkProvider.allCases.first(where:{$0.displayName==ui.provider}),remoteReads.accountLinkState == .ready else{return}
+            guard remoteReads.canStartAccountLink(provider:provider) else{return}
             let scopeID=ui.remoteAccountScopeID
             Task {
                 let linked=await remoteReads.linkAccountMethod(provider:provider,accountScopeID:scopeID,screen:"T06")
-                guard ui.remoteAccountScopeID==scopeID,ui.screen=="T06" else{return}
+                guard ui.screen=="T06" else{return}
                 if linked { go("T17") }
                 else if case .cancelled=remoteReads.accountLinkState { go("T05") }
                 else if case .failed(.alreadyLinked)=remoteReads.accountLinkState { go("T05") }
@@ -257,7 +286,19 @@ extension WireframeRoot {
     case "reauth-link-retry":
         guard ui.screen=="T06" else{return}
         ui.settingsGrant=false;ui.pending="T06";ui.pendingBack="T05";go("T15")
+    case "confirm-link-status":
+        guard ui.screen=="T06" else{return}
+        let scopeID=ui.remoteAccountScopeID
+        Task {
+            let linked=await remoteReads.retryAccountLinkStatusConfirmation(accountScopeID:scopeID,screen:"T06")
+            guard ui.screen=="T06" else{return}
+            if linked { go("T17") }
+        }
+    case "cancel-link":
+        guard ui.screen=="T06",!remoteReads.isAccountLinkMutationInFlight else{return}
+        if remoteReads.cancelAccountLinkFlow() { go("T05") }
     case "cancel-reauth":
+        guard !remoteReads.isAccountLinkMutationInFlight else{return}
         if remoteReads.hasAccountLinkDependency { remoteReads.cancelAccountLinkFlow() }
         ui.cancelReauthentication()
     case "delete-account-demo":guard store.session==nil else{go("T14");return};store.cancelPendingRunUploadDrain();ui.profile=WLocalProfile();ui.resetRemoteAccountScope();ui.save();shareWorkspace.clear();go("T12")

@@ -93,6 +93,12 @@ private actor AccountLinkCredentialStub: AccountLinkCredentialProviding {
     }
 }
 
+private struct AccountLinkSessionStoreStub: AuthSessionStoring {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
+    func loadSnapshot() throws -> AuthSessionSnapshot? { nil }
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {}
+}
+
 final class AccountLinkClientTests: XCTestCase {
     func testMethodsReadsNamesOnlyWithBearerAndNoStore() async throws {
         let api = AccountLinkResponseMock([
@@ -196,7 +202,7 @@ final class AccountLinkClientTests: XCTestCase {
         let flow = AccountLinkFlowCoordinator(service: service, credentials: credentials)
 
         try await flow.reauthenticate(using: .kakao)
-        try await flow.link(provider: .google)
+        try await flow.link(provider: .google, onMutationRequestWillSubmit: { true })
         let methods = try await flow.methods()
 
         XCTAssertEqual(methods.socialProviders, [.kakao, .google])
@@ -214,7 +220,7 @@ final class AccountLinkClientTests: XCTestCase {
         let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
 
         try await flow.reauthenticateWithPassword("fixture-password")
-        try await flow.link(provider: .google)
+        try await flow.link(provider: .google, onMutationRequestWillSubmit: { true })
 
         let calls = await service.recordedCalls()
         XCTAssertTrue(calls.contains("reauth-password:LINK:fixture-password"))
@@ -227,13 +233,74 @@ final class AccountLinkClientTests: XCTestCase {
         try await flow.reauthenticate(using: .kakao)
 
         do {
-            try await flow.link(provider: .google)
+            try await flow.link(provider: .google, onMutationRequestWillSubmit: { true })
             XCTFail("Cancellation must stop before completion")
         } catch let failure as AccountLinkFailure {
             XCTAssertEqual(failure, .cancelled)
         }
         let calls = await service.recordedCalls()
         XCTAssertFalse(calls.contains { $0.hasPrefix("link-complete:") })
+    }
+
+    func testCancellationBeforeMutationSubmissionDoesNotCallCompletion() async throws {
+        let service = AccountLinkServiceMock()
+        let flow = AccountLinkFlowCoordinator(service: service, credentials: AccountLinkCredentialStub())
+        try await flow.reauthenticate(using: .kakao)
+
+        do {
+            try await flow.link(provider: .google, onMutationRequestWillSubmit: { false })
+            XCTFail("A cancelled operation must stop before the server mutation")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+
+        let calls = await service.recordedCalls()
+        XCTAssertFalse(calls.contains { $0.hasPrefix("link-complete:") })
+    }
+
+    func testFlowFactoryReportsMissingEnvironmentAndSessionDependencies() throws {
+        let sessionStore = AccountLinkSessionStoreStub()
+        let noEnvironment = AccountLinkFlowFactory.resolve(
+            configuration: nil,
+            authSessionStore: sessionStore,
+            credentialProvider: nil
+        )
+        guard case .unavailable(.apiEnvironmentUnavailable) = noEnvironment else {
+            return XCTFail("Missing API environment must leave account linking unavailable")
+        }
+
+        let configuration = try APIClientConfiguration(
+            environment: .development,
+            baseURLString: "https://api-dev.example.invalid/api/v1",
+            requestTimeout: 4,
+            resourceTimeout: 9
+        )
+        let noSessionStore = AccountLinkFlowFactory.resolve(
+            configuration: configuration,
+            authSessionStore: nil,
+            credentialProvider: nil
+        )
+        guard case .unavailable(.authenticationUnavailable) = noSessionStore else {
+            return XCTFail("Missing auth session storage must leave account linking unavailable")
+        }
+    }
+
+    func testFlowFactoryRequiresInjectedProviderAuthorizationForLinking() throws {
+        let configuration = try APIClientConfiguration(
+            environment: .development,
+            baseURLString: "https://api-dev.example.invalid/api/v1",
+            requestTimeout: 4,
+            resourceTimeout: 9
+        )
+        let resolution = AccountLinkFlowFactory.resolve(
+            configuration: configuration,
+            authSessionStore: AccountLinkSessionStoreStub(),
+            credentialProvider: nil
+        )
+        guard case .available(_, let providerAuthorizationConfigured) = resolution else {
+            return XCTFail("Configured API and session dependencies should produce a read-only flow")
+        }
+        XCTAssertFalse(providerAuthorizationConfigured)
     }
 
     func testConcurrentReauthenticationRejectsDuplicateSubmission() async throws {
