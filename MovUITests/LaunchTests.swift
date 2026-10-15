@@ -25,6 +25,22 @@ import UIKit
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
+    func matchesRGB(in image:UIImage,rect:CGRect,expected:(Int,Int,Int),tolerance:Int=20)->Bool {
+        guard let source=image.cgImage else{return false}
+        let scale=image.scale
+        let pixelsRect=CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale).integral
+        let bounds=CGRect(x:0,y:0,width:source.width,height:source.height)
+        guard let crop=source.cropping(to:pixelsRect.intersection(bounds)),crop.width>0,crop.height>0 else{return false}
+        var pixels=[UInt8](repeating:0,count:crop.width*crop.height*4)
+        pixels.withUnsafeMutableBytes{bytes in
+            guard let context=CGContext(data:bytes.baseAddress,width:crop.width,height:crop.height,bitsPerComponent:8,bytesPerRow:crop.width*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue) else{return}
+            context.draw(crop,in:CGRect(x:0,y:0,width:crop.width,height:crop.height))
+        }
+        let samples=pixels.withUnsafeBufferPointer{bytes in stride(from:0,to:bytes.count,by:4).map{index in (Int(bytes[index]),Int(bytes[index+1]),Int(bytes[index+2]))}}
+        guard !samples.isEmpty else{return false}
+        let average=(samples.map{$0.0}.reduce(0,+)/samples.count,samples.map{$0.1}.reduce(0,+)/samples.count,samples.map{$0.2}.reduce(0,+)/samples.count)
+        return abs(average.0-expected.0)<=tolerance && abs(average.1-expected.1)<=tolerance && abs(average.2-expected.2)<=tolerance
+    }
     func testMemberProfileEditSavesPartialFieldsAndShowsServerValues(){
         openMemberProfileFixture()
         XCTAssertEqual(app.staticTexts["remoteProfileNickname"].label,"RunMate")
@@ -847,6 +863,176 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
+    private func openCommunitySettingsFromProfile() {
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["community-tab-profile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["communityOwnProfileSettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),app.debugDescription)
+    }
+
+    func testCommunityCanvasFillsTopAndBottomSafeAreasInLightAndDark() {
+        for (appearance,expected) in [("light",(255,255,255)),("dark",(25,25,25))] {
+            if app.state != .notRunning { app.terminate() }
+            launchCommunity("C01",appearance:appearance)
+            let screenshot=app.screenshot().image
+            let topSafeArea=CGRect(x:8,y:8,width:12,height:12)
+            let bottomSafeArea=CGRect(x:8,y:screenshot.size.height-20,width:12,height:12)
+            XCTAssertTrue(matchesRGB(in:screenshot,rect:topSafeArea,expected:expected),"The \(appearance) canvas color reaches the status-bar safe area")
+            XCTAssertTrue(matchesRGB(in:screenshot,rect:bottomSafeArea,expected:expected),"The \(appearance) canvas color reaches the home-indicator safe area")
+            capture("community-safe-area-\(appearance)")
+        }
+    }
+
+    func testCommunityDedicatedNavigationKeepsHomeCenteredAndSettingsOnProfile() {
+        launchCommunity("C01")
+        let feed=app.buttons["community-tab-feed"]
+        let boards=app.buttons["community-tab-boards"]
+        let home=app.buttons["community-tab-home"]
+        let crew=app.buttons["community-tab-crew"]
+        let profile=app.buttons["community-tab-profile"]
+        XCTAssertTrue(feed.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(boards.exists && home.exists && crew.exists && profile.exists,app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-0"].exists,"Community replaces the global five-tab bar")
+        XCTAssertEqual(home.label,"홈")
+        XCTAssertEqual(home.frame.midX,app.frame.midX,accuracy:2,"Mov home stays in the center slot")
+
+        let allBoards=app.buttons["communityAllBoards"]
+        let mark=app.images["communityHeaderBrandMark"]
+        let search=app.buttons["communitySearch"]
+        XCTAssertTrue(allBoards.isHittable,app.debugDescription)
+        XCTAssertTrue(mark.exists,app.debugDescription)
+        XCTAssertGreaterThanOrEqual(search.frame.minY,50,"The header starts below the iPhone safe area")
+        XCTAssertEqual(mark.frame.midX,app.frame.midX,accuracy:2,"The Mov mark stays centered in the feed header")
+        XCTAssertLessThan(allBoards.frame.maxX,mark.frame.minX,"The all-boards action stays left of the centered mark")
+        XCTAssertLessThan(mark.frame.maxX,search.frame.minX,"The search action stays right of the centered mark")
+        XCTAssertFalse(allBoards.frame.intersects(search.frame),"Header actions have separate hit targets")
+        XCTAssertFalse(app.buttons["communitySettings"].exists,"Community settings stay on the own-profile route")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label == %@","커뮤니티")).firstMatch.exists,"The C01 header omits the Community title")
+        capture("community-C01-light-header")
+
+        allBoards.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable,"All boards has a working back route")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
+        search.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C29"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.textFields["communitySearchField"].exists)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
+
+        for (tab,screen) in [(boards,"C02"),(feed,"C01"),(crew,"C15"),(feed,"C01"),(profile,"C08"),(feed,"C01")] {
+            XCTAssertTrue(tab.isHittable,app.debugDescription)
+            tab.tap()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:5),app.debugDescription)
+            XCTAssertTrue(app.buttons["community-tab-home"].exists,"The community bar remains available on \(screen)")
+            if ["C02","C15","C08"].contains(screen){capture("community-\(screen)-light")}
+        }
+
+        profile.tap()
+        app.buttons["communityOwnProfileSettings"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        capture("community-C28-settings-light")
+        app.buttons["communityLikedPostsRow"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5),"Liked posts stay inside community profile settings")
+        capture("community-C06-liked-posts-light")
+        app.buttons["뒤로"].tap()
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+
+        app.buttons["community-tab-home"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
+        capture("community-H00-central-home")
+        XCTAssertTrue(app.buttons["tab-3"].exists,"Leaving community returns to the global navigation")
+        app.buttons["tab-3"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["community-tab-feed"].exists)
+        capture("community-dedicated-navigation-light")
+    }
+
+    func testCommunityBottomBarHidesOnDownScrollAndFloatsMoveWithIt() {
+        launchCommunity("C01")
+        let feed=app.scrollViews["communityFeedScroll"]
+        let compose=app.buttons["communityCompose"]
+        let feedTab=app.buttons["community-tab-feed"]
+        XCTAssertTrue(feed.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(compose.waitForExistence(timeout:5))
+        let composeAtTop=compose.frame.midY
+
+        feed.swipeUp()
+        XCTAssertTrue(app.buttons["communityScrollToTop"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(waitForLayout({compose.frame.midY>composeAtTop+30},timeout:5),"The compose action moves smoothly into the freed bar area")
+        XCTAssertTrue(compose.isHittable,"Writing remains available while the bar is hidden")
+        capture("community-scroll-bar-hidden-light")
+        XCTAssertTrue(waitForLayout({!feedTab.isHittable},timeout:5),"Scrolling down hides the community bar; frame: \(feedTab.frame)\n\(app.debugDescription)")
+
+        app.buttons["communityScrollToTop"].tap()
+        XCTAssertTrue(waitForLayout({feedTab.isHittable},timeout:5),"Returning to the top restores the bar")
+        XCTAssertTrue(waitForLayout({!self.app.buttons["communityScrollToTop"].exists},timeout:5),"The top action disappears at the top")
+        XCTAssertTrue(waitForLayout({compose.frame.midY<composeAtTop+20},timeout:5),"The compose action returns above the visible bar")
+
+        feed.swipeUp()
+        XCTAssertTrue(waitForLayout({!feedTab.isHittable},timeout:5))
+        feed.swipeDown()
+        XCTAssertTrue(waitForLayout({feedTab.isHittable},timeout:5),"Scrolling back up restores the bar")
+        capture("community-scroll-bar-restored-light")
+    }
+
+    func testCommunityPrimaryTabsDarkAndShortScreensKeepHeaderAndBottomBar() {
+        launchCommunity("C01",appearance:"dark")
+        let communityTabIDs=["community-tab-feed","community-tab-boards","community-tab-home","community-tab-crew","community-tab-profile"]
+        func assertCommunityBar(_ selected:String){
+            for id in communityTabIDs {
+                let button=app.buttons[id]
+                XCTAssertTrue(button.waitForExistence(timeout:5),app.debugDescription)
+                XCTAssertTrue(button.isHittable,"\(id) remains visible on the dark community screen")
+            }
+            XCTAssertFalse(app.buttons["tab-0"].exists,"Primary community screens use only the dedicated community bar")
+            XCTAssertTrue(app.buttons[selected].isHittable)
+        }
+
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:"label == %@","커뮤니티")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["communityAllBoards"].isHittable)
+        XCTAssertTrue(app.buttons["communitySearch"].isHittable)
+        XCTAssertFalse(app.buttons["communitySettings"].exists)
+        let headerMark=app.images["communityHeaderBrandMark"]
+        XCTAssertTrue(headerMark.exists,app.debugDescription)
+        XCTAssertEqual(headerMark.frame.midX,app.frame.midX,accuracy:2,"The dark feed keeps the Mov mark centered")
+        assertCommunityBar("community-tab-feed")
+        capture("community-dark-C01-feed-header")
+
+        app.buttons["community-tab-boards"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["게시판"].exists)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        assertCommunityBar("community-tab-boards")
+        capture("community-dark-C02-boards")
+
+        app.buttons["community-tab-crew"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["크루"].exists)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        assertCommunityBar("community-tab-crew")
+        let crewScroll=app.scrollViews["communityCrewOverview"]
+        XCTAssertTrue(crewScroll.waitForExistence(timeout:5),app.debugDescription)
+        crewScroll.swipeUp()
+        XCTAssertTrue(app.buttons["community-tab-crew"].isHittable,"A short crew screen keeps its bar visible after a no-op upward swipe")
+        capture("community-short-dark-C15-crew")
+
+        app.buttons["community-tab-profile"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["내 정보"].exists)
+        XCTAssertTrue(app.buttons["communityOwnProfileSettings"].isHittable)
+        assertCommunityBar("community-tab-profile")
+        XCTAssertTrue(app.staticTexts["communityProfilePostsEmpty"].exists,"The fixture is the short empty-post profile")
+        let profileScroll=app.scrollViews["communityOwnProfileScroll"]
+        XCTAssertTrue(profileScroll.waitForExistence(timeout:5),app.debugDescription)
+        profileScroll.swipeUp()
+        XCTAssertTrue(app.buttons["community-tab-profile"].isHittable,"A short own-profile screen keeps its bar visible after a no-op upward swipe")
+        capture("community-short-dark-C08-profile")
+    }
+
     func launchCommunityNotifications(screen:String="C01",scenario:String){
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-notifications-\(UUID().uuidString)","-wire-reset","-appearance","light",scenario]
         app.launch()
@@ -857,7 +1043,7 @@ import UIKit
         launchCommunityNotifications(scenario:"-wire-community-notification-samples")
         XCTAssertTrue(app.buttons["communitySearch"].exists,"C01 keeps its search action")
         XCTAssertFalse(app.buttons["communityNotificationBell"].exists,"C01 does not gain a notification bell")
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
         let bell=app.buttons["communityNotificationBell"]
         XCTAssertTrue(bell.waitForExistence(timeout:5));XCTAssertEqual(bell.value as? String,"읽지 않음")
@@ -900,7 +1086,7 @@ import UIKit
 
     func testCommunityNotificationEmptyStateAndProfileBadge(){
         launchCommunityNotifications(scenario:"-wire-empty-community-notifications")
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         let bell=app.buttons["communityNotificationBell"]
         XCTAssertTrue(bell.waitForExistence(timeout:5));XCTAssertEqual(bell.value as? String,"읽음")
         bell.tap()
@@ -922,7 +1108,7 @@ import UIKit
 
     func testCommunityCrewBrowseApplyAndCancelStaysLocal() {
         launchCommunity("C01")
-        app.buttons["communityOpenCrews"].tap()
+        app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["communityCrewTab-my"].exists)
         XCTAssertTrue(app.staticTexts["크루와 신청 상태는 화면 확인용 로컬 예시예요. 실제 가입 신청은 전송되지 않아요."].exists)
@@ -953,7 +1139,7 @@ import UIKit
 
     func testCommunityCrewInformationUsesCurrentLocalPolicyAndRoutesFromDetailAndBoard() {
         launchCommunity("C01")
-        app.buttons["communityOpenCrews"].tap()
+        app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         app.buttons["communityCrewOpen-dawn"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
@@ -985,7 +1171,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
         app.buttons["communityCrewReturnToFeed"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
-        app.buttons["communityOpenCrews"].tap()
+        app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         XCTAssertEqual(app.buttons["communityCrewPending"].label,"신청중 1")
         app.buttons["communityCrewPending"].tap()
@@ -1013,7 +1199,7 @@ import UIKit
 
     func testCommunityCrewMemberBoardShowsOnlyLocalExamplePosts() {
         launchCommunity("C01")
-        app.buttons["communityOpenCrews"].tap()
+        app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
         app.buttons["communityCrewOpen-dawn"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
@@ -1290,7 +1476,7 @@ import UIKit
         XCTAssertFalse(app.descendants(matching:.any)["screen-C20"].isHittable)
 
         app.buttons["tab-3"].tap()
-        app.buttons["communityOpenCrews"].tap()
+        app.buttons["community-tab-crew"].tap()
         app.buttons["communityCrewOpen-dawn"].tap()
         app.buttons["communityCrewManage"].tap()
         app.buttons["communityCrewEdit"].tap()
@@ -1613,8 +1799,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         app.buttons["communityDetailLike"].tap()
         app.buttons["뒤로"].tap()
-        app.buttons["communitySettings"].tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.buttons["communityVerificationRow"].exists,"Settings keeps the existing account verification entry")
         app.buttons["communityLikedPostsRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5))
@@ -1627,7 +1812,7 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityLikedPostsRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C06"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from liked posts")
@@ -1645,7 +1830,7 @@ import UIKit
         app.buttons["communityHot-p1"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C04"].waitForExistence(timeout:5))
         app.buttons["뒤로"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
         app.buttons["communityActivityRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
@@ -1660,7 +1845,7 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityActivityRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C43"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityPersonalPostOpen-p1"].exists,"Blocked authors' posts are hidden from recent activity")
@@ -1702,10 +1887,10 @@ import UIKit
         app.terminate()
         app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-appearance","light"]
         app.launch()
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
         XCTAssertTrue(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"Approved state persists and marks the signed-in runner's profile card")
-        app.buttons["tab-3"].tap()
+        app.buttons["community-tab-feed"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         app.buttons["communityCompose"].tap()
         let postTitle=app.textFields["communityComposeTitle"]
@@ -1723,14 +1908,14 @@ import UIKit
             app.terminate()
             app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-wire-community-verification-status",status,"-appearance","light"]
             app.launch()
-            app.buttons["communityOpenOwnProfile"].tap()
+            app.buttons["community-tab-profile"].tap()
             XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
             XCTAssertFalse(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"\(status) applications do not show a verification badge")
         }
         app.terminate()
         app.launchArguments=["-wire-screen","C01","-wire-fixture","-wire-test-store-suite",suite,"-appearance","light"]
         app.launch()
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["communityOwnProfile"].waitForExistence(timeout:10))
         XCTAssertTrue(app.descendants(matching:.any)["communityRunnerVerifiedBadge-fixture-member-current"].exists,"The approved profile badge remains after relaunch")
     }
@@ -1832,7 +2017,7 @@ import UIKit
         app.buttons["communityModerationConfirm"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Blocking a post author hides that author's post in the feed")
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5))
         app.buttons["communityBlockedUsersRow"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C42"].waitForExistence(timeout:5))
@@ -1882,9 +2067,9 @@ import UIKit
         app.buttons["communityPostMore"].tap()
         app.buttons["communityMenuBlockPost"].tap()
         app.buttons["communityModerationConfirm"].tap()
-        XCTAssertTrue(app.buttons["communitySettings"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["community-tab-profile"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["communityHot-p1"].exists)
-        app.buttons["communitySettings"].tap()
+        openCommunitySettingsFromProfile()
         app.buttons["communityBlockedUsersRow"].tap()
         XCTAssertTrue(app.staticTexts["차단한 사용자"].firstMatch.waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["익명으로 차단한 사용자예요"].exists)
@@ -1994,7 +2179,7 @@ import UIKit
 
     func testCommunityOwnProfileEditsLocallyAndRendersRunningCard() {
         launchCommunity("C01")
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
         XCTAssertTrue(app.descendants(matching:.any)["communityProfilePostsEmpty"].exists)
         app.buttons["communityProfileEdit"].tap()
@@ -2012,7 +2197,7 @@ import UIKit
 
     func testCommunityProfileCancelConfirmsDiscardAndPreservesDraftOnContinue() {
         launchCommunity("C01")
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         app.buttons["communityProfileEdit"].tap()
         let nickname=app.textFields["communityEditNickname"]
         nickname.tap()
@@ -2036,7 +2221,7 @@ import UIKit
 
     func testCommunityProfileExitRoutesPromptBeforeSettingsOrTabNavigation() {
         launchCommunity("C01")
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         app.buttons["communityProfileEdit"].tap()
         let nickname=app.textFields["communityEditNickname"]
         nickname.tap()
@@ -2048,13 +2233,15 @@ import UIKit
         settingsPrompt.buttons["계속 편집"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].exists)
         XCTAssertEqual(app.textFields["communityEditNickname"].value as? String,"저녁러너")
-        app.buttons["tab-0"].tap()
+        app.buttons["community-tab-home"].tap()
         let tabPrompt=app.alerts["변경사항을 버릴까요?"]
         XCTAssertTrue(tabPrompt.waitForExistence(timeout:3))
         tabPrompt.buttons["버리기"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
+        app.buttons["tab-0"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5))
         app.buttons["tab-3"].tap()
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertEqual(app.descendants(matching:.any)["communityCardName"].label,"새벽러너","Leaving via a tab after discard preserves the saved value")
     }
 
@@ -2233,7 +2420,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertFalse(app.staticTexts["communityPostTitle-p1"].exists,"Deleted posts disappear from the feed")
 
-        app.buttons["communityOpenOwnProfile"].tap()
+        app.buttons["community-tab-profile"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts["communityProfilePostCount"].label,"1","The own-profile post list and count are derived from remaining posts")
         let profileSettings=app.buttons["communityOwnProfileSettings"]
@@ -2779,7 +2966,7 @@ extension LaunchTests {
             ("P04","변경하지 않고 돌아오기","H01"),("P05","공간 확보 후 재시도 · 예시","H01"),
             ("R09","일시정지로 돌아가기","R04"),("R10","정지된 기록 확인","R04"),("R11","기록 유지","R04"),
             ("R12","빈 세션 닫기","R11"),("S03","임시 기록 확인","H06"),("S04","기록 보기","L04"),
-            ("S05","홈으로","H00"),("L03","다시 불러오기","L01"),("C01","tab-4","M01"),
+            ("S05","홈으로","H00"),("L03","다시 불러오기","L01"),("C01","community-tab-profile","C08"),
             ("T07","카카오로 로그인","H00"),("T10","계속 사용하기","T01"),("T12","로그인 화면 보기","A01"),
             ("T13","기기 데모 기록 삭제","L02"),("T14","설정으로 돌아가기","T01"),("T16","완료 응답 확인 · 예시","T12")
         ]
