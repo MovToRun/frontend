@@ -2283,7 +2283,11 @@ extension WireframeRoot {
         let committed:[WCommunityAttachment]
         do{committed=try ui.communityAttachmentStore.commit(ui.communityDraftAttachments,forPost:postID)}catch{ui.communityError=error.localizedDescription;return}
         ui.communityPosts.insert(WCommunityPost(id:postID,authorMemberID:ui.communityViewerMemberID,author:"나",rank:"시작러너",board:ui.communityDraftBoard,title:title,text:body,date:"방금 전",likes:0,views:0,comments:[],attachments:committed),at:0)
-        resetCommunityComposerDraft();communityComposerOriginal=nil;go("C01")
+        resetCommunityComposerDraft();communityComposerOriginal=nil
+        if let boardListIndex=ui.path.lastIndex(of:"C03"){
+            ui.path=Array(ui.path.prefix(boardListIndex+1))
+            performBack()
+        }else{go("C01")}
     }
     func confirmCommunityPostDelete(_ postID:String){
         guard let post=ui.communityPosts.first(where:{$0.id==postID}),communityCanReadPost(post),
@@ -2751,7 +2755,59 @@ extension WireframeRoot {
         }.background(W.paper)
     }
     var communityAllBoards:some View {WPage(title:"전체 게시판",back:back){ForEach(WCommunityFixtures.boards,id:\.self){board in WRow(title:board,action:{ui.communityBoard=board;go("C03")},height:58,arrow:true).accessibilityIdentifier("communityBoard-\(board)")}}actions:{}}
-    var communityBoardPosts:some View {let posts=communityVisiblePosts.filter{$0.board==ui.communityBoard};return WPage(title:ui.communityBoard,back:back){Text("\(posts.count)개 이야기").font(W.font(12)).foregroundStyle(W.muted);ForEach(posts){post in communityPostCard(post)}}actions:{Button("글쓰기"){beginCommunityCompose(board:ui.communityBoard)}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityBoardCompose")}}
+    var communityBoardPosts:some View {
+        let posts=communityVisiblePosts.filter{$0.board==ui.communityBoard}
+        return ScrollViewReader{proxy in
+            VStack(spacing:0){
+                WHeader(title:ui.communityBoard,back:back)
+                ScrollView {
+                    WCommunityScrollOffsetProbe(coordinateSpace:"community-board-scroll").id("communityBoardPostsTop")
+                    VStack(alignment:.leading,spacing:18){
+                        Text("\(posts.count)개 이야기").font(W.font(12)).foregroundStyle(W.muted)
+                        ForEach(posts){post in communityPostCard(post)}
+                    }
+                    .frame(maxWidth:.infinity,alignment:.leading)
+                    .padding(24)
+                    .padding(.bottom,WCommunityBottomTab.barHeight+24)
+                }
+                .coordinateSpace(name:"community-board-scroll")
+                .wObserveCommunityScrollOffset{offset in
+                    communityBoardScrollOffset=offset
+                    handleCommunityScrollOffset(offset)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .modifier(WAuthBodyMotion())
+                .accessibilityIdentifier("communityBoardPostsScroll")
+            }
+            .background(W.paper)
+            .overlay(alignment:.bottomTrailing){
+                VStack(spacing:10){
+                    if communityBoardScrollOffset < -8 {
+                        Button{withAnimation(.easeInOut(duration:0.32)){proxy.scrollTo("communityBoardPostsTop",anchor:.top)}}label:{
+                            Image(systemName:"arrow.up").font(.system(size:17,weight:.medium)).frame(width:44,height:44)
+                                .foregroundStyle(W.ink).background(W.paper,in:Circle()).overlay(Circle().stroke(W.line,lineWidth:1))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("맨 위로")
+                        .accessibilityIdentifier("communityScrollToTop")
+                        .transition(.move(edge:.bottom).combined(with:.opacity))
+                    }
+                    Button{beginCommunityCompose(board:ui.communityBoard)}label:{
+                        Label("글쓰기",systemImage:"square.and.pencil").font(W.font(13,.medium))
+                            .padding(.horizontal,16).frame(height:46)
+                            .foregroundStyle(Color(red:32/255,green:41/255,blue:37/255))
+                            .background(W.lime,in:Capsule())
+                            .shadow(color:.black.opacity(0.12),radius:8,y:3)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("communityBoardCompose")
+                }
+                .padding(.trailing,18)
+                .padding(.bottom,communityBottomBarVisible ? WCommunityBottomTab.barHeight+18:18)
+                .animation(.easeInOut(duration:0.24),value:communityBottomBarVisible)
+            }
+        }
+    }
 
     @ViewBuilder var communityPostDetail:some View {
         if let post=currentCommunityPost(){

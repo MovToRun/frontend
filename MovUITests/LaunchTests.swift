@@ -2381,6 +2381,10 @@ import UIKit
 
         app.buttons["community-tab-home"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5))
+        let homeHeading=app.staticTexts["homeWeeklyHeading"]
+        XCTAssertTrue(waitForLayout({homeHeading.exists && homeHeading.isHittable},timeout:5),"The centered Home action shows the Mov home dashboard")
+        XCTAssertTrue(app.buttons["tab-3"].isHittable,"Leaving the community bar restores the app navigation")
+        XCTAssertFalse(app.buttons["community-tab-home"].isHittable,"The community bar is no longer on screen at Mov Home")
         capture("community-H00-central-home")
         XCTAssertTrue(app.buttons["tab-3"].exists,"Leaving community returns to the global navigation")
         app.buttons["tab-3"].tap()
@@ -2449,6 +2453,17 @@ import UIKit
         XCTAssertFalse(app.buttons["뒤로"].exists)
         assertCommunityBar("community-tab-boards")
         capture("community-dark-C02-boards")
+
+        app.buttons["communityBoardShortcut-러닝 질문"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["community-tab-boards"].isSelected)
+        XCTAssertTrue(app.buttons["뒤로"].isHittable)
+        XCTAssertGreaterThanOrEqual(app.buttons["뒤로"].frame.minY,50,"The C03 title bar starts below the iPhone safe area")
+        XCTAssertTrue(app.staticTexts["communityPostTitle-p2"].exists)
+        assertCommunityBar("community-tab-boards")
+        capture("community-dark-C03-board-posts")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
 
         app.buttons["community-tab-crew"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
@@ -2528,8 +2543,117 @@ import UIKit
         XCTAssertEqual(app.staticTexts["communityPreviewTitle"].label,"주말 러닝 메모")
         XCTAssertEqual(app.staticTexts["communityPreviewBoard"].label,"러닝 질문")
         tap("communityPublishButton")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5),"Publishing from C03 returns to the selected board")
+        XCTAssertTrue(app.staticTexts["주말 러닝 메모"].waitForExistence(timeout:5))
+        tap("community-tab-feed")
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","주말 러닝 메모")).firstMatch.waitForExistence(timeout:5))
+    }
+
+    func testCommunityC03BarFloatingComposeAndBoardReturnFlows() {
+        launchCommunity("C01")
+        tap("community-tab-boards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communityBoardShortcut-러닝 질문")
+        let boardScreen=app.descendants(matching:.any)["screen-C03"]
+        XCTAssertTrue(boardScreen.waitForExistence(timeout:5))
+
+        let tabIDs=["community-tab-feed","community-tab-boards","community-tab-home","community-tab-crew","community-tab-profile"]
+        for id in tabIDs {
+            XCTAssertTrue(app.buttons[id].waitForExistence(timeout:5),"C03 keeps the dedicated community bar: \(id)")
+            XCTAssertTrue(app.buttons[id].isHittable,"C03 community tab is reachable: \(id)")
+        }
+        let boardTab=app.buttons["community-tab-boards"]
+        let homeTab=app.buttons["community-tab-home"]
+        let compose=app.buttons["communityBoardCompose"]
+        XCTAssertTrue(boardTab.isSelected,"C03 remains within the selected Boards destination")
+        XCTAssertFalse(app.buttons["tab-0"].exists,"C03 uses the dedicated community bar")
+        XCTAssertEqual(homeTab.frame.midX,app.frame.midX,accuracy:2,"The Mov Home item stays centered")
+        XCTAssertTrue(compose.isHittable)
+        XCTAssertLessThan(compose.frame.maxY,boardTab.frame.minY,"The floating compose action clears the visible community bar")
+        XCTAssertTrue(app.staticTexts["communityPostTitle-p2"].exists,"The selected board's fixture post is visible")
+        capture("F002-C03-bar-compose-visible")
+
+        compose.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:5))
+        let cancelTitle=app.textFields["communityComposeTitle"]
+        cancelTitle.tap();cancelTitle.typeText("취소할 게시판 초안")
+        app.buttons["communityComposeCancel"].tap()
+        let discard=app.alerts["변경사항을 버릴까요?"]
+        XCTAssertTrue(discard.waitForExistence(timeout:5))
+        discard.buttons["버리기"].tap()
+        XCTAssertTrue(boardScreen.waitForExistence(timeout:5),"Discard returns to the selected C03 board")
+        XCTAssertTrue(app.staticTexts["communityPostTitle-p2"].exists)
+
+        for index in 1...4 {
+            app.buttons["communityBoardCompose"].tap()
+            let title="C03 스크롤 예시 \(index)"
+            let titleField=app.textFields["communityComposeTitle"]
+            titleField.tap();titleField.typeText(title)
+            let body=app.textViews["communityComposeBody"]
+            body.tap();body.typeText("선택한 게시판에서 저장한 로컬 예시 글이에요.")
+            app.buttons["communityPreviewButton"].tap()
+            XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+            XCTAssertEqual(app.staticTexts["communityPreviewBoard"].label,"러닝 질문","The draft keeps the selected board")
+            app.buttons["communityPublishButton"].tap()
+            XCTAssertTrue(boardScreen.waitForExistence(timeout:5),"Saving a C03 draft returns to the same board")
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout:5),"The saved post appears in the selected board")
+        }
+
+        XCTAssertTrue(boardTab.isHittable)
+        XCTAssertTrue(compose.isHittable)
+        let boardScroll=app.scrollViews["communityBoardPostsScroll"]
+        let scrollToTop=app.buttons["communityScrollToTop"]
+        XCTAssertTrue(boardScroll.waitForExistence(timeout:5),"C03 exposes its dedicated scroll view")
+        let composeYWithBar=compose.frame.minY
+        boardScroll.swipeUp()
+        XCTAssertTrue(waitForLayout({!boardTab.isHittable},timeout:5),"Scrolling down on C03 hides the community bar")
+        let composeYWithoutBar=compose.frame.minY
+        XCTAssertGreaterThan(composeYWithoutBar,composeYWithBar+24,"The floating compose action moves down into the freed bar space")
+        XCTAssertTrue(waitForLayout({scrollToTop.isHittable},timeout:5),"The scroll-to-top action stays available while the bar is hidden")
+        XCTAssertLessThan(scrollToTop.frame.maxY,compose.frame.minY,"The scroll-to-top action stays above the compose action")
+        capture("F002-C03-bar-compose-hidden")
+
+        scrollToTop.tap()
+        XCTAssertTrue(waitForLayout({boardTab.isHittable},timeout:5),"Returning to the top restores the community bar")
+        XCTAssertTrue(waitForLayout({compose.frame.minY<composeYWithoutBar-24},timeout:5),"The floating compose action returns above the restored bar")
+        XCTAssertTrue(waitForLayout({!scrollToTop.exists},timeout:5),"The top action disappears after it returns to the first post")
+        XCTAssertLessThan(compose.frame.maxY,boardTab.frame.minY)
+        capture("F002-C03-bar-compose-restored")
+    }
+
+    func testCommunityC03BackStackSurvivesNestedBoardsAndRootTabs() {
+        launchCommunity("C01")
+        tap("community-tab-boards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communityBrowseAllBoards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5))
+        tap("communityBoard-러닝 질문")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["community-tab-boards"].isSelected)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C27"].waitForExistence(timeout:5),"Back from C03 returns to the nested all-boards route")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5),"Back from C27 returns to the community Boards root")
+
+        tap("communityBoardShortcut-러닝 질문")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        app.buttons["community-tab-home"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H00"].waitForExistence(timeout:5),"The centered community Home action returns to Mov Home")
+        let homeHeading=app.staticTexts["homeWeeklyHeading"]
+        XCTAssertTrue(waitForLayout({homeHeading.exists && homeHeading.isHittable},timeout:5),"The centered Home action shows the Mov home dashboard")
+        XCTAssertTrue(app.buttons["tab-3"].isHittable)
+        XCTAssertFalse(app.buttons["community-tab-profile"].isHittable)
+        let globalCommunityTab=app.buttons["tab-3"]
+        XCTAssertTrue(globalCommunityTab.waitForExistence(timeout:5),"Home exposes the app's root navigation")
+        globalCommunityTab.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),"The root Community tab returns to its feed")
+        tap("community-tab-boards")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5))
+        tap("communityBoardShortcut-러닝 질문")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C03"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C02"].waitForExistence(timeout:5),"Root-tab navigation starts a clean Boards back stack")
     }
 
     func testCommunityOwnPostEditPreviewsAndUpdatesExistingPostInPlace() {
