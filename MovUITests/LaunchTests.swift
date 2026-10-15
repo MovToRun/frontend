@@ -892,6 +892,38 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),app.debugDescription)
     }
 
+    private func returnFromCommunityBlockedUsersAndReenter() {
+        let blockedRow=app.buttons["communityBlockedUsersRow"]
+        let profileSettings=app.buttons["communityOwnProfileSettings"]
+        let blockedEmpty=app.descendants(matching:.any)["communityBlockedUsersEmpty"]
+
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),"C42 returns to its C28 settings origin")
+        XCTAssertTrue(waitHittable(blockedRow,timeout:5),app.debugDescription)
+
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),"C28 returns to the community profile")
+        XCTAssertTrue(waitHittable(profileSettings,timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["뒤로"].exists,"C08 is a community root tab; use the tab bar to return to the feed")
+
+        profileSettings.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),"The profile can re-enter community settings")
+        XCTAssertTrue(waitHittable(blockedRow,timeout:5),app.debugDescription)
+        blockedRow.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C42"].waitForExistence(timeout:5),"Settings can re-enter the block list")
+        XCTAssertTrue(blockedEmpty.waitForExistence(timeout:5),"The unblocked account remains absent after re-entry")
+
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C28"].waitForExistence(timeout:5),"The re-entered C42 returns to C28")
+        XCTAssertTrue(waitHittable(blockedRow,timeout:5),app.debugDescription)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C08"].waitForExistence(timeout:5),"The re-entered settings returns to C08")
+        XCTAssertTrue(waitHittable(profileSettings,timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["뒤로"].exists,"The profile root has no additional back step after returning from settings")
+        app.buttons["community-tab-feed"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),"The profile tab returns to the community feed")
+    }
+
     func launchCommunityNotifications(screen:String="C01",scenario:String){
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","community-notifications-\(UUID().uuidString)","-wire-reset","-appearance","light",scenario]
         app.launch()
@@ -2089,8 +2121,7 @@ import UIKit
         let unblock=app.buttons["communityUnblock-fixture-member-ga-on"]
         XCTAssertTrue(unblock.waitForExistence(timeout:5));unblock.tap()
         XCTAssertTrue(app.descendants(matching:.any)["communityBlockedUsersEmpty"].waitForExistence(timeout:3))
-        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        returnFromCommunityBlockedUsersAndReenter()
         XCTAssertTrue(app.buttons["communityHot-p1"].waitForExistence(timeout:5),"Unblocking restores the author's content")
     }
 
@@ -2141,8 +2172,7 @@ import UIKit
         XCTAssertFalse(app.staticTexts["가온러너"].exists,"Anonymous block list entry must not disclose the member identity")
         app.buttons["communityUnblock-fixture-member-ga-on"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["communityBlockedUsersEmpty"].waitForExistence(timeout:3))
-        app.buttons["뒤로"].tap();app.buttons["뒤로"].tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5))
+        returnFromCommunityBlockedUsersAndReenter()
         XCTAssertFalse(app.buttons["communityHot-p1"].exists,"Unblocking does not place anonymous content in the public feed")
         tap("communitySearch")
         let searchAfterUnblock=app.textFields["communitySearchField"]
