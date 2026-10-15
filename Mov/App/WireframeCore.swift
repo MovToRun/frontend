@@ -452,6 +452,7 @@ struct WireframeRemoteReadDependencies {
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
     let passwordResetService: (any PasswordResetServing)?
     let authSessionStore: (any AuthSessionStoring)?
+    let accountLinkFlow: (any AccountLinkFlowServing)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
@@ -464,7 +465,8 @@ struct WireframeRemoteReadDependencies {
         weeklyGoalWriter: (any RunningWeeklyGoalWriting)? = nil,
         sessionLogoutRequester: (any SessionLogoutRequesting)? = nil,
         passwordResetService: (any PasswordResetServing)? = nil,
-        authSessionStore: (any AuthSessionStoring)? = nil
+        authSessionStore: (any AuthSessionStoring)? = nil,
+        accountLinkFlow: (any AccountLinkFlowServing)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.memberProfileUpdater = memberProfileUpdater
@@ -477,6 +479,7 @@ struct WireframeRemoteReadDependencies {
         self.sessionLogoutRequester = sessionLogoutRequester
         self.passwordResetService = passwordResetService
         self.authSessionStore = authSessionStore
+        self.accountLinkFlow = accountLinkFlow
     }
 }
 
@@ -506,6 +509,22 @@ enum SessionLogoutState: Equatable {
     case failed(SessionLogoutFailure)
 }
 
+enum WireframeAccountLinkReauthentication: Equatable {
+    case password
+    case provider(AccountLinkProvider)
+}
+
+enum WireframeAccountLinkState: Equatable {
+    case idle
+    case loadingMethods
+    case reauthenticating(WireframeAccountLinkReauthentication)
+    case ready
+    case linking(AccountLinkProvider)
+    case completed
+    case cancelled
+    case failed(AccountLinkFailure)
+}
+
 @MainActor @Observable final class WireframeRemoteReadBridge {
     private enum ManualOperationKind: Equatable {
         case profileRetry
@@ -529,6 +548,7 @@ enum SessionLogoutState: Equatable {
     private let runningProgressLoader: RunningProgressLoader?
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     private let sessionLogoutRequester: (any SessionLogoutRequesting)?
+    private let accountLinkFlow: (any AccountLinkFlowServing)?
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var dailyGeneration: UInt64 = 0
     @ObservationIgnored private var dailyProgressTask: Task<Void, Never>?
@@ -541,6 +561,7 @@ enum SessionLogoutState: Equatable {
     @ObservationIgnored private var weeklyGoalWriteTask: Task<Void, Never>?
     @ObservationIgnored private var sessionLogoutOperationID: UUID?
     @ObservationIgnored private var sessionLogoutTask: Task<Void, Never>?
+    @ObservationIgnored private var accountLinkOperationID: UUID?
     @ObservationIgnored private var memberProfileWriteOperationID: UUID?
     @ObservationIgnored private var memberProfileWriteTask: Task<Void, Never>?
     @ObservationIgnored private var runRecordEditOperationID: UUID?
@@ -571,6 +592,8 @@ enum SessionLogoutState: Equatable {
     private(set) var weeklyGoalConflictRefreshState: WeeklyGoalConflictRefreshState = .idle
     private(set) var dailyProgressState: DailyProgressReadState = .idle
     private(set) var sessionLogoutState: SessionLogoutState = .idle
+    private(set) var accountLinkMethods: AccountLinkMethods?
+    private(set) var accountLinkState: WireframeAccountLinkState = .idle
 
     init(dependencies: WireframeRemoteReadDependencies? = nil) {
         memberProfileLoader = dependencies?.memberProfileLoader
@@ -582,6 +605,7 @@ enum SessionLogoutState: Equatable {
         runningProgressLoader = dependencies?.runningProgressLoader
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
         sessionLogoutRequester = dependencies?.sessionLogoutRequester
+        accountLinkFlow = dependencies?.accountLinkFlow
     }
 
     var hasMemberProfileDependency: Bool { memberProfileLoader != nil }
@@ -631,8 +655,121 @@ enum SessionLogoutState: Equatable {
     var isSavingWeeklyGoal: Bool { weeklyGoalWriteState == .saving }
     var hasSessionLogoutDependency: Bool { sessionLogoutRequester != nil }
     var isLoggingOut: Bool { sessionLogoutState == .loggingOut }
+    var hasAccountLinkDependency: Bool { accountLinkFlow != nil }
+    var isAccountLinkBusy: Bool {
+        switch accountLinkState {
+        case .loadingMethods, .reauthenticating, .linking: true
+        case .idle, .ready, .completed, .cancelled, .failed: false
+        }
+    }
+    var accountLinkFailure: AccountLinkFailure? {
+        if case .failed(let failure) = accountLinkState { return failure }
+        return nil
+    }
     var needsWeeklyGoalConflictRefresh: Bool { weeklyGoalNeedsRefresh }
-    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency }
+    var isEnabled: Bool { hasMemberProfileDependency || hasPointsDependency || hasRunRecordsDependency || hasRunningProgressDependency || hasAccountLinkDependency }
+
+    func refreshAccountLinkMethods() async {
+        guard let accountLinkFlow, !isAccountLinkBusy else { return }
+        accountLinkState = .loadingMethods
+        do {
+            accountLinkMethods = try await accountLinkFlow.methods()
+            accountLinkState = .idle
+        } catch let failure as AccountLinkFailure {
+            accountLinkState = .failed(failure)
+        } catch {
+            accountLinkState = .failed(.invalidResponse)
+        }
+    }
+
+    func reauthenticateAccountLink(using provider: AccountLinkProvider, accountScopeID: String, screen: String) async -> Bool {
+        guard let accountLinkFlow, !isAccountLinkBusy,
+              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T15" else { return false }
+        let operationID = UUID()
+        accountLinkOperationID = operationID
+        accountLinkState = .reauthenticating(.provider(provider))
+        do {
+            try await accountLinkFlow.reauthenticate(using: provider)
+            guard accountLinkOperationID == operationID,
+                  self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .ready
+            return true
+        } catch let failure as AccountLinkFailure {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
+            if failure == .cancelled { await accountLinkFlow.cancel() }
+            return false
+        } catch {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .failed(.invalidResponse)
+            return false
+        }
+    }
+
+    func reauthenticateAccountLinkWithPassword(_ password: String, accountScopeID: String, screen: String) async -> Bool {
+        guard let accountLinkFlow, !isAccountLinkBusy, self.accountScopeID == accountScopeID,
+              activeScreen == screen, screen == "T15" else { return false }
+        let operationID = UUID()
+        accountLinkOperationID = operationID
+        accountLinkState = .reauthenticating(.password)
+        do {
+            try await accountLinkFlow.reauthenticateWithPassword(password)
+            guard accountLinkOperationID == operationID,
+                  self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .ready
+            return true
+        } catch let failure as AccountLinkFailure {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
+            if failure == .cancelled { await accountLinkFlow.cancel() }
+            return false
+        } catch {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .failed(.invalidResponse)
+            return false
+        }
+    }
+
+    func linkAccountMethod(provider: AccountLinkProvider, accountScopeID: String, screen: String) async -> Bool {
+        guard let accountLinkFlow, !isAccountLinkBusy, accountLinkState == .ready,
+              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T06" else { return false }
+        let operationID = UUID()
+        accountLinkOperationID = operationID
+        accountLinkState = .linking(provider)
+        do {
+            try await accountLinkFlow.link(provider: provider)
+            guard accountLinkOperationID == operationID,
+                  self.accountScopeID == accountScopeID, activeScreen == screen else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .completed
+            do { accountLinkMethods = try await accountLinkFlow.methods() } catch { /* The confirmed 204 remains success. */ }
+            return true
+        } catch let failure as AccountLinkFailure {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = failure == .cancelled ? .cancelled : .failed(failure)
+            if failure == .cancelled { await accountLinkFlow.cancel() }
+            if failure == .alreadyLinked { await refreshAccountLinkMethods() }
+            return false
+        } catch {
+            guard accountLinkOperationID == operationID else { return false }
+            accountLinkOperationID = nil
+            accountLinkState = .failed(.invalidResponse)
+            return false
+        }
+    }
+
+    func cancelAccountLinkFlow() {
+        accountLinkOperationID = nil
+        accountLinkState = .idle
+        Task { await accountLinkFlow?.cancel() }
+    }
 
     func requestSessionLogout(accountScopeID: String, screen: String) {
         guard let requester = sessionLogoutRequester,
@@ -712,6 +849,8 @@ enum SessionLogoutState: Equatable {
         guard accountScopeID != nextScopeID else { return }
         cancelRunRecordsRefresh(markNeedsRefresh: false)
         cancelSessionLogout()
+        cancelAccountLinkFlow()
+        accountLinkMethods = nil
         cancelMemberProfileMutation()
         cancelWeeklyGoalMutation()
         cancelRunRecordEdit()
@@ -744,6 +883,7 @@ enum SessionLogoutState: Equatable {
 
     func activate(feature: WireframeRemoteReadFeature?, accountScopeID: String, runID: String? = nil, screen: String? = nil) async {
         if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        let previousScreen = activeScreen
         let nextScreen = screen ?? feature?.rawValue
         if activeFeature == .runs, activeScreen == "L01",
            (feature != .runs || nextScreen != "L01" || runID != nil) {
@@ -785,6 +925,14 @@ enum SessionLogoutState: Equatable {
         let requestGeneration = generation
         activeFeature = feature
         activeScreen = nextScreen
+
+        if (previousScreen == "T15" || previousScreen == "T06"),
+           nextScreen != "T15", nextScreen != "T06", accountLinkState != .completed {
+            cancelAccountLinkFlow()
+        }
+        if nextScreen == "T05" {
+            await refreshAccountLinkMethods()
+        }
 
         guard let feature else {
             memberProfileState = .idle
@@ -2318,6 +2466,65 @@ struct WCommunityVerificationState:Codable,Equatable {
         if screen=="A18" && passwordChanged{go("A01");return}
         if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if ["L04","L07"].contains(screen), !["L04","L07"].contains(destination){remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
 }
+actor WireframeAccountLinkFixture: AccountLinkFlowServing {
+    private var providers: [AccountLinkProvider]
+    private let localPassword: Bool
+    private var reauthProof: String?
+    private var failCompletionOnce: Bool
+    private let cancelReauthentication: Bool
+    private let cancelLinkCredential: Bool
+    private let delaysLinkCompletion: Bool
+
+    init(initiallyLinkedGoogle: Bool, localPassword: Bool, failCompletionOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool) {
+        providers = initiallyLinkedGoogle ? [.kakao, .google] : [.kakao]
+        self.localPassword = localPassword
+        self.failCompletionOnce = failCompletionOnce
+        self.cancelReauthentication = cancelReauthentication
+        self.cancelLinkCredential = cancelLinkCredential
+        self.delaysLinkCompletion = delaysLinkCompletion
+    }
+
+    func methods() async throws -> AccountLinkMethods {
+        AccountLinkMethods(localPassword: localPassword, socialProviders: providers)
+    }
+
+    func reauthenticateWithPassword(_ password: String) async throws {
+        guard localPassword, !password.isEmpty else { throw AccountLinkFailure.invalidCredentials }
+        reauthProof = Self.token("r")
+    }
+
+    func reauthenticate(using provider: AccountLinkProvider) async throws {
+        guard providers.contains(provider) else { throw AccountLinkFailure.invalidCredentials }
+        if cancelReauthentication { throw AccountLinkFailure.cancelled }
+        reauthProof = Self.token("r")
+    }
+
+    func link(provider: AccountLinkProvider) async throws {
+        guard reauthProof != nil else { throw AccountLinkFailure.reauthenticationRequired }
+        guard !providers.contains(provider) else { throw AccountLinkFailure.alreadyLinked }
+        if cancelLinkCredential {
+            self.reauthProof = nil
+            throw AccountLinkFailure.cancelled
+        }
+        if delaysLinkCompletion { try await Task.sleep(for: .milliseconds(350)) }
+        if failCompletionOnce {
+            failCompletionOnce = false
+            self.reauthProof = nil
+            throw AccountLinkFailure.accountLinkConflict
+        }
+        providers.append(provider)
+        self.reauthProof = nil
+    }
+
+    func cancel() async {
+        reauthProof = nil
+    }
+
+    private static func token(_ prefix: String) -> String {
+        prefix + String(repeating: "x", count: 42)
+    }
+}
+
 struct RootView:View {
     @Environment(\.dynamicTypeSize) var systemSize
     let remoteReadDependencies: WireframeRemoteReadDependencies?
@@ -2371,6 +2578,15 @@ struct RootView:View {
             ) : nil
         let passwordResetSessionStore: (any AuthSessionStoring)? = WReviewMode.tools && args.contains("-wire-password-reset-session-store-fixture")
             ? WireframePasswordResetSessionFixtureStore(failReplacementOnce:args.contains("-wire-password-reset-session-store-fail-once")) : nil
+        let accountLinkFixture: (any AccountLinkFlowServing)? = WReviewMode.tools && args.contains("-wire-account-link-fixture")
+            ? WireframeAccountLinkFixture(
+                initiallyLinkedGoogle:args.contains("-wire-account-link-google-already-linked"),
+                localPassword:args.contains("-wire-account-link-local-password"),
+                failCompletionOnce:args.contains("-wire-account-link-fail-once"),
+                cancelReauthentication:args.contains("-wire-account-link-cancel-reauth"),
+                cancelLinkCredential:args.contains("-wire-account-link-cancel-target"),
+                delaysLinkCompletion:args.contains("-wire-account-link-delay-completion")
+            ) : nil
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
@@ -2378,7 +2594,7 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -2408,7 +2624,8 @@ struct RootView:View {
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
             sessionLogoutRequester:logoutFixture,
             passwordResetService:passwordResetFixture,
-            authSessionStore:passwordResetSessionStore
+            authSessionStore:passwordResetSessionStore,
+            accountLinkFlow:accountLinkFixture
         )
     }
 
@@ -2708,6 +2925,7 @@ struct WireframeRoot:View {
     @State var remoteReads:WireframeRemoteReadBridge
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
+    @State var accountLinkPasswordInput = ""
     @State var weeklyGoalDraftVersion:Int64?
     @State var weeklyGoalDraftScopeID:String?
     @State var weeklyGoalDraftDirty=false
@@ -2841,6 +3059,7 @@ struct WireframeRoot:View {
     }
     var rootRemoteStateUpdates:some View {
         rootTaskViews
+            .onChange(of:ui.screen){oldScreen,newScreen in if oldScreen=="T15" && newScreen != "T15"{accountLinkPasswordInput=""}}
             .onChange(of:scenePhase){_,phase in handleScenePhaseChange(phase)}
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in handleRemoteAccountScopeChange(scopeID)}
             .onChange(of:remoteReads.memberProfileState){_,state in handleRemoteMemberProfileStateChange(state)}
