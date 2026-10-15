@@ -2747,6 +2747,7 @@ struct WireframeRoot:View {
     @State var communityBottomBarVisible=true
     @State var communityScrollToTopVisible=false
     @State var lastCommunityScrollOffset:CGFloat?
+    @State var communityBoardScrollOffset:CGFloat=0
     @FocusState var otpInputFocused:Bool
     @FocusState var authInput:String?
     @FocusState var communitySearchFocused:Bool
@@ -2772,7 +2773,7 @@ struct WireframeRoot:View {
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
-    var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C15" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
+    var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C03" || ui.screen=="C15" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var routeScreenTransition:AnyTransition {
         guard !isAccountScreen else{return .identity}
         let insertion:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .trailing:.leading)
@@ -3230,7 +3231,7 @@ struct WireframeRoot:View {
     var communityNav:some View {
         HStack(spacing:0){
             ForEach(WCommunityBottomTab.allCases,id:\.rawValue){tab in
-                let selected=tab == .profile ? ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID:ui.screen==tab.route
+                let selected=tab == .profile ? ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID:tab == .boards ? ["C02","C03"].contains(ui.screen):ui.screen==tab.route
                 Button{selectCommunityTab(tab.route)}label:{
                     VStack(spacing:3){
                         ZStack{
@@ -3271,11 +3272,12 @@ struct WireframeRoot:View {
         lastCommunityScrollOffset=nil
         communityBottomBarVisible=true
         communityScrollToTopVisible=false
+        communityBoardScrollOffset=0
     }
     func handleCommunityScrollOffset(_ offset:CGFloat){
         let previous=lastCommunityScrollOffset
         lastCommunityScrollOffset=offset
-        let shouldShowTop=ui.screen=="C01" && offset < -120
+        let shouldShowTop=ui.screen=="C01" ? offset < -120:ui.screen=="C03" && offset < -8
         if shouldShowTop != communityScrollToTopVisible{communityScrollToTopVisible=shouldShowTop}
         if shouldShowTop && communityBottomBarVisible{withAnimation(.easeInOut(duration:0.24)){communityBottomBarVisible=false}}
         guard let previous else{
