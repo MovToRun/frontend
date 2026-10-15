@@ -3877,7 +3877,12 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts["소셜 인증이 만료됐어요. 로그인 화면에서 다시 시작해 주세요."].waitForExistence(timeout:5),app.debugDescription)
         tap("authFailureRetry")
         tap("Google로 로그인");tap("인증 성공 · 예시")
-        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:8),app.debugDescription)
+        tap("consentContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].waitForExistence(timeout:8),app.debugDescription)
+        replace("아침러너",into:app.textFields["signupNicknameInput"])
+        tap("signupContinue")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A15"].waitForExistence(timeout:8),app.debugDescription)
     }
 
     func testSocialLoginFixtureIgnoresDuplicateSubmissionWhileBusy() {
