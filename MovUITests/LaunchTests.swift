@@ -2983,6 +2983,124 @@ import UIKit
 }
 
 extension LaunchTests {
+    private func launchMemberWithdrawalFixture(extra: [String] = []) -> (service: String, suite: String) {
+        let fixture = makeAuthSessionFixture()
+        let fixtureArguments = [
+            "-wire-member-withdrawal-fixture",
+            "-wire-account-link-fixture",
+            "-wire-account-link-local-password"
+        ] + extra
+        app.launchArguments = authSessionFixtureArguments(service: fixture.service, suite: fixture.suite, extra: fixtureArguments)
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout: 15), app.debugDescription)
+        logInWithMockAuthServer()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout: 12), app.debugDescription)
+        return fixture
+    }
+
+    private func openWithdrawalConfirmationFromSettings() {
+        tap("tab-4")
+        tap("설정")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T01"].waitForExistence(timeout: 8), app.debugDescription)
+        let privacy = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "개인정보·데이터")).firstMatch
+        XCTAssertTrue(privacy.waitForExistence(timeout: 6), app.debugDescription)
+        for _ in 0..<3 where !privacy.isHittable { app.swipeUp() }
+        XCTAssertTrue(privacy.isHittable, app.debugDescription)
+        privacy.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T04"].waitForExistence(timeout: 8), app.debugDescription)
+        let withdrawal = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "회원 탈퇴")).firstMatch
+        XCTAssertTrue(withdrawal.waitForExistence(timeout: 6), app.debugDescription)
+        XCTAssertTrue(withdrawal.isHittable, app.debugDescription)
+        withdrawal.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T15"].waitForExistence(timeout: 8), app.debugDescription)
+        reauthenticateWithdrawal()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T11"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["accountDeletionImpactNotice"].waitForExistence(timeout: 6), app.debugDescription)
+    }
+
+    private func reauthenticateWithdrawal() {
+        let password = app.secureTextFields["accountLinkPassword"]
+        XCTAssertTrue(password.waitForExistence(timeout: 6), app.debugDescription)
+        password.tap()
+        password.typeText("fixture-password")
+        tap("accountLinkReauthenticate-password")
+    }
+
+    private func acknowledgeWithdrawalNotice() {
+        let acknowledge = app.buttons["accountDeletionImpactAcknowledgement"]
+        let confirm = app.buttons["confirmAccountDeletion"]
+        XCTAssertTrue(acknowledge.waitForExistence(timeout: 6), app.debugDescription)
+        XCTAssertTrue(confirm.waitForExistence(timeout: 6), app.debugDescription)
+        XCTAssertFalse(acknowledge.isSelected, app.debugDescription)
+        XCTAssertFalse(confirm.isEnabled, app.debugDescription + "\nThe final confirmation stays disabled until the backend notice is acknowledged")
+        if !acknowledge.isSelected { acknowledge.tap() }
+        XCTAssertTrue(acknowledge.isSelected)
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T16"].waitForExistence(timeout: 8), app.debugDescription)
+    }
+
+    func testMemberWithdrawalProofExpiryRequiresFreshReauthentication() {
+        _ = launchMemberWithdrawalFixture(extra: ["-wire-member-withdrawal-expired-proof-once"])
+        openWithdrawalConfirmationFromSettings()
+        acknowledgeWithdrawalNotice()
+        tap("탈퇴 요청")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "현재 계정 확인이 만료됐어요")).firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["다시 인증하고 시도"].exists)
+
+        tap("다시 인증하고 시도")
+        reauthenticateWithdrawal()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T11"].waitForExistence(timeout: 8), app.debugDescription)
+        acknowledgeWithdrawalNotice()
+        tap("탈퇴 요청")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T12"].waitForExistence(timeout: 12), app.debugDescription)
+    }
+
+    func testMemberWithdrawalAmbiguousResponseDoesNotRetryOrClearFixtureSession() {
+        let fixture = launchMemberWithdrawalFixture(extra: ["-wire-member-withdrawal-response-lost-once"])
+        openWithdrawalConfirmationFromSettings()
+        acknowledgeWithdrawalNotice()
+        tap("탈퇴 요청")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "서버에서 처리 여부를 확인할 수 없어 요청을 다시 보내지 않았어요")).firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(app.buttons["다시 인증하고 시도"].exists, "A lost 202 has no safe client retry or status endpoint")
+        XCTAssertTrue(app.buttons["설정으로 돌아가기"].exists)
+        tap("설정으로 돌아가기")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T04"].waitForExistence(timeout: 8), app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = authSessionFixtureArguments(service: fixture.service, suite: fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout: 12), "An unknown outcome preserves the UUID fixture session")
+    }
+
+    func testMemberWithdrawalCancellationAfterNoticeKeepsFixtureSession() {
+        let fixture = launchMemberWithdrawalFixture()
+        openWithdrawalConfirmationFromSettings()
+        tap("계정 유지")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T04"].waitForExistence(timeout: 8), app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = authSessionFixtureArguments(service: fixture.service, suite: fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout: 12), "Canceling before POST leaves the fixture session intact")
+    }
+
+    func testMemberWithdrawalBackFromNoticeDiscardsProofAndReturnsToSettings() {
+        let fixture = launchMemberWithdrawalFixture()
+        openWithdrawalConfirmationFromSettings()
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T15"].waitForExistence(timeout: 8), app.debugDescription)
+        tap("뒤로")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-T04"].waitForExistence(timeout: 8), app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = authSessionFixtureArguments(service: fixture.service, suite: fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout: 12), "Backing out of the withdrawal flow discards only the unused proof")
+    }
+}
+
+extension LaunchTests {
     private func logInWithMockAuthServer() {
         let email=app.textFields["auth-email"]
         let password=app.secureTextFields["auth-password"]
@@ -4125,20 +4243,28 @@ extension LaunchTests {
         }
     }
     func testAccountRemovalConfirmationAndRetry() {
-        open("T11")
-        let acknowledge=app.buttons["accountDeletionImpactAcknowledgement"]
-        let confirm=app.buttons["confirmAccountDeletion"]
-        XCTAssertTrue(app.descendants(matching:.any)["accountDeletionImpactNotice"].exists)
-        XCTAssertTrue(app.staticTexts["삭제 흐름의 영향 설명을 확인했어요"].exists)
-        XCTAssertFalse(confirm.isEnabled)
-        acknowledge.tap()
-        XCTAssertTrue(acknowledge.isSelected)
-        XCTAssertTrue(confirm.isEnabled)
-        confirm.tap();XCTAssertTrue(app.descendants(matching:.any)["screen-T16"].waitForExistence(timeout:5))
-        tap("오류 응답 확인 · 예시")
-        XCTAssertTrue(app.descendants(matching:.any)["screen-T11"].waitForExistence(timeout:5))
-        XCTAssertFalse(acknowledge.isSelected);XCTAssertFalse(confirm.isEnabled)
-        tap("계정 유지");XCTAssertTrue(app.descendants(matching:.any)["screen-T01"].waitForExistence(timeout:5))
+        let fixture = launchMemberWithdrawalFixture(extra: ["-wire-member-withdrawal-fail-once"])
+        openWithdrawalConfirmationFromSettings()
+        acknowledgeWithdrawalNotice()
+        tap("탈퇴 요청")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","지금은 탈퇴 요청을 처리할 수 없어요")).firstMatch.waitForExistence(timeout:10),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T16"].exists,"A known service failure stays in the retry screen")
+
+        tap("다시 인증하고 시도")
+        reauthenticateWithdrawal()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T11"].waitForExistence(timeout:8),app.debugDescription)
+        acknowledgeWithdrawalNotice()
+        tap("탈퇴 요청")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-T12"].waitForExistence(timeout:12),app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-2"].exists,"The local session is cleared only after the mock 202 WITHDRAWN receipt")
+        tap("로그인으로")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:8),app.debugDescription)
+
+        app.terminate()
+        app.launchArguments = authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:12),"A confirmed withdrawal clears only this fixture Keychain session across launch")
+        XCTAssertFalse(app.buttons["tab-2"].exists)
     }
     func testEmailManageCancelReturnsToProviders() {
         open("T05");app.buttons.matching(NSPredicate(format:"label CONTAINS %@","이메일 · 비밀번호")).firstMatch.tap();tap("카카오로 재확인 · 예시");tap("취소")

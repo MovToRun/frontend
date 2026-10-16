@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 92430)
-Total output lines: 5880
-
 import XCTest
 import UIKit
 import SwiftUI
@@ -1039,7 +1036,3571 @@ final class ThemeTests:XCTestCase {
     }
 
     @MainActor func testReview52WeekFixtureUsesItsReferenceWeek() {
-        let suite = "review52-week-\…52430 tokens truncated…id:"sync-race-a",title:"오래된 목록 제목",memo:nil)
+        let suite = "review52-week-\(UUID().uuidString)"
+        let store = RunStore(defaults: UserDefaults(suiteName: suite)!)
+        let recordDate = ISO8601DateFormatter().date(from: "2026-09-29T07:12:00+09:00")!
+        store.records = [RunRecord(date: recordDate, title: "fixture", seconds: 1808, kilometers: 4.82)]
+        XCTAssertEqual(store.weeklyRecords(asOf: WReviewClock.referenceDate).map(\.kilometers), [4.82])
+        XCTAssertTrue(store.weeklyRecords(asOf: ISO8601DateFormatter().date(from: "2026-10-08T12:00:00+09:00")!).isEmpty)
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+    }
+
+    func testRootTabRoutesAndLabelsMatchReview52Navigation() {
+        XCTAssertEqual(WRootTab.allCases.map(\.title), ["포인트", "러닝", "홈", "커뮤니티", "내 정보"])
+        XCTAssertEqual(WRootTab.allCases.map(\.caption), ["포인트", "러닝", nil, "커뮤니티", "내 정보"])
+        XCTAssertEqual(WRootTab.allCases.map(\.route), ["POINTS", "H01", "H00", "C01", "M01"])
+        XCTAssertEqual(WRootTab.homeMarkSize, 26, "The source nav-home-symbol is 26×26 with no tile")
+    }
+
+    func testReview52BrandMarkAssetLoadsAndCanRenderLocally() throws {
+        let bundle = Bundle(for: WireState.self)
+        let image = try XCTUnwrap(UIImage(named: "BrandMark", in: bundle, compatibleWith: nil))
+        let source = try XCTUnwrap(image.cgImage)
+        XCTAssertEqual(source.width, 1254)
+        XCTAssertEqual(source.height, 1254)
+        XCTAssertNotEqual(source.alphaInfo, .none, "The transparent aperture mask must remain available")
+
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
+        XCTAssertNotNil(rendered.cgImage, "The bundled logo asset must draw into a local SwiftUI-sized surface")
+    }
+
+    func testNativeLaunchScreenUsesAdaptiveSurfaceAndOriginalBrandMark() throws {
+        let bundle=Bundle(for:WireState.self)
+        let launch=try XCTUnwrap(bundle.infoDictionary?["UILaunchScreen"] as? [String:Any])
+        XCTAssertEqual(launch["UIColorName"] as? String,"LaunchBackground")
+        XCTAssertEqual(launch["UIImageName"] as? String,"LaunchMark")
+
+        let background=try XCTUnwrap(UIColor(named:"LaunchBackground",in:bundle,compatibleWith:nil))
+        let light=background.resolvedColor(with:UITraitCollection(userInterfaceStyle:.light))
+        let dark=background.resolvedColor(with:UITraitCollection(userInterfaceStyle:.dark))
+        var red:CGFloat=0,green:CGFloat=0,blue:CGFloat=0,alpha:CGFloat=0
+        XCTAssertTrue(light.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+        XCTAssertEqual([red,green,blue],[1,1,1])
+        XCTAssertTrue(dark.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+        XCTAssertEqual(red,25.0/255.0,accuracy:0.001)
+        XCTAssertEqual(green,25.0/255.0,accuracy:0.001)
+        XCTAssertEqual(blue,25.0/255.0,accuracy:0.001)
+
+        let mark=try XCTUnwrap(UIImage(named:"LaunchMark",in:bundle,compatibleWith:nil))
+        XCTAssertEqual(mark.scale,3)
+        XCTAssertEqual(mark.size,CGSize(width:84,height:84))
+        let pixels=try XCTUnwrap(mark.cgImage)
+        XCTAssertNotEqual(pixels.alphaInfo,.none)
+        XCTAssertFalse(WLocalProfile().logged,"A clean install starts at sign in; test fixtures opt into a saved login explicitly")
+    }
+
+    func testReview52RecordExampleMarkerKeepsLegacyLocalRecordsReadable() throws {
+        let legacy = Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1}"#.utf8)
+        let decoded = try JSONDecoder().decode(RunRecord.self, from: legacy)
+        XCTAssertNil(decoded.isExample, "Records saved before the Review52 fixture marker decode without migration")
+        XCTAssertNil(decoded.pointReward, "Old local runs have no server point reward")
+        let fixture = RunRecord(date: WReviewClock.referenceDate, title: "fixture", seconds: 1, kilometers: 1, isExample: true)
+        XCTAssertTrue(fixture.isExample == true)
+    }
+
+    func testRunPointRewardMatchesBackendDTOAndPreservesSettledZero() throws {
+        let fixtures:[(String,RunPointRewardStatus,Int?)] = [
+            (#"{"status":"PENDING","pointsAwarded":null}"#,.pending,nil),
+            (#"{"status":"SETTLED","pointsAwarded":0}"#,.settled,0),
+            (#"{"status":"SETTLED","pointsAwarded":15}"#,.settled,15),
+            (#"{"status":"UNAVAILABLE","pointsAwarded":null}"#,.unavailable,nil)
+        ]
+        for (json,status,points) in fixtures {
+            let reward=try JSONDecoder().decode(RunPointReward.self,from:Data(json.utf8))
+            XCTAssertEqual(reward.status,status)
+            XCTAssertEqual(reward.pointsAwarded,points)
+            let roundTrip=try JSONDecoder().decode(RunPointReward.self,from:JSONEncoder().encode(reward))
+            XCTAssertEqual(roundTrip,reward)
+        }
+        let absentRequest=try JSONDecoder().decode(RunRecord.self,from:Data(#"{"id":"00000000-0000-0000-0000-000000000001","date":0,"title":"fixture","memo":"","seconds":1,"kilometers":1,"pointReward":null}"#.utf8))
+        XCTAssertNil(absentRequest.pointReward,"A null pointReward means no request exists")
+    }
+
+    func testRunPointRewardRejectsMalformedStatusAmountPairs() throws {
+        let invalid=[
+            #"{"status":"PENDING","pointsAwarded":1}"#,
+            #"{"status":"SETTLED","pointsAwarded":null}"#,
+            #"{"status":"SETTLED","pointsAwarded":-1}"#,
+            #"{"status":"UNAVAILABLE","pointsAwarded":0}"#,
+            #"{"status":"UNKNOWN","pointsAwarded":null}"#,
+            #"{"status":"PENDING"}"#
+        ]
+        for json in invalid {
+            XCTAssertThrowsError(try JSONDecoder().decode(RunPointReward.self,from:Data(json.utf8)),json)
+        }
+        let settledZero=try RunPointReward(status:.settled,pointsAwarded:0)
+        XCTAssertEqual(settledZero.accessibilityLabel,"러닝 포인트 0 포인트 적립")
+        XCTAssertEqual(settledZero.compactText,"0","A settled zero is a real amount and must not be treated as missing")
+        XCTAssertEqual(try? RunPointReward(status:.pending,pointsAwarded:nil).accessibilityLabel,"러닝 포인트 적립 확인 중")
+        XCTAssertEqual(try? RunPointReward(status:.unavailable,pointsAwarded:nil).accessibilityLabel,"러닝 포인트 적립 상태 확인 불가")
+    }
+
+    func testReview52ShopArtworkMatchesSourceCardGeometry() {
+        XCTAssertEqual(WPointArtworkGeometry.listingAspect, 1.16, accuracy: 0.001)
+        XCTAssertEqual(WPointArtworkGeometry.detailAspect, 1.35, accuracy: 0.001)
+
+        let listing = WPointArtworkGeometry.cardSize(in: CGSize(width: 167, height: 144), large: false)
+        XCTAssertEqual(listing.width, 143, accuracy: 0.001, "B05 uses 12pt horizontal padding")
+        XCTAssertEqual(listing.height, 143 / 1.65, accuracy: 0.001, "The source card artwork keeps a 1.65 ratio")
+
+        let detail = WPointArtworkGeometry.cardSize(in: CGSize(width: 342, height: 253.333), large: true)
+        XCTAssertEqual(detail.width, 266, accuracy: 0.001, "B06 uses 38pt horizontal padding")
+        XCTAssertEqual(detail.height, 266 / 1.65, accuracy: 0.001, "The source detail card keeps a 1.65 ratio")
+    }
+
+    func testProfilePhotoImportGuardRejectsLateCompletionAfterReselection() {
+        var guardState=WProfilePhotoImportGuard()
+        let first=guardState.begin()
+        XCTAssertTrue(guardState.accepts(first))
+        let replacement=guardState.begin()
+        XCTAssertFalse(guardState.accepts(first),"A completed older PhotosPicker request cannot replace the latest selection")
+        XCTAssertTrue(guardState.accepts(replacement))
+    }
+
+    func testProfilePhotoImportGuardRejectsCompletionAfterPickerOwnerExits() {
+        var guardState=WProfilePhotoImportGuard()
+        let request=guardState.begin()
+        guardState.invalidate()
+        XCTAssertFalse(guardState.accepts(request),"Leaving the profile or crew editor invalidates its pending import")
+    }
+
+    func testProfilePhotoInputsMatchReview52TypeAndDimensionLimits() {
+        XCTAssertEqual(WProfilePhotoPolicy.maximumInputBytes,20_000_000)
+        XCTAssertEqual(WProfilePhotoPolicy.maximumOutputBytes,2_000_000)
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:20_000_000))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:20_000_001))
+        XCTAssertTrue(WProfilePhotoPolicy.acceptsOutput(byteCount:2_000_000))
+        XCTAssertFalse(WProfilePhotoPolicy.acceptsOutput(byteCount:2_000_001))
+        XCTAssertFalse(WProfilePhotoPolicy.acceptsOutput(byteCount:0))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.jpeg))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.png))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.webP))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.heic))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.heif))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(.tiff))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(.pdf))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:WProfilePhotoPolicy.maximumInputBytes+1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(byteCount:0))
+        XCTAssertTrue(WProfilePhotoPolicy.accepts(width: 8_192, height: 2_000))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 8_193, height: 1))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 5_000, height: 4_001))
+        XCTAssertFalse(WProfilePhotoPolicy.accepts(width: 0, height: 1))
+        XCTAssertEqual(WProfilePhotoPolicy.cropDiameter(for:300),300/1.35,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(CGSize(width:500,height:-500),displayedSize:CGSize(width:300,height:200),cropDiameter:100),CGSize(width:100,height:-50))
+        XCTAssertEqual(WProfilePhotoPolicy.clampedCropCenter(.zero,displayedSize:CGSize(width:300,height:200),cropDiameter:100),.zero)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:-50,displayedSide:200,cropDiameter:100),0,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:0,displayedSide:200,cropDiameter:100),50,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:50,displayedSide:200,cropDiameter:100),100,accuracy:0.001)
+        XCTAssertEqual(WProfilePhotoPolicy.cropPositionPercent(offset:0,displayedSide:100,cropDiameter:100),50,accuracy:0.001)
+    }
+
+    func testProfilePhotoCropExportsSquareJpegWithinReview52Limit() throws {
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:600,height:400))
+        let image=renderer.image{context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x:0,y:0,width:600,height:400))
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:100,y:0,width:400,height:400)))
+        let output=try XCTUnwrap(UIImage(data:data)?.cgImage)
+        XCTAssertEqual(output.width,WProfilePhotoPolicy.outputEdge)
+        XCTAssertEqual(output.height,WProfilePhotoPolicy.outputEdge)
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertEqual(data.prefix(3),Data([0xFF,0xD8,0xFF]))
+        XCTAssertNil(WProfilePhotoPolicy.encode(image:image,crop:.zero))
+    }
+
+    func testProfilePhotoTransparentPNGCompositesOnWhiteBeforeCropExport() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1;format.opaque=false
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let source=renderer.image{context in
+            UIColor.clear.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+            UIColor(red:1,green:0,blue:0,alpha:1).setFill();context.fill(CGRect(x:64,y:64,width:128,height:128))
+        }
+        let png=try XCTUnwrap(source.pngData())
+        let transparentPNG=try XCTUnwrap(UIImage(data:png))
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:transparentPNG,crop:CGRect(x:0,y:0,width:256,height:256)))
+        let output=try XCTUnwrap(UIImage(data:jpeg)?.cgImage)
+        XCTAssertEqual(output.width,WProfilePhotoPolicy.outputEdge);XCTAssertEqual(output.height,WProfilePhotoPolicy.outputEdge)
+
+        let edge=WProfilePhotoPolicy.outputEdge
+        var rgba=[UInt8](repeating:0,count:edge*edge*4)
+        rgba.withUnsafeMutableBytes{bytes in
+            let context=CGContext(data:bytes.baseAddress,width:edge,height:edge,bitsPerComponent:8,bytesPerRow:edge*4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGBitmapInfo.byteOrder32Big.rawValue|CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(output,in:CGRect(x:0,y:0,width:edge,height:edge))
+        }
+        let whiteIndex=(12*edge+12)*4
+        XCTAssertGreaterThan(rgba[whiteIndex],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+1],245)
+        XCTAssertGreaterThan(rgba[whiteIndex+2],245)
+        let redIndex=(edge/2*edge+edge/2)*4
+        XCTAssertGreaterThan(rgba[redIndex],200)
+        XCTAssertLessThan(rgba[redIndex+1],70)
+        XCTAssertLessThan(rgba[redIndex+2],70)
+    }
+
+    func testProfilePhotoComplexCropStillFitsReview52StoredPhotoLimit() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            for y in 0..<128 { for x in 0..<128 {
+                let seed=(x*73+y*151+x*y*17)%251
+                UIColor(red:CGFloat(seed)/250,green:CGFloat((seed*37)%251)/250,blue:CGFloat((seed*97)%251)/250,alpha:1).setFill()
+                context.fill(CGRect(x:x*2,y:y*2,width:2,height:2))
+            }}
+        }
+        let data=try XCTUnwrap(WProfilePhotoPolicy.encode(image:image,crop:CGRect(x:0,y:0,width:256,height:256)))
+        XCTAssertLessThanOrEqual(data.count,WProfilePhotoPolicy.maximumOutputBytes)
+        XCTAssertNotNil(WProfilePhotoPolicy.sanitizeStored(data))
+    }
+
+    func testProfilePhotoCropNormalizesOrientationAndStripsMetadata() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:180,height:120),format:format)
+        let upright=renderer.image{context in
+            UIColor.systemOrange.setFill();context.fill(CGRect(x:0,y:0,width:90,height:120))
+            UIColor.systemBlue.setFill();context.fill(CGRect(x:90,y:0,width:90,height:120))
+        }
+        let oriented=UIImage(cgImage:try XCTUnwrap(upright.cgImage),scale:1,orientation:.right)
+        let jpeg=try XCTUnwrap(WProfilePhotoPolicy.encode(image:oriented,crop:CGRect(origin:.zero,size:oriented.size)))
+        let source=try XCTUnwrap(CGImageSourceCreateWithData(jpeg as CFData,nil))
+        let properties=CGImageSourceCopyPropertiesAtIndex(source,0,nil) as? [CFString:Any] ?? [:]
+        let dimensions=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
+        XCTAssertEqual(dimensions.width,1_024);XCTAssertEqual(dimensions.height,1_024)
+        XCTAssertTrue(dimensions.type.conforms(to:.jpeg))
+        XCTAssertNil(properties[kCGImagePropertyOrientation])
+        let exif=properties[kCGImagePropertyExifDictionary] as? [CFString:Any] ?? [:]
+        XCTAssertTrue(Set(exif.keys.map{String(describing:$0)}).isSubset(of:["ColorSpace","PixelXDimension","PixelYDimension"]))
+        XCTAssertNil(properties[kCGImagePropertyTIFFDictionary])
+        XCTAssertNil(properties[kCGImagePropertyGPSDictionary])
+        XCTAssertLessThanOrEqual(jpeg.count,2_000_000)
+    }
+
+    func testProfilePhotoInspectsBytesBeforeDecodeAndSanitizesStoredPhotos() throws {
+        let format=UIGraphicsImageRendererFormat.default();format.scale=1
+        let renderer=UIGraphicsImageRenderer(size:CGSize(width:256,height:256),format:format)
+        let image=renderer.image{context in
+            UIColor.systemIndigo.setFill();context.fill(CGRect(x:0,y:0,width:256,height:256))
+        }
+        let jpeg=try XCTUnwrap(image.jpegData(compressionQuality:0.8))
+        let png=try XCTUnwrap(image.pngData())
+        let jpegInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(jpeg))
+        XCTAssertTrue(jpegInfo.type.conforms(to:.jpeg))
+        XCTAssertEqual(jpegInfo.width,256);XCTAssertEqual(jpegInfo.height,256)
+        let pngInfo=try XCTUnwrap(WProfilePhotoPolicy.inspect(png))
+        XCTAssertTrue(pngInfo.type.conforms(to:.png))
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(jpeg),jpeg)
+        XCTAssertEqual(WProfilePhotoPolicy.sanitizeStored(png),png)
+        let directory=FileManager.default.temporaryDirectory
+        let validURL=directory.appendingPathComponent(UUID().uuidString)
+        let invalidURL=directory.appendingPathComponent(UUID().uuidString)
+        let oversizedURL=directory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:validURL);try? FileManager.default.removeItem(at:invalidURL);try? FileManager.default.removeItem(at:oversizedURL)}
+        try jpeg.write(to:validURL)
+        try Data([0,1,2,3,4]).write(to:invalidURL)
+        try Data(repeating:0,count:WProfilePhotoPolicy.maximumInputBytes+1).write(to:oversizedURL)
+        XCTAssertEqual(try WProfilePhotoPolicy.validatedBytes(at:validURL),jpeg)
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:invalidURL))
+        XCTAssertThrowsError(try WProfilePhotoPolicy.validatedBytes(at:oversizedURL))
+        XCTAssertNil(WProfilePhotoPolicy.inspect(Data([0,1,2,3,4])))
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(Data(repeating:0,count:WProfilePhotoPolicy.maximumOutputBytes+1)))
+        let large=UIGraphicsImageRenderer(size:CGSize(width:512,height:512),format:format).image{_ in UIColor.black.setFill();UIRectFill(CGRect(x:0,y:0,width:512,height:512))}
+        XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(large.jpegData(compressionQuality:0.8)))
+    }
+
+    @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = WPointsStore(defaults: defaults)
+        let product = WPointProduct.catalog[0]
+        let startingBalance = store.balance
+        XCTAssertTrue(store.canPurchase(product))
+        XCTAssertTrue(store.purchase(product, at: Date(timeIntervalSince1970: 1_800_000_000)))
+        XCTAssertEqual(store.balance, startingBalance - product.price)
+        XCTAssertTrue(store.ownedItemIDs.contains(product.id))
+        XCTAssertEqual(store.entries.first?.amount, -product.price)
+        XCTAssertFalse(store.canPurchase(product), "An owned sample item cannot be purchased twice")
+        let balanceAfterPurchase = store.balance
+        let entriesAfterPurchase = store.entries
+        XCTAssertFalse(store.purchase(product), "A repeated local purchase must not mutate state")
+        XCTAssertEqual(store.balance, balanceAfterPurchase)
+        XCTAssertEqual(store.entries, entriesAfterPurchase)
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.balance, store.balance)
+        XCTAssertTrue(reloaded.ownedItemIDs.contains(product.id))
+        XCTAssertEqual(reloaded.entries.first?.title, product.name)
+    }
+
+    @MainActor func testPointStoreRejectsInsufficientLocalPurchase() {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = WPointsStore(defaults: defaults, insufficientFixture: true)
+        let product = WPointProduct.catalog[0]
+        let originalEntries = store.entries
+        XCTAssertFalse(store.canPurchase(product))
+        XCTAssertFalse(store.purchase(product))
+        XCTAssertEqual(store.balance, 100)
+        XCTAssertEqual(store.entries, originalEntries)
+        XCTAssertFalse(store.ownedItemIDs.contains(product.id))
+    }
+
+    @MainActor func testPointStoreMigratesV1WithoutLosingBalanceHistoryOrLegacyOwnership() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let entryID = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let oldState = V1PointsFixture(
+            balance: 3_275,
+            entries: [
+                V1PointEntryFixture(id: entryID, title: "로컬 예시 구매 · 새벽빛 샤드", amount: -500, date: date),
+                V1PointEntryFixture(id: UUID(), title: "예시 적립", amount: 1_000, date: date.addingTimeInterval(-86_400))
+            ],
+            owned: ["dawn", "forest"]
+        )
+        let v1Data = try JSONEncoder().encode(oldState)
+        defaults.set(v1Data, forKey: "mov.points.local.v1")
+
+        let migrated = WPointsStore(defaults: defaults)
+        XCTAssertFalse(migrated.dataUnavailable)
+        XCTAssertEqual(migrated.balance, oldState.balance)
+        XCTAssertEqual(migrated.entries.map(\.id), oldState.entries.map(\.id))
+        XCTAssertEqual(migrated.entries.map(\.title), oldState.entries.map(\.title))
+        XCTAssertEqual(migrated.entries.map(\.amount), oldState.entries.map(\.amount))
+        XCTAssertEqual(migrated.entries.map(\.date), oldState.entries.map(\.date))
+        XCTAssertEqual(migrated.entries.map(\.detail), ["사용 내역", "적립 내역"])
+        XCTAssertEqual(migrated.ownedItemIDs, ["legacy.v1.dawn", "legacy.v1.forest"])
+        XCTAssertFalse(migrated.ownedItemIDs.contains("dawn"), "A v1 product ID must not mark a different v2 product as owned")
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), v1Data, "Migration keeps the old value as a recoverable source")
+        XCTAssertNotNil(defaults.data(forKey: "mov.points.local.v2"))
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.balance, oldState.balance)
+        XCTAssertEqual(reloaded.entries.map(\.id), oldState.entries.map(\.id))
+        XCTAssertEqual(reloaded.ownedItemIDs, migrated.ownedItemIDs)
+    }
+
+    @MainActor func testPointStorePrefersExistingV2OverStaleV1() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let current = WPointsStore(defaults: defaults)
+        let v2Data = try XCTUnwrap(defaults.data(forKey: "mov.points.local.v2"))
+        let staleV1 = try JSONEncoder().encode(V1PointsFixture(balance: 9_999, entries: [], owned: ["forest"]))
+        defaults.set(staleV1, forKey: "mov.points.local.v1")
+
+        let reloaded = WPointsStore(defaults: defaults)
+        XCTAssertFalse(reloaded.dataUnavailable)
+        XCTAssertEqual(reloaded.balance, current.balance)
+        XCTAssertEqual(reloaded.entries, current.entries)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v2"), v2Data)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), staleV1)
+    }
+
+    @MainActor func testPointStorePreservesCorruptDataAndDisablesMutation() throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let corruptV2 = Data([0x00, 0xFF, 0x7B, 0x01])
+        let validV1 = try JSONEncoder().encode(V1PointsFixture(balance: 2_222, entries: [], owned: ["dawn"]))
+        defaults.set(corruptV2, forKey: "mov.points.local.v2")
+        defaults.set(validV1, forKey: "mov.points.local.v1")
+
+        let store = WPointsStore(defaults: defaults)
+        XCTAssertTrue(store.dataUnavailable)
+        XCTAssertEqual(store.balance, 0)
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertTrue(store.ownedItemIDs.isEmpty)
+        let product = WPointProduct.catalog[0]
+        XCTAssertFalse(store.canPurchase(product))
+        XCTAssertFalse(store.purchase(product))
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v2"), corruptV2)
+        XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), validV1)
+
+        let secondSuite = "MovTests." + UUID().uuidString
+        let secondDefaults = UserDefaults(suiteName: secondSuite)!
+        defer { secondDefaults.removePersistentDomain(forName: secondSuite) }
+        let corruptV1 = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        secondDefaults.set(corruptV1, forKey: "mov.points.local.v1")
+        let legacyStore = WPointsStore(defaults: secondDefaults)
+        XCTAssertTrue(legacyStore.dataUnavailable)
+        XCTAssertEqual(legacyStore.balance, 0)
+        XCTAssertTrue(legacyStore.entries.isEmpty)
+        XCTAssertEqual(secondDefaults.data(forKey: "mov.points.local.v1"), corruptV1)
+        XCTAssertNil(secondDefaults.data(forKey: "mov.points.local.v2"))
+    }
+
+    func testThemeMappingAndBrand() {
+        XCTAssertNil(ThemePreference.system.colorScheme)
+        XCTAssertEqual(ThemePreference.light.colorScheme,.light)
+        XCTAssertEqual(ThemePreference.dark.colorScheme,.dark)
+        XCTAssertEqual(MovTokens.brandHex,0x5EF76D)
+        XCTAssertNotNil(UIFont(name:"PretendardVariable-Regular",size:16))
+        XCTAssertNotNil(UIFont(name:"Cafe24Ssurround",size:29))
+        XCTAssertEqual(RunGoal.duration(90),"1시간 30분")
+        XCTAssertEqual(RunRecord.clock(8625),"143:45")
+        for name in ["Regular","Medium","SemiBold","Bold"]{XCTAssertNotNil(UIFont(name:"PretendardVariable-"+name,size:17))}
+        XCTAssertEqual(RunGoal(kind:.distance,kilometers:1.5).summary,"1.5 km 달리기")
+        let legacy=Data(#"{"kind":"distance","kilometers":5,"minutes":30}"#.utf8)
+        XCTAssertEqual(try? JSONDecoder().decode(RunGoal.self,from:legacy).kilometers,5)
+        XCTAssertEqual(RunGoal.duration(360),"6시간")
+        XCTAssertEqual(RunGoal.duration(6000),"100시간")
+        XCTAssertEqual(WeeklyGoal.percent(value:23,goal:20),115)
+        XCTAssertEqual(WeeklyGoal.percent(value:0,goal:20),0)
+        XCTAssertEqual(WeeklyGoal.percent(value:4.82,goal:20),24)
+    }
+    @MainActor func testReview52GoalWheelColorsFollowComputedThemeTokens() {
+        func hex(_ color:Color,style:UIUserInterfaceStyle)->UInt32 {
+            let resolved=UIColor(color).resolvedColor(with:UITraitCollection(userInterfaceStyle:style))
+            var red:CGFloat=0,green:CGFloat=0,blue:CGFloat=0,alpha:CGFloat=0
+            XCTAssertTrue(resolved.getRed(&red,green:&green,blue:&blue,alpha:&alpha))
+            return UInt32((red*255).rounded())<<16 | UInt32((green*255).rounded())<<8 | UInt32((blue*255).rounded())
+        }
+        XCTAssertEqual(hex(W.line,style:.light),0xE5E5E5)
+        XCTAssertEqual(hex(W.line,style:.dark),0x3A3A3A)
+        XCTAssertEqual(hex(W.soft,style:.light),0xF7F7F7)
+        XCTAssertEqual(hex(W.soft,style:.dark),0x262626)
+        XCTAssertEqual(hex(W.muted,style:.light),0x686868)
+        XCTAssertEqual(hex(W.muted,style:.dark),0xB0B0B0)
+        let goalFieldHint=Color.wire(0x535353,0xD0D0D0)
+        XCTAssertEqual(hex(goalFieldHint,style:.light),0x535353)
+        XCTAssertEqual(hex(goalFieldHint,style:.dark),0xD0D0D0)
+    }
+    @MainActor func testPauseResumeAndSavedRecordSurviveReload() {
+        let suite="MovTests."+UUID().uuidString
+        let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let store=RunStore(defaults:defaults)
+        XCTAssertTrue(store.records.isEmpty,"New local profiles must not receive fabricated running records")
+        let start=Date(timeIntervalSince1970:1000)
+        store.start(at:start)
+        store.pause(at:start.addingTimeInterval(120))
+        XCTAssertEqual(store.session!.elapsed(at:start.addingTimeInterval(500)),120)
+        store.resume(at:start.addingTimeInterval(500))
+        let record=store.finish(save:true,at:start.addingTimeInterval(740))!
+        XCTAssertEqual(record.seconds,360)
+        XCTAssertEqual(record.kilometers,0,"Unconnected GPS must never fabricate distance")
+        XCTAssertNil(record.pointReward,"Local demo saves do not invent a server reward request")
+        let countAfterSave=store.records.count
+        XCTAssertNil(store.finish(save:true,at:start.addingTimeInterval(741)))
+        XCTAssertEqual(store.records.count,countAfterSave,"Repeated save must not duplicate a record")
+        let reloaded=RunStore(defaults:defaults)
+        XCTAssertNil(reloaded.session)
+        XCTAssertEqual(reloaded.records.first?.id,record.id)
+        XCTAssertNil(reloaded.records.first?.pointReward)
+        reloaded.delete(record.id)
+        XCTAssertFalse(RunStore(defaults:defaults).records.contains{$0.id==record.id})
+    }
+    @MainActor func testZeroDistanceInvalidAndDiscardDoesNotSave() {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let store=RunStore(defaults:defaults);let count=store.records.count;let start=Date()
+        store.start(at:start)
+        XCTAssertNil(store.finish(save:true,at:start),"An empty session must not create a record")
+        let record=store.finish(save:true,at:start.addingTimeInterval(60))!
+        XCTAssertFalse(record.isValid);XCTAssertEqual(record.kilometers,0);XCTAssertEqual(record.pace,"0:00")
+        store.start(at:start);store.finish(save:false,at:start.addingTimeInterval(100))
+        XCTAssertEqual(store.records.count,count+1)
+    }
+    @MainActor func testRunUploadIdentityIsPinnedAtStartAndDifferentOwnerCannotDrain() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let sender=RunStoreUploadSenderFake()
+        let session=RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-B",accessToken:"fake-token-B"))
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:session,
+            uploader:sender
+        )
+        let identity=RunStoreUploadIdentityFake(memberID:"member-A")
+        let ownedRecords=RunStoreOwnedRecordsFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadQueue:outbox,uploadDrainer:outbox,ownedRecordsPersistence:ownedRecords)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+        XCTAssertEqual(store.session?.uploadOwnerID,"member-A")
+
+        identity.memberID="member-B"
+        store.session?.distance=1.25
+        let endedAt=startedAt.addingTimeInterval(120.75)
+        let finished=await store.finishAndEnqueue(save:true,at:endedAt)
+        let record=try XCTUnwrap(finished)
+        XCTAssertEqual(record.clientRunID,clientRunID)
+        XCTAssertEqual(record.uploadOwnerID,"member-A")
+        let payload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(payload.clientRunID,clientRunID)
+        XCTAssertEqual(payload.startedAt,startedAt)
+        XCTAssertEqual(payload.endedAt,endedAt)
+        XCTAssertEqual(payload.movingSeconds,120)
+        XCTAssertEqual(payload.distanceMeters,1_250)
+        XCTAssertTrue(payload.points.isEmpty)
+        XCTAssertTrue(payload.pauses.isEmpty)
+
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.envelope.ownerID,"member-A")
+        XCTAssertEqual(entries.first?.envelope.payload,payload)
+        let drainResult=await store.drainPendingRunUploads()
+        XCTAssertEqual(drainResult,.ownerMismatch,"The app boundary cannot drain a run owned by the member captured at its start after the account changes")
+        let sent=await sender.uploadedPayloads()
+        XCTAssertTrue(sent.isEmpty,"Member B must not send member A's run")
+    }
+    @MainActor func testRunUploadDrainRequiresAnAuthenticatedMemberIdentity() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let drainer=RunStoreUploadDrainerFake()
+        let store=RunStore(defaults:defaults,uploadDrainer:drainer,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
+
+        let result=await store.drainPendingRunUploads()
+
+        XCTAssertEqual(result,.authenticationUnavailable,"No identity provider must never be treated as a successful drain")
+        let calls=await drainer.callCount()
+        XCTAssertEqual(calls,0,"The outbox is not called without an authenticated member ID")
+    }
+    @MainActor func testRunUploadDrainIgnoresLateResultsAfterLogoutOrAccountChangeAndBlocksDuplicates() async throws {
+        for nextMemberID in [String?.none, "member-B"] {
+            let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+            defer{defaults.removePersistentDomain(forName:suite)}
+            let identity=RunStoreUploadIdentityFake(memberID:"member-A")
+            let drainer=RunStoreUploadDrainerFake(suspends:true)
+            let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadDrainer:drainer,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
+            let pending=Task { await store.drainPendingRunUploads() }
+            await drainer.waitForCalls(1)
+
+            let duplicate=await store.drainPendingRunUploads()
+            XCTAssertEqual(duplicate,.alreadyRunning,"A second manual call is rejected while the first is pending")
+            identity.memberID=nextMemberID
+            await drainer.complete(RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished))
+
+            let lateResult=await pending.value
+            XCTAssertEqual(lateResult,.ignored,"Logout and account changes invalidate a late report")
+        }
+    }
+    @MainActor func testRunUploadDrainCancellationIgnoresLateReport() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let identity=RunStoreUploadIdentityFake(memberID:"member-A")
+        let drainer=RunStoreUploadDrainerFake(suspends:true)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadDrainer:drainer,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
+        let pending=Task { await store.drainPendingRunUploads() }
+        await drainer.waitForCalls(1)
+
+        store.cancelPendingRunUploadDrain()
+        await drainer.complete(RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished))
+
+        let lateResult=await pending.value
+        XCTAssertEqual(lateResult,.ignored,"A cancelled operation cannot surface its later completion")
+    }
+    @MainActor func testRunUploadDrainAckWriteFailureKeepsCanonicalRecordAndRetriesSameClientRunID() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let sender=RunStoreUploadSenderFake()
+        let outbox=try RunUploadOutbox(
+            persistence:FailSecondRunUploadOutboxWrite(),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:sender
+        )
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            uploadDrainer:outbox,
+            ownedRecordsPersistence:ownedRecords
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+        let clientRunID=try XCTUnwrap(completed.clientRunID)
+
+        let firstDrain=await store.drainPendingRunUploads()
+        XCTAssertEqual(firstDrain,.retryableAcknowledgementFailure)
+        let canonicalAfterAckFailure=try XCTUnwrap(ownedRecords.loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(canonicalAfterAckFailure.id,completed.id)
+        XCTAssertEqual(canonicalAfterAckFailure.uploadPayload?.clientRunID,clientRunID)
+        let outboxAfterAckFailure=try await outbox.snapshot()
+        XCTAssertEqual(outboxAfterAckFailure.first?.envelope.payload.clientRunID,clientRunID,"Failed acknowledgement persistence leaves the same queued id pending")
+
+        let secondDrain=await store.drainPendingRunUploads()
+        XCTAssertEqual(secondDrain,.completed(uploadedCount:1,deletedCount:0))
+        let sent=await sender.uploadedPayloads()
+        XCTAssertEqual(sent.map(\.clientRunID),[clientRunID,clientRunID],"The accepted upload is retried with the same id after its local acknowledgement failed")
+        let canonicalAfterRetry=try XCTUnwrap(ownedRecords.loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(canonicalAfterRetry.id,completed.id,"Server acknowledgement never removes the canonical completion record")
+        XCTAssertEqual(canonicalAfterRetry.uploadPayload?.clientRunID,clientRunID)
+    }
+    @MainActor func testRunUploadDrainReportsPermanentDeliveryFailureAndRetainsCanonicalRecord() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let outboxFile=directory.appendingPathComponent("outbox.json")
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let sender=RunStoreUploadSenderFake(delivery:.terminal(code:"INVALID_LOCAL_PAYLOAD"))
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:outboxFile),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:sender
+        )
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            uploadDrainer:outbox,
+            ownedRecordsPersistence:ownedRecords
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+
+        let result=await store.drainPendingRunUploads()
+
+        XCTAssertEqual(result,.permanentFailure(count:1,uploadedCount:0,deletedCount:0))
+        let canonical=try ownedRecords.loadSnapshot().canonicalRecords
+        XCTAssertEqual(canonical.first?.id,completed.id)
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.first?.state,.terminal(code:"INVALID_LOCAL_PAYLOAD"))
+
+        let repeatedResult=await store.drainPendingRunUploads()
+        XCTAssertEqual(repeatedResult,.permanentFailure(count:1,uploadedCount:0,deletedCount:0),"The same store must continue reporting a persisted terminal outcome")
+        let repeatedUploads=await sender.uploadedPayloads()
+        XCTAssertEqual(repeatedUploads.count,1,"A terminal payload is not transmitted again on a later manual drain")
+
+        let restartedSender=RunStoreUploadSenderFake()
+        let restartedOutbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:outboxFile),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:restartedSender
+        )
+        let restartedStore=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadDrainer:restartedOutbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        let afterRestart=await restartedStore.drainPendingRunUploads()
+        XCTAssertEqual(afterRestart,.permanentFailure(count:1,uploadedCount:0,deletedCount:0),"The terminal result survives outbox and RunStore recreation")
+        let restartedUploads=await restartedSender.uploadedPayloads()
+        XCTAssertTrue(restartedUploads.isEmpty,"A restarted store does not automatically resend a terminal item")
+        let canonicalAfterRestart=try FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords
+        XCTAssertEqual(canonicalAfterRestart.first?.id,completed.id)
+    }
+    @MainActor func testRunUploadDrainReportsRetryableDeliveryAndKeepsThePendingClientRunID() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let sender=RunStoreUploadSenderFake(delivery:.retryLater(code:"TEMPORARY_UNAVAILABLE"))
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:sender
+        )
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            uploadDrainer:outbox,
+            ownedRecordsPersistence:ownedRecords
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+        let clientRunID=try XCTUnwrap(completed.clientRunID)
+
+        let result=await store.drainPendingRunUploads()
+
+        XCTAssertEqual(result,.retryableFailure(clientRunID:clientRunID,code:"TEMPORARY_UNAVAILABLE",uploadedCount:0,deletedCount:0,permanentFailureCount:0))
+        let canonical=try ownedRecords.loadSnapshot().canonicalRecords
+        XCTAssertEqual(canonical.first?.id,completed.id)
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.first?.state,.pending)
+        XCTAssertEqual(entries.first?.envelope.payload.clientRunID,clientRunID)
+    }
+    @MainActor func testDuplicateRunCompletionAndRecoveryKeepOneImmutablePayload() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let ownedRecords=RunStoreOwnedRecordsFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=2.5
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(641.9))
+        let record=try XCTUnwrap(finished)
+        let originalPayload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(record.uploadEnqueued,true)
+        let duplicate=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(642))
+        XCTAssertNil(duplicate)
+
+        var edited=record
+        edited.title="수정한 로컬 제목"
+        edited.uploadOwnerID="member-B"
+        edited.clientRunID=UUID()
+        edited.uploadPayload=nil
+        edited.uploadEnqueued=false
+        store.update(edited)
+        let restarted=RunStore(defaults:defaults,uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
+        await restarted.recoverPendingRunUploads()
+
+        let entries=await queue.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.payload,originalPayload)
+        XCTAssertEqual(entries.first?.payload.title,record.title)
+        XCTAssertEqual(entries.first?.ownerID,"member-A")
+        XCTAssertEqual(restarted.records.first?.title,"수정한 로컬 제목")
+        XCTAssertEqual(restarted.records.first?.uploadPayload,originalPayload)
+        XCTAssertEqual(restarted.records.first?.uploadOwnerID,"member-A")
+        XCTAssertEqual(restarted.records.first?.clientRunID,originalPayload.clientRunID)
+        XCTAssertEqual(restarted.records.first?.uploadEnqueued,true)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,1,"An already-enqueued immutable payload is not queued again on recovery")
+    }
+    @MainActor func testRunStoreSaveFailurePreservesStartedRunAndDoesNotEnqueue() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+        store.session?.accumulated = .infinity
+
+        let failed=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(60))
+        XCTAssertNil(failed)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertNotNil(store.session)
+        XCTAssertNotNil(store.storageMessage)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0)
+
+        let restarted=RunStore(defaults:defaults)
+        XCTAssertEqual(restarted.session?.clientRunID,clientRunID)
+        XCTAssertEqual(restarted.session?.uploadOwnerID,"member-A")
+        XCTAssertTrue(restarted.records.isEmpty)
+    }
+    @MainActor func testCanonicalOwnedRecordsWriteFailureKeepsSessionAndMeasurementsWithoutSuccess() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let ownedRecords=RunStoreOwnedRecordsFake(failNextSave:true)
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:ownedRecords)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        var active=try XCTUnwrap(store.session)
+        active.segmentStart=nil
+        active.accumulated=180
+        active.distance=1.25
+        store.session=active
+        XCTAssertTrue(store.persist(),"The active measurement snapshot is stored before trying to complete the run")
+        let clientRunID=try XCTUnwrap(active.clientRunID)
+
+        let failed=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        XCTAssertNil(failed,"A recovery-source write failure must not report a saved completion")
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertEqual(store.session?.clientRunID,clientRunID)
+        XCTAssertEqual(store.session?.distance,1.25)
+        XCTAssertEqual(store.session?.accumulated,180)
+        XCTAssertNotNil(store.storageMessage)
+        XCTAssertTrue(ownedRecords.canonicalRecords.isEmpty)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0)
+
+        let restarted=RunStore(defaults:defaults,ownedRecordsPersistence:ownedRecords)
+        XCTAssertEqual(restarted.session?.clientRunID,clientRunID)
+        XCTAssertEqual(restarted.session?.distance,1.25)
+        XCTAssertEqual(restarted.session?.accumulated,180)
+        XCTAssertTrue(restarted.records.isEmpty)
+    }
+    @MainActor func testFailedOutboxWriteRecoversAfterRestartWithoutClaimingOwnerlessRecords() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let ownedRecords=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let failedQueue=RunStoreUploadQueueFake(failFirstWrite:true)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:failedQueue,ownedRecordsPersistence:ownedRecords)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        let legacy=RunRecord(date:startedAt,title:"owner 없는 기존 기록",seconds:90,kilometers:1.1)
+        store.records.append(legacy)
+        XCTAssertTrue(store.persist())
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let record=try XCTUnwrap(finished)
+        let payload=try XCTUnwrap(record.uploadPayload)
+        XCTAssertEqual(record.uploadEnqueued,false,"The outbox failure does not mark the durable recovery snapshot as queued")
+        let attempts=await failedQueue.attemptCount()
+        XCTAssertEqual(attempts,1)
+        let canonicalSource=try XCTUnwrap(ownedRecords.loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(canonicalSource.uploadPayload,payload,"The permanent local record remains after the outbox write fails")
+        let sender=RunStoreUploadSenderFake()
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-B",accessToken:"fake-token-B")),
+            uploader:sender
+        )
+        let restarted=RunStore(defaults:defaults,uploadQueue:outbox,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        XCTAssertEqual(restarted.records.first(where:{$0.id==record.id})?.uploadEnqueued,false)
+        await restarted.recoverPendingRunUploads()
+
+        let entries=try await outbox.snapshot()
+        XCTAssertEqual(entries.count,1)
+        XCTAssertEqual(entries.first?.envelope.ownerID,"member-A")
+        XCTAssertEqual(entries.first?.envelope.payload,payload)
+        XCTAssertEqual(restarted.records.first(where:{$0.id==record.id})?.uploadEnqueued,true)
+        XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadOwnerID)
+        XCTAssertNil(restarted.records.first(where:{$0.id==legacy.id})?.uploadPayload)
+        XCTAssertEqual(restarted.records.first(where:{$0.id==legacy.id}),legacy,"Legacy ownerless history remains unchanged")
+        let stillCanonical=try XCTUnwrap(FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords.first)
+        XCTAssertEqual(stillCanonical.uploadEnqueued,true,"Outbox acceptance updates the permanent local record instead of deleting it")
+        let report=try await outbox.drain()
+        XCTAssertEqual(report.stopReason,.ownerMismatch)
+        let sent=await sender.uploadedPayloads()
+        XCTAssertTrue(sent.isEmpty)
+    }
+    @MainActor func testUnknownRunDistanceDoesNotCreateOrEnqueueMeasurements() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let queue=RunStoreUploadQueueFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:queue,ownedRecordsPersistence:RunStoreOwnedRecordsFake())
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        let finished=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(60))
+        let record=try XCTUnwrap(finished)
+        XCTAssertEqual(record.kilometers,0)
+        XCTAssertNotNil(record.clientRunID)
+        XCTAssertEqual(record.uploadOwnerID,"member-A")
+        XCTAssertNil(record.uploadPayload)
+        let attempts=await queue.attemptCount()
+        XCTAssertEqual(attempts,0,"No distance is synthesized from the local timer")
+    }
+
+    @MainActor func testCanonicalOwnerRecordSurvivesEmptyOutboxAndStaleDefaultsRollback() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
+            uploader:RunStoreUploadSenderFake()
+        )
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
+            uploadQueue:outbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        XCTAssertTrue(store.persist())
+        let staleActiveSession=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+        let clientRunID=try XCTUnwrap(store.session?.clientRunID)
+
+        let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completionResult)
+        XCTAssertEqual(completed.clientRunID,clientRunID)
+        XCTAssertEqual(completed.uploadEnqueued,true)
+        let queuedBeforeDrain=try await outbox.snapshot()
+        XCTAssertEqual(queuedBeforeDrain.count,1)
+        let delivery=try await outbox.drain()
+        XCTAssertEqual(delivery.stopReason,.finished)
+        let queuedAfterDrain=try await outbox.snapshot()
+        XCTAssertEqual(queuedAfterDrain,[])
+
+        // Simulate a delayed rollback of the cache to the serialized active-session snapshot.
+        defaults.set(staleActiveSession,forKey:"mov.demo.v1")
+        let restarted=RunStore(
+            defaults:defaults,
+            uploadQueue:outbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        )
+        XCTAssertNil(restarted.session,"A completed clientRunID in canonical storage suppresses stale active-session restoration")
+        XCTAssertEqual(restarted.records.first?.id,completed.id)
+        XCTAssertEqual(restarted.records.first?.uploadPayload,completed.uploadPayload)
+        await restarted.recoverPendingRunUploads()
+        let queuedAfterRecovery=try await outbox.snapshot()
+        XCTAssertEqual(queuedAfterRecovery,[],"An empty acknowledged outbox is not repopulated from stale UserDefaults")
+    }
+
+    @MainActor func testCanonicalOwnerEditsAndDeletesWinOverStaleDefaults() throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let persistence=FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile)
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),ownedRecordsPersistence:persistence)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        let ownerless=RunRecord(date:startedAt,title:"기존 회원 미지정 기록",seconds:90,kilometers:1.1)
+        store.records.append(ownerless)
+        XCTAssertTrue(store.persist())
+        XCTAssertTrue(store.start(at:startedAt))
+        store.session?.distance=1.25
+        let original=try XCTUnwrap(store.finish(save:true,at:startedAt.addingTimeInterval(180)))
+        let staleBeforeEdit=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+
+        var edited=original
+        edited.title="수정한 로컬 제목"
+        edited.memo="수정한 메모"
+        store.update(edited)
+        defaults.set(staleBeforeEdit,forKey:"mov.demo.v1")
+        let afterEdit=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        let restoredEdit=try XCTUnwrap(afterEdit.records.first(where:{$0.id==original.id}))
+        XCTAssertEqual(restoredEdit.title,"수정한 로컬 제목")
+        XCTAssertEqual(restoredEdit.memo,"수정한 메모")
+        XCTAssertEqual(restoredEdit.uploadPayload?.title,original.uploadPayload?.title,"The saved payload remains immutable when local display fields change")
+        XCTAssertEqual(afterEdit.records.first(where:{$0.id==ownerless.id}),ownerless,"Ownerless history remains unchanged")
+        let staleBeforeDelete=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+
+        afterEdit.delete(original.id)
+        XCTAssertFalse(afterEdit.records.contains(where:{$0.id==original.id}))
+        defaults.set(staleBeforeDelete,forKey:"mov.demo.v1")
+        let afterDelete=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        XCTAssertFalse(afterDelete.records.contains(where:{$0.id==original.id}),"An authoritative empty canonical snapshot prevents a deleted row from returning")
+        XCTAssertEqual(afterDelete.records.first(where:{$0.id==ownerless.id}),ownerless)
+        XCTAssertEqual(try FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile).loadSnapshot().canonicalRecords,[])
+    }
+
+    @MainActor func testCorruptCanonicalOwnedRecordsArePreservedAndMutationsAreBlocked() throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
+        let seed=RunStore(defaults:defaults,ownedRecordsPersistence:RunStoreOwnedRecordsFake(snapshot:.canonical([])))
+        let date=Date(timeIntervalSince1970:1_791_233_400)
+        let ownerless=RunRecord(date:date,title:"기존 기록",seconds:90,kilometers:1)
+        let owned=RunRecord(date:date,title:"회원 기록",seconds:120,kilometers:1.25,uploadOwnerID:"member-A",clientRunID:UUID())
+        seed.records=[owned,ownerless]
+        XCTAssertTrue(seed.persist())
+        let defaultsBeforeLoad=try XCTUnwrap(defaults.data(forKey:"mov.demo.v1"))
+        let corruptBytes=Data("{not valid canonical json".utf8)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        try corruptBytes.write(to:canonicalFile,options:.atomic)
+
+        let restarted=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalFile))
+        XCTAssertNotNil(restarted.storageMessage)
+        XCTAssertEqual(restarted.records,[owned,ownerless])
+        var changed=owned
+        changed.title="덮어쓰면 안 되는 수정"
+        restarted.update(changed)
+        restarted.delete(ownerless.id)
+        XCTAssertEqual(restarted.records,[owned,ownerless],"Corrupt canonical storage blocks edits and deletes")
+        XCTAssertEqual(defaults.data(forKey:"mov.demo.v1"),defaultsBeforeLoad,"Loading corrupt canonical data does not rewrite the UserDefaults cache")
+        XCTAssertEqual(try Data(contentsOf:canonicalFile),corruptBytes,"Corrupt canonical bytes are retained for recovery")
+    }
+
+    @MainActor func testTierRequiresDistanceAndDistinctQualifyingDays() {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let store=RunStore(defaults:defaults);store.records=[]
+        XCTAssertEqual(store.tier,"등급 없음")
+        let day=Calendar.current.startOfDay(for:Date())
+        store.records=[RunRecord(date:day,title:"fixture",seconds:120,kilometers:0.5),RunRecord(date:day,title:"fixture",seconds:120,kilometers:0.5)]
+        XCTAssertEqual(store.activityDays,1)
+        store.records=(0..<7).map{RunRecord(date:Calendar.current.date(byAdding:.day,value:-$0,to:day)!,title:"fixture",seconds:720,kilometers:2)}
+        XCTAssertEqual(store.tier,"새싹")
+        store.records=[RunRecord(date:day,title:"fixture",seconds:3600,kilometers:300)]
+        XCTAssertEqual(store.tier,"시작")
+    }
+    @MainActor func testExplicitSegmentsAndMissingData(){
+        let original=[RunSegment(distance:1,seconds:378),RunSegment(distance:1,seconds:369),RunSegment(distance:1,seconds:386),RunSegment(distance:1,seconds:370),RunSegment(distance:0.82,seconds:305)]
+        var record=RunRecord(date:Date(),title:"원본 구간",seconds:1808,kilometers:4.82,segments:original)
+        let points=WPaceChart(record:record).points
+        XCTAssertEqual(points.count,5);XCTAssertEqual(points.last!.end,4.82,accuracy:0.00001)
+        XCTAssertEqual(points.last!.pace,305/0.82,accuracy:0.00001)
+        record.segments=nil;XCTAssertTrue(WPaceChart(record:record).points.isEmpty)
+        record.segments=[original[0],RunSegment(distance:0,seconds:30,type:"gps-gap",reason:"누락 거리 추정 안 함"),original[1]]
+        let separated=WPaceChart(record:record).points
+        XCTAssertNotEqual(separated[0].group,separated[1].group)
+        XCTAssertEqual(separated.last!.end,2)
+    }
+
+    func testStatisticsSeparateValidRunCountAndTimeAndKeepZeroVisible() {
+        let valid=RunRecord(date:Date(),title:"valid",seconds:1808,kilometers:4.82)
+        let invalid=RunRecord(date:Date(),title:"invalid",seconds:312,kilometers:0,segments:[RunSegment(distance:0,seconds:312,type:"gps-gap",reason:"GPS 수신 실패 예시")])
+        let summary=RunPeriodSummary(records:[valid,invalid])
+        XCTAssertEqual(summary.recordCount,1)
+        XCTAssertEqual(summary.kilometers,4.82,accuracy:0.00001)
+        XCTAssertEqual(summary.seconds,1808)
+        XCTAssertEqual(RunPeriodSummary(records:[invalid]).recordCount,0)
+        XCTAssertEqual(MovNumber.display(RunPeriodSummary(records:[invalid]).kilometers),"0")
+        XCTAssertEqual(RunRecord.clock(RunPeriodSummary(records:[invalid]).seconds),"00:00")
+        XCTAssertEqual(invalid.caloriesText,"0 kcal")
+    }
+
+    func testReview52StatisticsPrecisionAndReferenceWeekCopy() {
+        let reference=ISO8601DateFormatter().date(from:"2026-10-01T12:00:00+09:00")!
+        let seoul=TimeZone(identifier:"Asia/Seoul")!
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(0),"0.00")
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(23),"23.00")
+        XCTAssertEqual(WReview52StatisticsFormat.kilometers(.infinity),"—")
+        XCTAssertEqual(WReview52StatisticsFormat.weekDateNote(asOf:reference,timeZone:seoul),"가상 기준일은 2026년 10월 1일이에요.\n이번 주는 9월 28일~10월 4일 기록이에요.")
+    }
+
+    @MainActor func testRecentMonthlyAverageUsesValidRecordsAndShowsZero() {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let store=RunStore(defaults:defaults),now=Date(),start=Calendar.current.date(byAdding:.month,value:-1,to:now)!
+        store.records=[RunRecord(date:start,title:"at boundary",seconds:600,kilometers:2),RunRecord(date:now.addingTimeInterval(-3600),title:"recent",seconds:1200,kilometers:4),RunRecord(date:now.addingTimeInterval(-3600),title:"invalid",seconds:900,kilometers:0),RunRecord(date:now.addingTimeInterval(60),title:"future",seconds:900,kilometers:20)]
+        XCTAssertEqual(store.averageDistance(asOf:now),3,accuracy:0.00001)
+        store.records=[store.records[2]]
+        XCTAssertEqual(store.averageDistance(asOf:now),0)
+        XCTAssertEqual(MovNumber.display(store.averageDistance(asOf:now)),"0")
+    }
+
+    func testRecordValidityDetailsUseStoredReasonsWithoutGuessing() {
+        let date=Date()
+        let reasoned=RunRecord(date:date,title:"invalid",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:60,type:"gps-gap",reason:"센서 원본의 제외 사유")])
+        XCTAssertEqual(reasoned.validityDetails,["센서 원본의 제외 사유"])
+        let unlabelled=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:60,type:"gps-gap")])
+        XCTAssertEqual(unlabelled.validityDetails,["GPS 누락"])
+        let whitespaceReasons=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0,segments:[RunSegment(distance:0,seconds:30,type:"gps-gap",reason:""),RunSegment(distance:0,seconds:30,type:"custom",reason:" \n ")])
+        XCTAssertEqual(whitespaceReasons.validityDetails,["GPS 누락","유효 거리로 확인할 수 없는 구간"])
+        XCTAssertTrue(whitespaceReasons.validityDetails.allSatisfy{!$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty})
+        let noSegments=RunRecord(date:date,title:"legacy",seconds:60,kilometers:0)
+        XCTAssertEqual(noSegments.validityDetails,["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."])
+    }
+
+    func testShareElapsedFormatsMinutesAndHoursWithoutDateTimeNoise() {
+        XCTAssertEqual(ShareElapsed.string(570),"9m30s")
+        XCTAssertEqual(ShareElapsed.string(3723),"1h2m3s")
+        XCTAssertEqual(ShareGestureBounds.offset(CGSize(width:900,height:-900),canvas:CGSize(width:360,height:450)),CGSize(width:129.6,height:-144))
+        XCTAssertEqual(ShareGestureBounds.scale(9),1.8)
+        XCTAssertEqual(ShareGestureBounds.scale(0.1,minimum:0.65,maximum:1.7),0.65)
+    }
+
+    @MainActor func testShareImageInputValidationAndWorkspaceIdempotence() async throws {
+        let image=UIGraphicsImageRenderer(size:CGSize(width:12,height:12)).image{context in UIColor.systemGreen.setFill();context.fill(CGRect(x:0,y:0,width:12,height:12))}
+        let bytes=try XCTUnwrap(image.pngData())
+        XCTAssertNotNil(try ShareMediaValidation.image(bytes))
+        do { _ = try ShareMediaValidation.image(Data(repeating:0,count:20*1024*1024+1)); XCTFail("Oversize image must be rejected") }
+        catch ShareMediaError.tooLarge {}
+        do { _ = try ShareMediaValidation.image(Data([0,1,2,3])); XCTFail("Undecodable image must be rejected") }
+        catch ShareMediaError.invalidImage {}
+        let corruptMovie=FileManager.default.temporaryDirectory.appendingPathComponent("mov-corrupt-\(UUID().uuidString).mp4")
+        try Data([0,1,2,3]).write(to:corruptMovie)
+        defer{try? FileManager.default.removeItem(at:corruptMovie)}
+        do { try await ShareMediaValidation.video(corruptMovie); XCTFail("Undecodable video must be rejected") }
+        catch ShareMediaError.invalidVideo {}
+
+        let workspace=ShareWorkspace(),record=UUID()
+        let first=workspace.insertPNG(bytes,for:record)
+        let second=workspace.insertPNG(bytes,for:record)
+        XCTAssertEqual(first?.id,second?.id)
+        XCTAssertEqual(workspace.outputs[record]?.count,1)
+        XCTAssertNil(workspace.insertPNG(Data(repeating:1,count:2*1024*1024+1),for:record))
+        XCTAssertEqual(workspace.outputs[record]?.count,1,"A rejected insertion must leave the previous image available for retry")
+        workspace.clear()
+        XCTAssertEqual(workspace.outputs.count,0)
+    }
+
+    @MainActor func testShareArtifactsAreRecordScopedAndOnlyOwnedTempVideosAreRemoved() throws {
+        let workspace=ShareWorkspace(),recordA=UUID(),recordB=UUID()
+        let bytes=Data([1,2,3]),outputA=try XCTUnwrap(workspace.insertPNG(bytes,for:recordA)),outputB=try XCTUnwrap(workspace.insertPNG(bytes,for:recordB))
+        workspace.selectedOutputID=outputA.id
+        workspace.delete(outputB.id,for:recordA)
+        XCTAssertEqual(workspace.output(outputA.id,for:recordA)?.id,outputA.id,"Deleting by record A must not touch record B's image")
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id)
+        workspace.delete(outputA.id,for:recordA)
+        XCTAssertNil(workspace.output(outputA.id,for:recordA),"Deleting a share image removes exactly the selected record's artifact")
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id,"Deleting record A's image preserves record B's image")
+        let retryOutput=try XCTUnwrap(workspace.insertPNG(bytes,for:recordA));workspace.selectedOutputID=retryOutput.id
+        XCTAssertTrue(workspace.exportFailureMessage(for:retryOutput.id,record:recordA).contains("다시 시도"))
+        XCTAssertEqual(workspace.output(retryOutput.id,for:recordA)?.data,bytes,"An OS file export failure retains the in-memory output for retry")
+
+        let temp=FileManager.default.temporaryDirectory
+        let owned=temp.appendingPathComponent("mov-share-fixture-\(UUID().uuidString).mp4")
+        let source=temp.appendingPathComponent("user-source-fixture-\(UUID().uuidString).mp4")
+        try bytes.write(to:owned);try bytes.write(to:source)
+        defer{try? FileManager.default.removeItem(at:owned);try? FileManager.default.removeItem(at:source)}
+        workspace.registerImportedVideo(owned)
+        workspace.update(recordA){$0.videoURL=owned}
+        workspace.removeArtifacts(for:recordA)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:owned.path),"Deleting the parent record removes its app-owned imported movie copy")
+        XCTAssertNil(workspace.output(outputA.id,for:recordA))
+        XCTAssertNil(workspace.selectedOutputID)
+        XCTAssertEqual(workspace.output(outputB.id,for:recordB)?.id,outputB.id,"Deleting record A preserves record B's image")
+        workspace.update(recordA){$0.videoURL=source}
+        workspace.removeArtifacts(for:recordA)
+        XCTAssertTrue(FileManager.default.fileExists(atPath:source.path),"Cleanup never deletes an unregistered source media path")
+    }
+
+    @MainActor func testShareVideoReplacementCancelReleaseAndDismissCleanup() throws {
+        let workspace=ShareWorkspace(),record=UUID(),temp=FileManager.default.temporaryDirectory
+        let old=temp.appendingPathComponent("mov-share-old-\(UUID().uuidString).mp4")
+        let replacement=temp.appendingPathComponent("mov-share-new-\(UUID().uuidString).mp4")
+        let canceled=temp.appendingPathComponent("mov-share-cancel-\(UUID().uuidString).mp4")
+        for url in [old,replacement,canceled]{try Data([1]).write(to:url)}
+        defer{for url in [old,replacement,canceled]{try? FileManager.default.removeItem(at:url)}}
+        for url in [old,replacement,canceled]{workspace.registerImportedVideo(url)}
+        workspace.update(record){$0.videoURL=old}
+        workspace.update(record){$0.videoURL=replacement}
+        XCTAssertFalse(FileManager.default.fileExists(atPath:old.path),"Replacing media deletes only the old imported copy")
+        var baseline=ShareDraft();baseline.videoURL=old
+        workspace.restoreDraft(baseline,for:record)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:replacement.path),"Cancel or dismiss restores the baseline and releases its imported copy")
+        XCTAssertNil(workspace.draft(for:record).videoURL,"A replaced baseline movie is not restored as a stale temp path")
+        workspace.update(record){$0.videoURL=canceled}
+        workspace.releaseVideo(for:record)
+        XCTAssertFalse(FileManager.default.fileExists(atPath:canceled.path),"After successful PNG composition, the unneeded video temp is released")
+        XCTAssertNil(workspace.draft(for:record).videoURL)
+
+        var guardState=ShareMediaLoadGuard()
+        let oldRequest=guardState.begin(),latestRequest=guardState.begin()
+        XCTAssertFalse(guardState.accepts(oldRequest),"A late async media/render result cannot commit after a newer selection")
+        XCTAssertTrue(guardState.accepts(latestRequest))
+        guardState.invalidate()
+        XCTAssertFalse(guardState.accepts(latestRequest),"A late async media/render result cannot commit after screen dismissal")
+    }
+
+}
+
+private enum AuthSessionFixtureStoreError: Error {
+    case writeFailed
+}
+
+private final class AuthSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
+    private let lock = NSLock()
+    private var snapshot: AuthSessionSnapshot?
+    private let failReplacementAt: Int?
+    private var replacementCount = 0
+    private var attemptedReplacements: [AuthSessionSnapshot?] = []
+
+    init(snapshot: AuthSessionSnapshot? = nil, failReplacementAt: Int? = nil) {
+        self.snapshot = snapshot
+        self.failReplacementAt = failReplacementAt
+    }
+
+    func loadSnapshot() throws -> AuthSessionSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshot
+    }
+
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        replacementCount += 1
+        attemptedReplacements.append(snapshot)
+        guard replacementCount != failReplacementAt else { throw AuthSessionFixtureStoreError.writeFailed }
+        self.snapshot = snapshot
+    }
+
+    func attemptedWrites() -> [AuthSessionSnapshot?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return attemptedReplacements
+    }
+}
+
+private struct AuthSessionCapturedRequest: Sendable {
+    let path: String
+    let method: String
+    let body: Data?
+    let headers: [String: String]
+}
+
+private enum AuthSessionTransportOutcome: Sendable {
+    case response(APIClientResponse)
+    case failure(APIClientError)
+    case hold
+}
+
+private actor AuthSessionFixtureTransport: APIResponseSending {
+    private let outcomes: [AuthSessionTransportOutcome]
+    private var captured: [AuthSessionCapturedRequest] = []
+    private var heldResponses: [Int: (continuation: CheckedContinuation<APIClientResponse, Error>, isLogin: Bool)] = [:]
+    private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var loginRequestCount = 0
+    private var inFlightLoginCount = 0
+    private var maximumConcurrentLoginCount = 0
+    private var activeServerRefreshToken: String?
+
+    init(_ outcomes: [AuthSessionTransportOutcome]) {
+        self.outcomes = outcomes
+    }
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        let index = captured.count
+        let isLogin = path == "auth/login"
+        captured.append(AuthSessionCapturedRequest(path: path, method: method, body: body, headers: headers))
+        if isLogin {
+            loginRequestCount += 1
+            inFlightLoginCount += 1
+            maximumConcurrentLoginCount = max(maximumConcurrentLoginCount, inFlightLoginCount)
+        }
+        resumeSatisfiedRequestWaiters()
+        guard outcomes.indices.contains(index) else {
+            if isLogin { inFlightLoginCount -= 1 }
+            throw APIClientError.unexpectedResponse
+        }
+        switch outcomes[index] {
+        case .response(let response):
+            if isLogin { recordServerLoginCompletion(response) }
+            return response
+        case .failure(let failure):
+            if isLogin { inFlightLoginCount -= 1 }
+            throw failure
+        case .hold:
+            return try await withCheckedThrowingContinuation { continuation in
+                heldResponses[index] = (continuation, isLogin)
+            }
+        }
+    }
+
+    func waitForRequests(_ count: Int) async {
+        guard captured.count < count else { return }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append((count, continuation))
+        }
+    }
+
+    func resumeRequest(_ index: Int, with response: APIClientResponse) {
+        guard let held = heldResponses.removeValue(forKey: index) else { return }
+        if held.isLogin { recordServerLoginCompletion(response) }
+        held.continuation.resume(returning: response)
+    }
+
+    func requests() -> [AuthSessionCapturedRequest] { captured }
+
+    func loginServerState() -> (requestCount: Int, maximumConcurrentRequests: Int, activeRefreshToken: String?) {
+        (loginRequestCount, maximumConcurrentLoginCount, activeServerRefreshToken)
+    }
+
+    private func recordServerLoginCompletion(_ response: APIClientResponse) {
+        inFlightLoginCount -= 1
+        guard let json = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any] else { return }
+        activeServerRefreshToken = json["refreshToken"] as? String
+    }
+
+    private func resumeSatisfiedRequestWaiters() {
+        let ready = requestWaiters.filter { captured.count >= $0.0 }
+        requestWaiters.removeAll { captured.count >= $0.0 }
+        ready.forEach { $0.1.resume() }
+    }
+}
+
+private enum AuthSessionFixtures {
+    static let deviceID = UUID(uuidString: "9DF80D8C-034D-4120-9AAF-FFCD003C4BB1")!
+
+    static func serverToken(memberID: String, tokenNonce: String? = nil) -> String {
+        let nonceClaim = tokenNonce.map { ",\"jti\":\"\($0)\"" } ?? ""
+        let claims = Data("{\"sub\":\"\(memberID)\"\(nonceClaim)}".utf8)
+        let payload = claims.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        // Fixture JWT-shaped data exercises strict `sub` mapping only. It is not signed
+        // or treated as proof that a token is authentic or authorized.
+        return "fixture-header.\(payload).fixture-signature"
+    }
+
+    static func tokenResponse(
+        memberID: String,
+        accessToken: String? = nil,
+        refreshToken: String = "server-refresh-next",
+        refreshExpiresInSeconds: Int = 604_800
+    ) -> APIClientResponse {
+        let body = try! JSONSerialization.data(withJSONObject: [
+            "accessToken": accessToken ?? serverToken(memberID: memberID),
+            "refreshToken": refreshToken,
+            "tokenType": "Bearer",
+            "accessExpiresInSeconds": 900,
+            "refreshExpiresInSeconds": refreshExpiresInSeconds
+        ])
+        return APIClientResponse(statusCode: 200, data: body, requestID: "response-request-id")
+    }
+
+    static func session(memberID: String = "41", accessToken: String? = nil, refreshToken: String = "previous-refresh", requestID: UUID? = nil) throws -> AuthSessionSnapshot {
+        try AuthSessionSnapshot(
+            accessToken: accessToken ?? serverToken(memberID: memberID),
+            refreshToken: refreshToken,
+            memberID: memberID,
+            refreshRequestID: requestID
+        )
+    }
+
+    static func jsonBody(_ request: AuthSessionCapturedRequest) throws -> [String: Any] {
+        try XCTUnwrap(request.body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+    }
+}
+
+final class AuthSessionClientSessionTests: XCTestCase {
+    @MainActor func testLoginStoresOnlyServerTokensAndExposesStableNumericMemberID() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "issued-by-server"))])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let session = try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+
+        XCTAssertEqual(session.memberID, "41")
+        XCTAssertEqual(session.refreshToken, "issued-by-server")
+        XCTAssertNil(session.refreshRequestID)
+        XCTAssertEqual(try store.loadSnapshot(), session)
+        let currentAccessToken = try await client.accessToken()
+        XCTAssertEqual(currentAccessToken, AuthSessionFixtures.serverToken(memberID: "41"))
+        XCTAssertEqual(AuthSessionRunUploadMemberIdentityProvider(sessionStore: store).currentAuthenticatedMemberID(), "41")
+
+        let requests = await transport.requests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.path, "auth/login")
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.headers["Content-Type"], "application/json")
+        XCTAssertEqual(request.headers["Cache-Control"], "no-store")
+        XCTAssertNil(request.headers["Authorization"])
+        let body = try AuthSessionFixtures.jsonBody(request)
+        XCTAssertEqual(Set(body.keys), Set(["email", "password", "deviceId"]))
+        XCTAssertEqual(body["email"] as? String, "runner@example.test")
+        XCTAssertEqual(body["password"] as? String, "FixturePass482619")
+        XCTAssertEqual((body["deviceId"] as? String)?.lowercased(), AuthSessionFixtures.deviceID.uuidString.lowercased())
+    }
+
+    func testCancelledLoginResponseDoesNotCommitTheServerSession() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.hold])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        login.cancel()
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "cancelled-login"))
+
+        do {
+            _ = try await login.value
+            XCTFail("A cancelled login must not publish a late response")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testLoginIsBusyAcrossClientsSharingStoreUntilServerRequestCompletes() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([
+            .hold,
+            .response(AuthSessionFixtures.tokenResponse(
+                memberID: "42",
+                accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "would-be-last-server-login"),
+                refreshToken: "would-be-last-server-login"
+            ))
+        ])
+        let earlierClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let laterClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let serverFirstResponse = AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "server-active-single-login"),
+            refreshToken: "server-active-single-login"
+        )
+        let earlierLogin = Task {
+            try await earlierClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        do {
+            _ = try await laterClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            XCTFail("A second same-device login must not reach a server that replaces its active session")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .requestInProgress)
+        }
+
+        var serverState = await transport.loginServerState()
+        XCTAssertEqual(serverState.requestCount, 1, "Clients sharing one store share the device-login request owner")
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
+
+        await transport.resumeRequest(0, with: serverFirstResponse)
+        let accepted = try await earlierLogin.value
+        serverState = await transport.loginServerState()
+        XCTAssertEqual(accepted.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, serverState.activeRefreshToken,
+                       "The locally stored credential must match the fake backend's active same-device session")
+        XCTAssertEqual(serverState.requestCount, 1, "The overlapping POST that would replace this server session was rejected")
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
+    }
+
+    func testCanceledLoginRetainsSharedRequestOwnerUntilCancellationIgnoringTransportFinishes() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.hold, .response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "must-not-be-issued"))])
+        let firstClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await firstClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        login.cancel()
+
+        do {
+            _ = try await secondClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            XCTFail("Cancellation cannot release ownership while the transport is still waiting for its response")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .requestInProgress)
+        }
+        let canceledState = await transport.loginServerState()
+        XCTAssertEqual(canceledState.requestCount, 1)
+
+        let successfulResponse = AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "completed-after-cancel")
+        await transport.resumeRequest(0, with: successfulResponse)
+        do {
+            _ = try await login.value
+            XCTFail("A successful server response received after cancellation cannot be committed")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot(), "The late server response cannot recreate a session after cancellation")
+
+        let retried = try await secondClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        let serverState = await transport.loginServerState()
+        XCTAssertEqual(retried.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(try store.loadSnapshot()?.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(serverState.requestCount, 2, "The shared request owner is released after the canceled transport finishes")
+        XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
+    }
+
+    func testLogoutDuringPendingLoginInvalidatesItsLateServerSuccess() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.hold])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+
+        do {
+            try await client.logout()
+            XCTFail("Logging out while no session is stored still cancels the pending login owner")
+        } catch let failure as SessionLogoutFailure {
+            XCTAssertEqual(failure, .accessTokenUnavailable)
+        }
+
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "late-login"))
+        do {
+            _ = try await login.value
+            XCTFail("A login response received after logout cannot create a session")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testRefreshUsesServerIssuedTokensAndAtomicallyRotatesSnapshot() async throws {
+        let initial = try AuthSessionFixtures.session()
+        let store = AuthSessionFixtureStore(snapshot: initial)
+        let transport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "rotated"),
+            refreshToken: "rotated-by-server"
+        ))])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let refreshed = try await client.refresh()
+
+        XCTAssertEqual(refreshed.memberID, "41")
+        XCTAssertEqual(refreshed.refreshToken, "rotated-by-server")
+        XCTAssertNotEqual(refreshed.accessToken, initial.accessToken)
+        XCTAssertNil(refreshed.refreshRequestID)
+        XCTAssertEqual(try store.loadSnapshot(), refreshed)
+        let writes = store.attemptedWrites()
+        XCTAssertEqual(writes.count, 2, "The pending retry ID and server response are each whole-snapshot atomic replacements")
+        let pendingSnapshot = try XCTUnwrap(writes[0])
+        let requests = await transport.requests()
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.path, "auth/token/refresh")
+        XCTAssertNil(request.headers["Authorization"])
+        let body = try AuthSessionFixtures.jsonBody(request)
+        XCTAssertEqual(Set(body.keys), Set(["refreshToken", "requestId"]))
+        XCTAssertEqual(body["refreshToken"] as? String, initial.refreshToken)
+        XCTAssertEqual(body["requestId"] as? String, pendingSnapshot.refreshRequestID?.uuidString)
+    }
+
+    func testLostResponseAndRestartReuseSameRefreshTokenAndRequestID() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let firstTransport = AuthSessionFixtureTransport([.failure(.transport(.timedOut))])
+        let firstClient = AuthSessionClient(apiClient: firstTransport, sessionStore: store)
+
+        do {
+            _ = try await firstClient.refresh()
+            XCTFail("Expected the lost response to leave an explicit retry pair")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .transport(.timedOut))
+        }
+        let afterLostResponse = try XCTUnwrap(try store.loadSnapshot())
+        let retryID = try XCTUnwrap(afterLostResponse.refreshRequestID)
+
+        let retryTransport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            refreshToken: "recovered-by-server",
+            refreshExpiresInSeconds: 600_000
+        ))])
+        let restartedClient = AuthSessionClient(apiClient: retryTransport, sessionStore: store)
+        let recovered = try await restartedClient.refresh()
+
+        XCTAssertEqual(recovered.refreshToken, "recovered-by-server")
+        XCTAssertNil(recovered.refreshRequestID)
+        let firstRequests = await firstTransport.requests()
+        let retryRequests = await retryTransport.requests()
+        let firstRequest = try XCTUnwrap(firstRequests.first)
+        let retryRequest = try XCTUnwrap(retryRequests.first)
+        let firstBody = try AuthSessionFixtures.jsonBody(firstRequest)
+        let retryBody = try AuthSessionFixtures.jsonBody(retryRequest)
+        XCTAssertEqual(firstBody["refreshToken"] as? String, afterLostResponse.refreshToken)
+        XCTAssertEqual(retryBody["refreshToken"] as? String, afterLostResponse.refreshToken)
+        XCTAssertEqual(firstBody["requestId"] as? String, retryID.uuidString)
+        XCTAssertEqual(retryBody["requestId"] as? String, retryID.uuidString)
+    }
+
+    func testExactRetryAcceptsZeroSecondRemainingTTLWithoutExtendingRefreshLifetime() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let originalClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.failure(.transport(.timedOut))]),
+            sessionStore: store
+        )
+        do {
+            _ = try await originalClient.refresh()
+            XCTFail("The first response is intentionally lost")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .transport(.timedOut))
+        }
+        let pending = try XCTUnwrap(try store.loadSnapshot())
+        let originalRequestID = try XCTUnwrap(pending.refreshRequestID)
+
+        let retryTransport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+            memberID: "41",
+            accessToken: AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "near-expiry-server-token"),
+            refreshToken: "server-successor-under-one-second",
+            refreshExpiresInSeconds: 0
+        ))])
+        let recovered = try await AuthSessionClient(apiClient: retryTransport, sessionStore: store).refresh()
+        XCTAssertEqual(recovered.accessToken, AuthSessionFixtures.serverToken(memberID: "41", tokenNonce: "near-expiry-server-token"))
+        XCTAssertEqual(recovered.refreshToken, "server-successor-under-one-second")
+        XCTAssertNil(recovered.refreshRequestID)
+        let retryRequests = await retryTransport.requests()
+        let exactRetryBody = try AuthSessionFixtures.jsonBody(try XCTUnwrap(retryRequests.first))
+        XCTAssertEqual(exactRetryBody["refreshToken"] as? String, pending.refreshToken)
+        XCTAssertEqual(exactRetryBody["requestId"] as? String, originalRequestID.uuidString)
+
+        let expiredTransport = AuthSessionFixtureTransport([.response(APIClientResponse(statusCode: 401, data: Data(), requestID: "expired"))])
+        do {
+            _ = try await AuthSessionClient(apiClient: expiredTransport, sessionStore: store).refresh()
+            XCTFail("The server remains authoritative when the returned refresh token has expired")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+        let expiredRequests = await expiredTransport.requests()
+        let expiredRequest = try XCTUnwrap(expiredRequests.first)
+        let expiredBody = try AuthSessionFixtures.jsonBody(expiredRequest)
+        XCTAssertEqual(expiredBody["refreshToken"] as? String, "server-successor-under-one-second")
+        XCTAssertNil(try store.loadSnapshot())
+
+        let freshStore = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let freshClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(
+                memberID: "41",
+                refreshToken: "invalid-fresh-response",
+                refreshExpiresInSeconds: 0
+            ))]),
+            sessionStore: freshStore
+        )
+        do {
+            _ = try await freshClient.refresh()
+            XCTFail("A normal rotation must report the full seven-day lifetime")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .invalidResponse)
+        }
+        let retained = try XCTUnwrap(try freshStore.loadSnapshot())
+        XCTAssertEqual(retained.refreshToken, "previous-refresh")
+        XCTAssertNotNil(retained.refreshRequestID)
+    }
+
+    func testServerSuccessWithStorageFailureKeepsOldRefreshAndRetryID() async throws {
+        let initial = try AuthSessionFixtures.session()
+        let store = AuthSessionFixtureStore(snapshot: initial, failReplacementAt: 2)
+        let transport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "must-not-be-adopted"))])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        do {
+            _ = try await client.refresh()
+            XCTFail("Expected the successful server result to fail at atomic local replacement")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .storageUnavailable)
+        }
+
+        let retained = try XCTUnwrap(try store.loadSnapshot())
+        XCTAssertEqual(retained.refreshToken, initial.refreshToken)
+        XCTAssertNotNil(retained.refreshRequestID)
+        XCTAssertNotEqual(retained.refreshToken, "must-not-be-adopted")
+    }
+
+    func testExpiredRefresh401ClearsSessionBut503PreservesRetryPair() async throws {
+        let expiredStore = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let expiredClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(APIClientResponse(statusCode: 401, data: Data(), requestID: "expired"))]),
+            sessionStore: expiredStore
+        )
+        do {
+            _ = try await expiredClient.refresh()
+            XCTFail("Expected expired refresh token")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+        XCTAssertNil(try expiredStore.loadSnapshot())
+
+        let unavailableStore = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let unavailableBody = Data("{\"code\":\"AUTH_UNAVAILABLE\",\"requestId\":\"temporary\"}".utf8)
+        let unavailableClient = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(APIClientResponse(statusCode: 503, data: unavailableBody, requestID: nil))]),
+            sessionStore: unavailableStore
+        )
+        do {
+            _ = try await unavailableClient.refresh()
+            XCTFail("Expected temporary auth storage failure")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .serviceUnavailable(requestID: "temporary"))
+        }
+        let retained = try XCTUnwrap(try unavailableStore.loadSnapshot())
+        XCTAssertNotNil(retained.refreshRequestID)
+        XCTAssertEqual(retained.refreshToken, "previous-refresh")
+    }
+
+    func testRefreshSingleFlightSendsOnlyOneRequest() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let transport = AuthSessionFixtureTransport([.hold])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let first = Task { try await client.refresh() }
+        await transport.waitForRequests(1)
+        let pending = try XCTUnwrap(try store.loadSnapshot()?.refreshRequestID)
+        let waitingRequests = await transport.requests()
+        let pendingBody = try AuthSessionFixtures.jsonBody(try XCTUnwrap(waitingRequests.first))
+        XCTAssertEqual(pendingBody["requestId"] as? String, pending.uuidString, "The retry ID is durable and sent before the request can return")
+        let second = Task { try await client.refresh() }
+        try await Task.sleep(for: .milliseconds(20))
+
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "single-flight-result"))
+        let firstResult = try await first.value
+        let secondResult = try await second.value
+
+        XCTAssertEqual(firstResult, secondResult)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testRefreshSingleFlightIsSharedByClientsUsingTheSameStore() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let firstTransport = AuthSessionFixtureTransport([.hold])
+        let secondTransport = AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "must-not-be-used"))])
+        let firstClient = AuthSessionClient(apiClient: firstTransport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: secondTransport, sessionStore: store)
+        let first = Task { try await firstClient.refresh() }
+        await firstTransport.waitForRequests(1)
+        let second = Task { try await secondClient.refresh() }
+        try await Task.sleep(for: .milliseconds(30))
+
+        let competingRequests = await secondTransport.requests()
+        XCTAssertTrue(competingRequests.isEmpty, "Clients sharing one store also share its refresh coordinator")
+        await firstTransport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "shared-refresh-result"))
+        let firstResult = try await first.value
+        let secondResult = try await second.value
+        XCTAssertEqual(firstResult, secondResult)
+        XCTAssertEqual(firstResult.refreshToken, "shared-refresh-result")
+        let firstRequests = await firstTransport.requests()
+        let secondRequests = await secondTransport.requests()
+        XCTAssertEqual(firstRequests.count, 1)
+        XCTAssertEqual(secondRequests.count, 0)
+    }
+
+    func testRefreshMemberIDChangeIsRejectedAndNotStored() async throws {
+        let initial = try AuthSessionFixtures.session(memberID: "41")
+        let store = AuthSessionFixtureStore(snapshot: initial)
+        let client = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "42", refreshToken: "wrong-account"))]),
+            sessionStore: store
+        )
+
+        do {
+            _ = try await client.refresh()
+            XCTFail("A refresh response cannot change the session owner")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .memberIdentityChanged)
+        }
+        let retained = try XCTUnwrap(try store.loadSnapshot())
+        XCTAssertEqual(retained.memberID, "41")
+        XCTAssertEqual(retained.refreshToken, initial.refreshToken)
+        XCTAssertNotNil(retained.refreshRequestID)
+    }
+
+    func testLogoutClearsSessionAndLateRefreshCannotRestoreIt() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session())
+        let transport = AuthSessionFixtureTransport([
+            .hold,
+            .response(APIClientResponse(statusCode: 204, data: Data(), requestID: nil))
+        ])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let refresh = Task { try await client.refresh() }
+        await transport.waitForRequests(1)
+        let logout = Task { try await client.logout() }
+        await transport.waitForRequests(2)
+        try await logout.value
+        XCTAssertNil(try store.loadSnapshot())
+
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "late-response"))
+        do {
+            _ = try await refresh.value
+            XCTFail("A response from a session that has logged out must be discarded")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testPasswordResetRevocationAtomicallyClearsTheExistingSessionSnapshotAndRetriesStorageFailure() async throws {
+        let emptyStore = AuthSessionFixtureStore()
+        try await AuthSessionPasswordResetRevocation.clear(store: emptyStore)
+        XCTAssertNil(try emptyStore.loadSnapshot())
+        XCTAssertTrue(emptyStore.attemptedWrites().isEmpty,"An absent server session needs no persistent delete")
+
+        let initial = try AuthSessionFixtures.session()
+        let store = AuthSessionFixtureStore(snapshot: initial, failReplacementAt: 1)
+
+        do {
+            try await AuthSessionPasswordResetRevocation.clear(store: store)
+            XCTFail("A failed persistent write must not report the session as cleared")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .storageUnavailable)
+        }
+        XCTAssertEqual(try store.loadSnapshot(), initial)
+
+        try await AuthSessionPasswordResetRevocation.clear(store: store)
+        XCTAssertNil(try store.loadSnapshot())
+        let writes = store.attemptedWrites()
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertNil(writes[1])
+    }
+
+    func testPasswordResetUIFixtureStoreKeepsOriginalSnapshotWhenItsFirstDeleteFails() async throws {
+        let store = WireframePasswordResetSessionFixtureStore(failReplacementOnce: true)
+        let initial = try XCTUnwrap(try store.loadSnapshot())
+
+        do {
+            try await AuthSessionPasswordResetRevocation.clear(store: store)
+            XCTFail("The one-shot fixture write failure must be surfaced")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .storageUnavailable)
+        }
+        XCTAssertEqual(try store.loadSnapshot(), initial)
+
+        try await AuthSessionPasswordResetRevocation.clear(store: store)
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testMalformedJWTSubjectDoesNotCreateAnAuthenticatedMemberID() async throws {
+        let store = AuthSessionFixtureStore()
+        let invalidToken = AuthSessionFixtures.serverToken(memberID: "041")
+        let client = AuthSessionClient(
+            apiClient: AuthSessionFixtureTransport([.response(AuthSessionFixtures.tokenResponse(memberID: "41", accessToken: invalidToken))]),
+            sessionStore: store
+        )
+        do {
+            _ = try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+            XCTFail("Non-canonical decimal member IDs must be rejected")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .invalidResponse)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+}
+
+final class PasswordResetFlowTests:XCTestCase {
+    private let start=Date(timeIntervalSince1970:1_800_000_000)
+    private func preparedReset() -> WPasswordResetSession {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let request=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.finishChallengeRequest(request,now:start))
+        return reset
+    }
+    private func addProof(to reset:inout WPasswordResetSession,at now:Date) {
+        reset.code="700000"
+        let operation=try! XCTUnwrap(reset.beginVerification(now:now))
+        XCTAssertTrue(reset.finishVerification(operation,proof:PasswordResetProof(value:String(repeating:"R",count:43),expiresInSeconds:600),now:now))
+    }
+
+    func testChallengeDedupeCodeLifetimeResendCooldownAndFiveAttemptLock() {
+        var reset=preparedReset()
+        XCTAssertEqual(reset.issuedAt,start)
+        XCTAssertEqual(reset.beginChallengeRequest(now:start),nil,"An active challenge cannot be resent before 60 seconds")
+        XCTAssertNil(reset.beginVerification(now:start.addingTimeInterval(300)),"A code expires at five minutes")
+        for attempt in 0..<5 {
+            reset.code=String(format:"%06d",100_000+attempt)
+            let operation=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(Double(attempt+1))))
+            let outcome=reset.failVerification(operation,failure:.verificationFailed(requestID:"fixture"))
+            XCTAssertEqual(outcome,attempt==4 ? .locked:.rejected)
+        }
+        XCTAssertNil(reset.beginVerification(now:start.addingTimeInterval(10)),"Five rejected codes lock this challenge")
+        XCTAssertNil(reset.beginChallengeRequest(now:start.addingTimeInterval(59)))
+        let resend=try! XCTUnwrap(reset.beginChallengeRequest(now:start.addingTimeInterval(60)))
+        XCTAssertTrue(reset.isRequestingCode)
+        XCTAssertFalse(reset.beginChallengeRequest(now:start.addingTimeInterval(60.1)) != nil,"Double submission must not start another request")
+        XCTAssertTrue(reset.finishChallengeRequest(resend,now:start.addingTimeInterval(60),demoCode:"700001"))
+        XCTAssertEqual(reset.attempts,0)
+        XCTAssertEqual(reset.demoCode,"700001")
+    }
+
+    func testSignupCodeAndPasswordResetPurposeFailuresRemainSeparate() {
+        var signup=WLocalOTPCodeIssuer()
+        let signupCode=try! XCTUnwrap(signup.issueNext())
+        XCTAssertEqual(signupCode,"482619")
+        var reset=preparedReset();reset.code=signupCode
+        let verification=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(1)))
+        XCTAssertEqual(reset.failVerification(verification,failure:.verificationFailed(requestID:nil)),.rejected)
+        XCTAssertEqual(reset.attempts,1)
+        XCTAssertNil(reset.resetProof)
+    }
+
+    func testEmailChangeAndInvalidationRejectStaleNetworkResponses() {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let request=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        reset.emailDidChange("other@example.test")
+        XCTAssertFalse(reset.finishChallengeRequest(request,now:start),"A delayed result for the old email must be ignored")
+        XCTAssertEqual(reset.email,"other@example.test")
+        XCTAssertNil(reset.issuedAt)
+        let request2=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.finishChallengeRequest(request2,now:start))
+        reset.code="700000"
+        let verification=try! XCTUnwrap(reset.beginVerification(now:start.addingTimeInterval(1)))
+        reset.invalidate()
+        XCTAssertEqual(reset.failVerification(verification,failure:.verificationFailed(requestID:nil)),.stale)
+    }
+
+    func testExpiredProofIsRejectedAndAmbiguousCompletionRetriesExactRequest() {
+        var reset=preparedReset();addProof(to:&reset,at:start.addingTimeInterval(1))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        XCTAssertNil(reset.beginCompletion(now:start.addingTimeInterval(601)),"A proof expires after ten minutes")
+        reset.expireProof();XCTAssertFalse(reset.hasProof)
+
+        addProof(to:&reset,at:start.addingTimeInterval(2))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        let first=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(3)))
+        XCTAssertTrue(reset.isCompleting)
+        XCTAssertNil(reset.beginCompletion(now:start.addingTimeInterval(3)),"A completion request cannot be submitted twice while in flight")
+        XCTAssertTrue(reset.failCompletion(first,failure:.transport(.timedOut)))
+        XCTAssertTrue(reset.requiresExactCompletionRetry)
+        reset.newPasswordDidChange("Different123")
+        XCTAssertEqual(reset.newPassword,first.password,"Uncertain outcomes lock the submitted password")
+        let retry=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(4)))
+        XCTAssertEqual(retry.requestID,first.requestID)
+        XCTAssertEqual(retry.resetProof,first.resetProof)
+        XCTAssertEqual(retry.email,first.email)
+        XCTAssertEqual(retry.password,first.password)
+        XCTAssertNotEqual(retry.id,first.id)
+        XCTAssertTrue(reset.finishCompletion(retry))
+        XCTAssertTrue(reset.completed)
+        XCTAssertFalse(reset.hasProof,"A successful proof can be consumed once")
+        XCTAssertNil(reset.beginCompletion())
+    }
+
+    func testKnownVerificationFailureDropsExpiredOrReusedProof() {
+        var reset=preparedReset();addProof(to:&reset,at:start.addingTimeInterval(1))
+        reset.newPassword="MovDemo482619";reset.confirmPassword=reset.newPassword
+        let completion=try! XCTUnwrap(reset.beginCompletion(now:start.addingTimeInterval(2)))
+        XCTAssertTrue(reset.failCompletion(completion,failure:.verificationFailed(requestID:"fixture")))
+        XCTAssertFalse(reset.hasProof)
+        XCTAssertFalse(reset.requiresExactCompletionRetry)
+        XCTAssertTrue(reset.newPassword.isEmpty)
+    }
+
+    func testChallengeTransportFailureCanBeRetriedWithoutOverlappingRequests() {
+        var reset=WPasswordResetSession();reset.emailDidChange("runner@example.test")
+        let failed=try! XCTUnwrap(reset.beginChallengeRequest(now:start))
+        XCTAssertTrue(reset.failChallengeRequest(failed,message:PasswordResetFailure.transport(.timedOut).userMessage))
+        XCTAssertFalse(reset.isRequestingCode)
+        XCTAssertNil(reset.issuedAt)
+        let retry=try! XCTUnwrap(reset.beginChallengeRequest(now:start.addingTimeInterval(1)))
+        XCTAssertTrue(reset.finishChallengeRequest(retry,now:start.addingTimeInterval(1)))
+        XCTAssertNotNil(reset.issuedAt)
+    }
+}
+
+extension ThemeTests {
+    func testProfileValidationBoundaries() {
+        XCTAssertFalse(WProfileValidation.isValid(nickname:" \n ",introduction:""))
+        XCTAssertTrue(WProfileValidation.isValid(nickname:"러너",introduction:""))
+        XCTAssertTrue(WProfileValidation.isValid(nickname:String(repeating:"가",count:20),introduction:String(repeating:"나",count:60)))
+        XCTAssertFalse(WProfileValidation.isValid(nickname:String(repeating:"가",count:21),introduction:""))
+        XCTAssertFalse(WProfileValidation.isValid(nickname:"러너",introduction:String(repeating:"나",count:61)))
+    }
+    @MainActor func testReauthenticationCancellationReturnsToOrigin() {
+        let state=WireState();state.screen="T04";state.path=["T01"];state.pending="T11";state.pendingBack="T04"
+        state.go("T15");XCTAssertEqual(state.path,["T01","T04"])
+        state.settingsGrant=true;state.cancelReauthentication()
+        XCTAssertEqual(state.screen,"T04");XCTAssertEqual(state.path,["T01"]);XCTAssertFalse(state.settingsGrant)
+        state.screen="T05";state.path=["T01"];state.pendingBack="T05";state.go("T15");state.cancelReauthentication()
+        XCTAssertEqual(state.screen,"T05");XCTAssertEqual(state.path,["T01"])
+    }
+    func testNotificationReadFailureCanBeRetriedLocally() {
+        var state=WNotificationReadState(failuresRemaining:1),profile=WLocalProfile()
+        XCTAssertFalse(state.open(0,profile:&profile))
+        XCTAssertEqual(state.expandedID,0);XCTAssertEqual(state.failedID,0);XCTAssertTrue(profile.notificationRead.isEmpty)
+        XCTAssertTrue(state.retry(profile:&profile))
+        XCTAssertNil(state.failedID);XCTAssertEqual(profile.notificationRead,[0])
+    }
+    func testOfflineAuthBoundaries() {
+        for email in ["runner@example.test","fake+review@EXAMPLE.TEST"]{XCTAssertTrue(WAuthValidation.email(email))}
+        for email in ["a@@example.test","@example.test","person@gmail.com","a b@example.test",String(repeating:"a",count:250)+"@example.test"]{XCTAssertFalse(WAuthValidation.email(email))}
+        XCTAssertFalse(WAuthValidation.password("1234567"));XCTAssertTrue(WAuthValidation.password("MovDemo482619"))
+        XCTAssertTrue(WAuthValidation.password("Run!2026"));XCTAssertFalse(WAuthValidation.password("12345678"))
+        XCTAssertFalse(WAuthValidation.password("abcdefgh"));XCTAssertFalse(WAuthValidation.password("Run 2026"))
+        XCTAssertFalse(WAuthValidation.password("달리기2026"));XCTAssertFalse(WAuthValidation.password("RunDemo12345678901234"))
+    }
+    func testEmailChallengeTimeAndInputPolicy() {
+        let issued=Date(timeIntervalSince1970:1000)
+        XCTAssertEqual(WEmailChallengePolicy.lifetime,300)
+        XCTAssertEqual(WEmailChallengePolicy.resendDelay,60)
+        XCTAssertEqual(WEmailChallengePolicy.maximumAttempts,5)
+        XCTAssertEqual(WEmailChallengePolicy.secondsRemaining(since:issued,now:issued.addingTimeInterval(59.1),duration:60),1)
+        XCTAssertEqual(WEmailChallengePolicy.secondsRemaining(since:issued,now:issued.addingTimeInterval(60),duration:60),0)
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued.addingTimeInterval(299),attempts:4),"pending")
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued.addingTimeInterval(300),attempts:0),"expired")
+        XCTAssertEqual(WEmailChallengePolicy.challengeStatus(issued:issued,now:issued,attempts:5),"locked")
+        XCTAssertEqual(WEmailChallengePolicy.digits("a1 2-3\n456789"),"123456")
+        XCTAssertEqual(WEmailChallengePolicy.digits("１２３４５６"),"")
+    }
+    func testInitialAndTwoResentOTPValuesNeverRepeat() {
+        var issuer=WLocalOTPCodeIssuer()
+        var codes:[String]=[]
+        for _ in 0..<3{if let code=issuer.issueNext(){codes.append(code)}}
+        XCTAssertEqual(codes.count,3)
+        XCTAssertEqual(codes,["482619","482620","482621"])
+        XCTAssertEqual(Set(codes).count,codes.count,"Initial and resent codes must all be unique")
+        XCTAssertFalse(issuer.matches(codes[0]))
+        XCTAssertFalse(issuer.matches(codes[1]))
+        XCTAssertTrue(issuer.matches(codes[2]),"Only the latest issued code verifies")
+    }
+    @MainActor func testAuthNavigationClearsTransientSecrets() {
+        let state=WireState();state.screen="A19";state.path=["A07"]
+        state.challengeIssued=Date();state.code="482619";state.authPassword="FixtureOnly482619";state.revealedFields=["예시 비밀번호"]
+        state.back()
+        XCTAssertEqual(state.screen,"A07");XCTAssertNil(state.challengeIssued);XCTAssertTrue(state.code.isEmpty);XCTAssertTrue(state.authPassword.isEmpty);XCTAssertTrue(state.revealedFields.isEmpty)
+        state.screen="T15";state.settingsGrant=true;state.go("A16");XCTAssertTrue(state.settingsGrant)
+        state.go("T05");XCTAssertFalse(state.settingsGrant)
+        state.screen="A07";state.authEmail="runner@example.test";state.authPassword="FixtureOnly482619";state.go("A19")
+        XCTAssertEqual(state.authEmail,"runner@example.test","The address is retained only for the active OTP screen")
+        state.go("A02");XCTAssertTrue(state.authEmail.isEmpty,"The address is cleared when the OTP flow ends")
+    }
+}
+
+
+extension ThemeTests {
+    @MainActor func testLoginFailureRetryResetsOnlyFailureRoute() {
+        let state=WireState();state.screen="A01"
+        for _ in 0..<3 {
+            state.go("A14");state.go("A04")
+            XCTAssertEqual(state.path,["A01","A14"])
+            state.go("A01")
+            XCTAssertEqual(state.screen,"A01")
+            XCTAssertTrue(state.path.isEmpty,"Retry must not leave A04 or its provider route on the back stack")
+        }
+
+        state.go("A07");state.go("A19");state.go("A02");state.go("A03")
+        XCTAssertEqual(state.path,["A01","A07","A19","A02"],"Resetting A04 must not alter ordinary onboarding history")
+        state.back()
+        XCTAssertEqual(state.screen,"A02")
+        XCTAssertEqual(state.path,["A01","A07","A19"])
+    }
+
+    func testSignupNicknameAndOptionalWeightPolicies() {
+        XCTAssertEqual(WSignupNicknameValidation.error(for:"아침 러너"),"한글, 영문, 숫자, 밑줄만 사용할 수 있어요.")
+        XCTAssertNil(WSignupNicknameValidation.error(for:"새벽러너"))
+        XCTAssertNil(WSignupNicknameValidation.error(for:"Run_2026"))
+        XCTAssertNil(WSignupNicknameValidation.error(for:"\u{1100}\u{1161}러너"),"NFC-composed Hangul follows the backend policy")
+        XCTAssertNil(WSignupNicknameValidation.error(for:String(repeating:"가",count:12)))
+        XCTAssertEqual(WSignupNicknameValidation.error(for:"가"),"닉네임은 2~12자로 입력해 주세요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:String(repeating:"가",count:13)),"닉네임은 2~12자로 입력해 주세요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:" \n "),"한글, 영문, 숫자, 밑줄만 사용할 수 있어요.")
+        XCTAssertEqual(WSignupNicknameValidation.error(for:""),"닉네임을 입력해 주세요.")
+        XCTAssertNil(WSignupNicknameValidation.error(for:"달빛러너"),"Generic validation does not claim global nickname availability")
+        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"달빛러너"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertEqual(WSignupNicknameValidation.fixtureError(for:"runmate"),"검토용 예시 계정에서 사용 중인 닉네임이에요.")
+        XCTAssertNil(WSignupNicknameValidation.fixtureError(for:"  RunMate  "),"Whitespace is rejected by the shared nickname policy")
+        XCTAssertNil(WSignupNicknameValidation.fixtureError(for:"아침러너"))
+        XCTAssertEqual(WSignupNicknameValidation.normalized("  cafe\u{301}  "),"  café  ")
+        XCTAssertNil(WSignupWeightValidation.error(for:""))
+        XCTAssertNil(WSignupWeightValidation.error(for:"20"))
+        XCTAssertNil(WSignupWeightValidation.error(for:"300"))
+        XCTAssertNil(WSignupWeightValidation.error(for:"62.5"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"19.9"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"300.1"))
+        XCTAssertNotNil(WSignupWeightValidation.error(for:"nan"))
+    }
+
+    func testSocialLoginNavigationCanCancelPreparationButProtectsSubmittedCompletion() {
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A14",completionSubmitted:false))
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A03",completionSubmitted:false))
+        XCTAssertFalse(WSocialLoginNavigationPolicy.canNavigateAway(from:"A14",completionSubmitted:true))
+        XCTAssertFalse(WSocialLoginNavigationPolicy.canNavigateAway(from:"A03",completionSubmitted:true))
+        XCTAssertTrue(WSocialLoginNavigationPolicy.canNavigateAway(from:"A01",completionSubmitted:true))
+    }
+
+    @MainActor func testConsentSequenceCancellationRestoresPriorChecksOnReentry() {
+        let state=WireState();state.screen="A02";state.consentSequenceID=UUID();state.consentSequenceOriginalTerms=false;state.consentSequenceOriginalPrivacy=false
+        state.consentTerms=true;state.consentPrivacy=false;state.consentBusy=true
+        state.leaveAuth(for:"A19")
+        XCTAssertNil(state.consentSequenceID)
+        XCTAssertFalse(state.consentBusy)
+        XCTAssertFalse(state.consentTerms)
+        XCTAssertFalse(state.consentPrivacy)
+        state.screen="A19";state.screen="A02"
+        XCTAssertNil(state.consentSequenceID,"A cancelled animation cannot resume when A02 is re-entered")
+    }
+
+    func testSourceDistanceFormattingKeepsAtMostTwoDecimalPlaces() {
+        XCTAssertEqual(MovNumber.display(3.456),"3.46")
+        XCTAssertEqual(MovNumber.display(3.4),"3.4")
+        XCTAssertEqual(MovNumber.display(3),"3")
+    }
+
+    func testDisplayNumbersDoNotRoundStoredValues() {
+        for (value,expected) in [(0.0,"0"),(5.0,"5"),(5.5,"5.5"),(1.23456789,"1.23"),(0.1+0.2,"0.3"),(9.999,"10"),(-0.001,"0"),(1000.0,"1000")]{XCTAssertEqual(MovNumber.display(value),expected)}
+        let record=RunRecord(date:Date(),title:"fixture",seconds:240.123456,kilometers:0.999999)
+        _=MovNumber.display(record.kilometers)
+        XCTAssertEqual(record.kilometers,0.999999);XCTAssertEqual(record.seconds,240.123456)
+        XCTAssertEqual(RunRecord.clock(65.789),"01:05")
+    }
+    @MainActor func testProviderFlowDoesNotRevisitCompletion() {
+        let state=WireState();state.screen="T01";state.path=["H00"]
+        state.go("T05");state.go("T15");state.settingsGrant=true;state.go("T06");state.go("T17")
+        state.back();XCTAssertEqual(state.screen,"T05");XCTAssertEqual(state.path,["H00","T01"])
+        state.back();XCTAssertEqual(state.screen,"T01")
+        state.go("T05")
+        for destination in ["A16","A17","T06"]{
+            state.go("T15");state.settingsGrant=true;state.go(destination);state.go("T05")
+            XCTAssertEqual(state.path,["H00","T01"]);XCTAssertFalse(state.settingsGrant)
+        }
+        state.go("T15");state.settingsGrant=true;state.go("A16");state.go("A18");state.go("T05");state.back()
+        XCTAssertEqual(state.screen,"T01");XCTAssertFalse(state.path.contains("A18"))
+    }
+}
+
+extension ThemeTests {
+    @MainActor func testCompletedAuthDoesNotReopenCompletedSteps(){
+        let state=WireState();state.screen="A01";state.path=["T01","T10"];state.go("H00");XCTAssertTrue(state.path.isEmpty)
+        state.screen="A15";state.path=["A07","A19","A02","A03"];state.back();XCTAssertEqual(state.screen,"H00");XCTAssertTrue(state.path.isEmpty)
+        state.screen="A13";state.path=["A10","A11","A12"];state.back();XCTAssertEqual(state.screen,"A13");XCTAssertEqual(state.path,["A10","A11","A12"])
+        state.screen="A18";state.passwordChanged=true;state.path=["T01","T05","A17"];state.back();XCTAssertEqual(state.screen,"A01");XCTAssertTrue(state.path.isEmpty)
+        state.screen="A19";state.authPassword="NotPersisted123";state.authConfirm=state.authPassword;state.go("A02");XCTAssertTrue(state.authPassword.isEmpty);XCTAssertTrue(state.authConfirm.isEmpty)
+    }
+}
+
+private actor WireframeRemoteReadGate {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var ignoringCancellationContinuation: CheckedContinuation<Void, Never>?
+    private var entered = false
+    private var released = false
+
+    func wait() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else if released {
+                    continuation.resume()
+                } else {
+                    entered = true
+                    self.continuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter() }
+        }
+    }
+
+    func waitIgnoringCancellation() async {
+        if released { return }
+        entered = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if released { continuation.resume() }
+            else { ignoringCancellationContinuation = continuation }
+        }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+        ignoringCancellationContinuation?.resume()
+        ignoringCancellationContinuation = nil
+    }
+
+    func isWaiting() -> Bool { entered && (continuation != nil || ignoringCancellationContinuation != nil) }
+
+    private func cancelWaiter() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
+private actor WireframeRemoteReadMock: MemberProfileFetching, PointsWalletReading {
+    private var profileResults:[Result<MemberProfile,MemberProfileFailure>]
+    private var balanceResults:[Result<PointsBalance,PointsReadFailure>]
+    private var pageResults:[Result<PointsLedgerPage,PointsReadFailure>]
+    private let heldProfileCalls:Set<Int>
+    private let heldBalanceCalls:Set<Int>
+    private let profileGates:[Int:WireframeRemoteReadGate]
+    private let balanceGates:[Int:WireframeRemoteReadGate]
+    private let entryGates:[String:WireframeRemoteReadGate]
+    private var profileCallCount=0
+    private var balanceCallCount=0
+    private var entryCursors:[String?]=[]
+    private var cancelledProfileCalls=0
+    private var cancelledBalanceCalls=0
+    private var cancelledEntryCalls=0
+
+    init(
+        profileResults:[Result<MemberProfile,MemberProfileFailure>]=[],
+        balanceResults:[Result<PointsBalance,PointsReadFailure>]=[],
+        pageResults:[Result<PointsLedgerPage,PointsReadFailure>]=[],
+        heldProfileCalls:Set<Int>=[],
+        heldBalanceCalls:Set<Int>=[],
+        profileGates:[Int:WireframeRemoteReadGate]=[:],
+        balanceGates:[Int:WireframeRemoteReadGate]=[:],
+        entryGates:[String:WireframeRemoteReadGate]=[:]
+    ) {
+        self.profileResults=profileResults
+        self.balanceResults=balanceResults
+        self.pageResults=pageResults
+        self.heldProfileCalls=heldProfileCalls
+        self.heldBalanceCalls=heldBalanceCalls
+        self.profileGates=profileGates
+        self.balanceGates=balanceGates
+        self.entryGates=entryGates
+    }
+
+    func fetchProfile() async throws -> MemberProfile {
+        let call=profileCallCount;profileCallCount+=1
+        let result=profileResults.isEmpty ? .failure(.invalidResponse):profileResults.removeFirst()
+        if let gate=profileGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledProfileCalls+=1;throw MemberProfileFailure.cancelled }
+        }
+        if heldProfileCalls.contains(call) {
+            do { try await Task.sleep(nanoseconds:60_000_000_000) }
+            catch { cancelledProfileCalls+=1;throw MemberProfileFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func fetchBalance() async throws -> PointsBalance {
+        let call=balanceCallCount;balanceCallCount+=1
+        let result=balanceResults.isEmpty ? .failure(.invalidResponse):balanceResults.removeFirst()
+        if let gate=balanceGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledBalanceCalls+=1;throw PointsReadFailure.cancelled }
+        }
+        if heldBalanceCalls.contains(call) {
+            do { try await Task.sleep(nanoseconds:60_000_000_000) }
+            catch { cancelledBalanceCalls+=1;throw PointsReadFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func fetchEntries(cursor:String?,size:Int) async throws -> PointsLedgerPage {
+        entryCursors.append(cursor)
+        guard !pageResults.isEmpty else { throw PointsReadFailure.invalidResponse }
+        let result=pageResults.removeFirst()
+        if let gate=entryGates[cursor ?? ""] {
+            do { try await gate.wait() }
+            catch { cancelledEntryCalls+=1;throw PointsReadFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func observedEntryCursors()->[String?]{entryCursors}
+    func observedProfileCallCount()->Int{profileCallCount}
+    func observedBalanceCallCount()->Int{balanceCallCount}
+    func observedCancelledProfileCalls()->Int{cancelledProfileCalls}
+    func observedCancelledBalanceCalls()->Int{cancelledBalanceCalls}
+    func observedCancelledEntryCalls()->Int{cancelledEntryCalls}
+}
+
+private actor WireframeRunRecordsReadMock: RunRecordsReading {
+    private var pages:[BackendRunPage]
+    private let details:[String:BackendRunDetail]
+    private let firstPageGate:WireframeRemoteReadGate?
+    private var pageCalls=0
+    private var cancelledPageCalls=0
+
+    init(pages:[BackendRunPage],details:[String:BackendRunDetail]=[:],firstPageGate:WireframeRemoteReadGate?=nil){
+        self.pages=pages;self.details=details;self.firstPageGate=firstPageGate
+    }
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        pageCalls+=1
+        if cursor == nil,let firstPageGate {
+            do{try await firstPageGate.wait()}
+            catch{cancelledPageCalls+=1;throw RunRecordsFailure.cancelled}
+        }
+        guard !pages.isEmpty else{throw RunRecordsFailure.invalidResponse}
+        return pages.removeFirst()
+    }
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard let detail=details[id] else{throw RunRecordsFailure.recordNotFound}
+        return detail
+    }
+    func observedPageCalls()->Int{pageCalls}
+    func observedCancelledPageCalls()->Int{cancelledPageCalls}
+}
+
+private actor WireframeRunRecordsEditFake: RunRecordsReading, RunRecordsUpdating, RunRecordsDeleting {
+    private var details: [String:BackendRunDetail]
+    private var listPages: [BackendRunPage]
+    private var listFetchGates: [Int:WireframeRemoteReadGate]
+    private let listFetchIgnoresCancellation: Set<Int>
+    private var failNextListFetches: Int
+    private var listFetchCalls=0
+    private var completedListFetchCalls=0
+    private var passedListCursors:[String?]=[]
+    private var holdsFirstWrite: Bool
+    private var writeFailure: RunRecordsFailure?
+    private var conflictsFirstWrite: Bool
+    private var conflictTitle: String?
+    private var conflictMemo: String?
+    private var writeCalls=0
+    private var pendingWrite:CheckedContinuation<BackendRunSummary,Error>?
+    private var pendingRunID:String?
+    private var pendingPatch:BackendRunEditPatch?
+    private var holdsFirstDelete:Bool
+    private var deleteFailure:RunRecordsFailure?
+    private var conflictsFirstDelete:Bool
+    private var losesFirstDeleteResponse:Bool
+    private var deleteCalls=0
+    private var pendingDelete:CheckedContinuation<Void,Error>?
+    private var pendingDeleteRunID:String?
+    private var tombstonedRunIDs:Set<String>=[]
+
+    init(
+        details:[BackendRunDetail],
+        holdsFirstWrite:Bool=false,
+        writeFailure:RunRecordsFailure?=nil,
+        conflictsFirstWrite:Bool=false,
+        conflictTitle:String?=nil,
+        conflictMemo:String?=nil,
+        listPages:[BackendRunPage]=[],
+        listFetchGates:[Int:WireframeRemoteReadGate]=[:],
+        listFetchIgnoresCancellation:Set<Int>=[],
+        failNextListFetches:Int=0,
+        holdsFirstDelete:Bool=false,
+        deleteFailure:RunRecordsFailure?=nil,
+        conflictsFirstDelete:Bool=false,
+        losesFirstDeleteResponse:Bool=false
+    ){
+        self.details=Dictionary(uniqueKeysWithValues:details.map{($0.summary.id,$0)})
+        self.listPages=listPages
+        self.listFetchGates=listFetchGates
+        self.listFetchIgnoresCancellation=listFetchIgnoresCancellation
+        self.failNextListFetches=failNextListFetches
+        self.holdsFirstWrite=holdsFirstWrite
+        self.writeFailure=writeFailure
+        self.conflictsFirstWrite=conflictsFirstWrite
+        self.conflictTitle=conflictTitle
+        self.conflictMemo=conflictMemo
+        self.holdsFirstDelete=holdsFirstDelete
+        self.deleteFailure=deleteFailure
+        self.conflictsFirstDelete=conflictsFirstDelete
+        self.losesFirstDeleteResponse=losesFirstDeleteResponse
+    }
+
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        listFetchCalls+=1
+        let call=listFetchCalls
+        passedListCursors.append(cursor)
+        let responsePage:BackendRunPage
+        if !listPages.isEmpty {responsePage=listPages.removeFirst()}
+        else {
+            let items=Array(details.values.map(\.summary).sorted{$0.id<$1.id}.prefix(size))
+            responsePage=BackendRunPage(items:items,nextCursor:nil)
+        }
+        if let gate=listFetchGates[call] {
+            if listFetchIgnoresCancellation.contains(call) {
+                await gate.waitIgnoringCancellation()
+            } else {
+                do{try await gate.wait()}
+                catch{throw RunRecordsFailure.cancelled}
+            }
+        }
+        if failNextListFetches>0 {
+            failNextListFetches-=1
+            completedListFetchCalls+=1
+            throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")
+        }
+        completedListFetchCalls+=1
+        return responsePage
+    }
+
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard let detail=details[id] else{throw RunRecordsFailure.recordNotFound}
+        return detail
+    }
+
+    func updateRun(id:String,version:Int64,patch:BackendRunEditPatch) async throws -> BackendRunSummary {
+        writeCalls+=1
+        guard let current=details[id] else{throw RunRecordsFailure.recordNotFound}
+        if holdsFirstWrite {
+            holdsFirstWrite=false
+            return try await withCheckedThrowingContinuation { continuation in
+                pendingWrite=continuation;pendingRunID=id;pendingPatch=patch
+            }
+        }
+        if conflictsFirstWrite {
+            conflictsFirstWrite=false
+            let latest=Self.updated(
+                current.summary,version:current.summary.version+1,
+                title:conflictTitle ?? "변경된 제목",memo:conflictMemo ?? current.summary.memo
+            )
+            details[id]=Self.detail(current,summary:latest)
+            throw RunRecordsFailure.versionConflict
+        }
+        if let writeFailure {
+            if writeFailure == .recordNotFound { details[id]=nil }
+            throw writeFailure
+        }
+        guard current.summary.version==version else{throw RunRecordsFailure.versionConflict}
+        let summary=Self.apply(patch,to:current.summary,version:version+1)
+        details[id]=Self.detail(current,summary:summary)
+        return summary
+    }
+
+    func deleteRun(id:String,version:Int64) async throws {
+        deleteCalls+=1
+        guard let current=details[id] else {
+            if tombstonedRunIDs.contains(id){return}
+            throw RunRecordsFailure.recordNotFound
+        }
+        if holdsFirstDelete {
+            holdsFirstDelete=false
+            try await withCheckedThrowingContinuation { continuation in
+                pendingDelete=continuation;pendingDeleteRunID=id
+            }
+            return
+        }
+        if let deleteFailure {throw deleteFailure}
+        if conflictsFirstDelete {
+            conflictsFirstDelete=false
+            details[id]=Self.detail(current,summary:Self.updated(current.summary,version:current.summary.version+1,title:current.summary.title,memo:current.summary.memo))
+            throw RunRecordsFailure.versionConflict
+        }
+        guard current.summary.version==version else{throw RunRecordsFailure.versionConflict}
+        details[id]=nil;tombstonedRunIDs.insert(id)
+        if losesFirstDeleteResponse {
+            losesFirstDeleteResponse=false
+            throw RunRecordsFailure.transport(.networkConnectionLost)
+        }
+    }
+
+    func hasPendingWrite()->Bool{pendingWrite != nil}
+    func writeCount()->Int{writeCalls}
+    func deleteCount()->Int{deleteCalls}
+    func hasPendingDelete()->Bool{pendingDelete != nil}
+    func listFetchCount()->Int{listFetchCalls}
+    func completedListFetchCount()->Int{completedListFetchCalls}
+    func failNextListFetch(){failNextListFetches=1}
+    func setListPages(_ pages:[BackendRunPage]){listPages=pages}
+    func observedListCursors()->[String?]{passedListCursors}
+    func set(_ detail:BackendRunDetail){details[detail.summary.id]=detail}
+
+    func completePendingWrite() {
+        guard let pendingWrite,let id=pendingRunID,let patch=pendingPatch,let current=details[id] else{return}
+        let summary=Self.apply(patch,to:current.summary,version:current.summary.version+1)
+        details[id]=Self.detail(current,summary:summary)
+        self.pendingWrite=nil;pendingRunID=nil;pendingPatch=nil
+        pendingWrite.resume(returning:summary)
+    }
+
+    func completePendingDelete() {
+        guard let pendingDelete,let id=pendingDeleteRunID else{return}
+        details[id]=nil;tombstonedRunIDs.insert(id)
+        self.pendingDelete=nil;pendingDeleteRunID=nil
+        pendingDelete.resume()
+    }
+
+    private static func apply(_ patch:BackendRunEditPatch,to current:BackendRunSummary,version:Int64)->BackendRunSummary {
+        var title=current.title
+        var memo=current.memo
+        if let value=patch.title{title=value.isEmpty ? nil:value}
+        if let value=patch.memo{memo=value.isEmpty ? nil:value}
+        return updated(current,version:version,title:title,memo:memo)
+    }
+
+    private static func updated(_ current:BackendRunSummary,version:Int64,title:String?,memo:String?)->BackendRunSummary {
+        BackendRunSummary(
+            id:current.id,clientRunID:current.clientRunID,version:version,startedAt:current.startedAt,endedAt:current.endedAt,
+            runDate:current.runDate,elapsedSeconds:current.elapsedSeconds,movingSeconds:current.movingSeconds,
+            distanceMeters:current.distanceMeters,verdict:current.verdict,verdictReason:current.verdictReason,
+            validDistanceMeters:current.validDistanceMeters,validSeconds:current.validSeconds,paceSecondsPerKm:current.paceSecondsPerKm,
+            title:title,memo:memo,createdAt:current.createdAt,updatedAt:current.updatedAt.addingTimeInterval(1),pointReward:current.pointReward
+        )
+    }
+
+    private static func detail(_ current:BackendRunDetail,summary:BackendRunSummary)->BackendRunDetail {
+        BackendRunDetail(summary:summary,points:current.points,pauses:current.pauses,judgement:current.judgement)
+    }
+}
+
+private func makeRunEditNormalizationConflictDetail(id: String, title: String?, memo: String?) -> BackendRunDetail {
+    let summary=BackendRunSummary(
+        id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+        startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+        runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+        verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+        title:title,memo:memo,createdAt:Date(timeIntervalSince1970:1_791_215_462),
+        updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:nil
+    )
+    return BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+}
+
+private actor WireframeProgressGoalsReadMock: RunningProgressReading {
+    private var progressResults:[Result<BackendProgressSummary,ProgressGoalsFailure>]
+    private var weeklyResults:[Result<BackendWeeklyGoalStatus,ProgressGoalsFailure>]
+    private var dailyResults:[Result<[BackendDailyProgressDay],ProgressGoalsFailure>]
+    private let progressGates:[Int:WireframeRemoteReadGate]
+    private let weeklyGates:[Int:WireframeRemoteReadGate]
+    private let dailyGates:[Int:WireframeRemoteReadGate]
+    private var progressCalls=0
+    private var weeklyCalls=0
+    private var dailyCalls=0
+    private var dailyRanges:[BackendDailyProgressRange]=[]
+    private var cancelledProgressCalls=0
+
+    init(
+        progressResults:[Result<BackendProgressSummary,ProgressGoalsFailure>],
+        weeklyResults:[Result<BackendWeeklyGoalStatus,ProgressGoalsFailure>],
+        dailyResults:[Result<[BackendDailyProgressDay],ProgressGoalsFailure>]=[],
+        progressGates:[Int:WireframeRemoteReadGate]=[:],
+        weeklyGates:[Int:WireframeRemoteReadGate]=[:],
+        dailyGates:[Int:WireframeRemoteReadGate]=[:]
+    ) {
+        self.progressResults=progressResults
+        self.weeklyResults=weeklyResults
+        self.dailyResults=dailyResults
+        self.progressGates=progressGates
+        self.weeklyGates=weeklyGates
+        self.dailyGates=dailyGates
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        let call=progressCalls;progressCalls+=1
+        let result=progressResults.isEmpty ? .failure(.invalidResponse):progressResults.removeFirst()
+        if let gate=progressGates[call] {
+            do { try await gate.wait() }
+            catch { cancelledProgressCalls+=1;throw ProgressGoalsFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        let call=weeklyCalls;weeklyCalls+=1
+        let result=weeklyResults.isEmpty ? .failure(ProgressGoalsFailure.invalidResponse):weeklyResults.removeFirst()
+        if let gate=weeklyGates[call] {
+            do { try await gate.wait() }
+            catch { throw ProgressGoalsFailure.cancelled }
+        }
+        return try result.get()
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        let call=dailyCalls;dailyCalls+=1;dailyRanges.append(range)
+        let result=dailyResults.isEmpty ? .failure(ProgressGoalsFailure.invalidResponse):dailyResults.removeFirst()
+        if let gate=dailyGates[call] {
+            do { try await gate.wait() }
+            catch { throw ProgressGoalsFailure.cancelled }
+        }
+        return BackendDailyProgress(range:range,days:try result.get())
+    }
+
+    func observedProgressCalls()->Int{progressCalls}
+    func observedWeeklyCalls()->Int{weeklyCalls}
+    func observedDailyCalls()->Int{dailyCalls}
+    func observedDailyRanges()->[BackendDailyProgressRange]{dailyRanges}
+    func observedCancelledProgressCalls()->Int{cancelledProgressCalls}
+}
+
+private enum WireframeProgressGoalsTestData {
+    static func summary(distance:Int64)->BackendProgressSummary {
+        BackendProgressSummary(
+            grade:"SPROUT",gradeAchievedAt:nil,
+            window:.init(fromDate:"2026-07-04",toDate:"2026-10-01",distanceMeters:distance,activityDays:8),
+            nextGrade:.init(grade:"PASSION",requiredDistanceMeters:30_000,requiredActivityDays:10,remainingDistanceMeters:max(0,30_000-distance),remainingActivityDays:2),
+            total:.init(distanceMeters:distance,seconds:7_800,activityDays:8,runCount:10)
+        )
+    }
+
+    static func goals(done:Int64)->BackendWeeklyGoalStatus {
+        BackendWeeklyGoalStatus(
+            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
+            distance:.init(goal:20_000,done:done,remaining:max(0,20_000-done),achieved:done>=20_000),
+            time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+        )
+    }
+
+    static func goal(version:Int64,distance:Int64?,time:Int64?,doneMeters:Int64=12_400,doneSeconds:Int64=3_900)->BackendWeeklyGoalStatus {
+        func axis(_ target:Int64?,_ done:Int64)->BackendWeeklyGoalAxis {
+            guard let target else{return .init(goal:nil,done:done,remaining:nil,achieved:false)}
+            return .init(goal:target,done:done,remaining:max(0,target-done),achieved:done>=target)
+        }
+        return BackendWeeklyGoalStatus(
+            weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:version,
+            distance:axis(distance,doneMeters),time:axis(time,doneSeconds)
+        )
+    }
+}
+
+private actor WeeklyGoalMutationMock: RunningProgressReading, RunningWeeklyGoalWriting {
+    private var currentGoal:BackendWeeklyGoalStatus
+    private var nextReadGoals:[BackendWeeklyGoalStatus]
+    private let writeFailure:ProgressGoalsFailure?
+    private var writeFailures:[ProgressGoalsFailure]
+    private let conflictServerGoal:BackendWeeklyGoalStatus?
+    private let writeGate:WireframeRemoteReadGate?
+    private let weeklyReadGate:WireframeRemoteReadGate?
+    private let weeklyReadGateOnCall:Int?
+    private var weeklyReadFailures:[Int:ProgressGoalsFailure]
+    private let commitAfterCancellation:Bool
+    private let lateWriteResult:BackendWeeklyGoalStatus?
+    private var writeCalls=0
+    private var completedWrites=0
+    private var weeklyReadCalls=0
+    private var writeVersions:[Int64]=[]
+    private var writeDrafts:[(Int64?,Int64?)]=[]
+
+    init(
+        initialGoal:BackendWeeklyGoalStatus,
+        nextReadGoals:[BackendWeeklyGoalStatus]=[],
+        writeFailure:ProgressGoalsFailure?=nil,
+        writeFailures:[ProgressGoalsFailure]=[],
+        conflictServerGoal:BackendWeeklyGoalStatus?=nil,
+        writeGate:WireframeRemoteReadGate?=nil,
+        weeklyReadGate:WireframeRemoteReadGate?=nil,
+        weeklyReadGateOnCall:Int?=nil,
+        weeklyReadFailures:[Int:ProgressGoalsFailure]=[:],
+        commitAfterCancellation:Bool=false,
+        lateWriteResult:BackendWeeklyGoalStatus?=nil
+    ) {
+        self.currentGoal=initialGoal
+        self.nextReadGoals=nextReadGoals
+        self.writeFailure=writeFailure
+        self.writeFailures=writeFailures
+        self.conflictServerGoal=conflictServerGoal
+        self.writeGate=writeGate
+        self.weeklyReadGate=weeklyReadGate
+        self.weeklyReadGateOnCall=weeklyReadGateOnCall
+        self.weeklyReadFailures=weeklyReadFailures
+        self.commitAfterCancellation=commitAfterCancellation
+        self.lateWriteResult=lateWriteResult
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        WireframeProgressGoalsTestData.summary(distance:12_400)
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyReadCalls+=1
+        let call=weeklyReadCalls
+        if let failure=weeklyReadFailures.removeValue(forKey:call) { throw failure }
+        if !nextReadGoals.isEmpty {
+            currentGoal=nextReadGoals.removeFirst()
+        }
+        let response=currentGoal
+        if let weeklyReadGate,weeklyReadGateOnCall==call { try await weeklyReadGate.wait() }
+        return response
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        BackendDailyProgress(range:range,days:[])
+    }
+
+    func saveWeeklyGoal(version:Int64,distanceGoalMeters:Int64?,timeGoalSeconds:Int64?) async throws -> BackendWeeklyGoalStatus {
+        writeCalls+=1
+        writeVersions.append(version)
+        writeDrafts.append((distanceGoalMeters,timeGoalSeconds))
+        if let writeGate {
+            do { try await writeGate.wait() }
+            catch {
+                guard commitAfterCancellation else { throw ProgressGoalsFailure.cancelled }
+            }
+        }
+        if !writeFailures.isEmpty {
+            let failure=writeFailures.removeFirst()
+            if case .weeklyGoalVersionConflict = failure,let conflictServerGoal { currentGoal=conflictServerGoal }
+            throw failure
+        }
+        if let writeFailure { throw writeFailure }
+        let saved=lateWriteResult ?? WireframeProgressGoalsTestData.goal(
+            version:version+1,distance:distanceGoalMeters,time:timeGoalSeconds,
+            doneMeters:currentGoal.distance.done,doneSeconds:currentGoal.time.done
+        )
+        if lateWriteResult == nil { currentGoal=saved }
+        completedWrites+=1
+        return saved
+    }
+
+    func observedWriteCalls()->Int{writeCalls}
+    func observedCompletedWrites()->Int{completedWrites}
+    func observedWeeklyReadCalls()->Int{weeklyReadCalls}
+    func observedWriteVersions()->[Int64]{writeVersions}
+    func observedWriteDrafts()->[(Int64?,Int64?)]{writeDrafts}
+    func enqueueReadGoal(_ goal:BackendWeeklyGoalStatus){nextReadGoals.append(goal)}
+}
+
+extension ThemeTests {
+    func testWeeklyGoalDraftValidationRejectsFractionalOrWrongStepInputsWithoutTruncating() {
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:30.9))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:31))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:9))
+        XCTAssertNil(WeeklyGoalDraftValidation.timeMinutes(from:6_010))
+        XCTAssertEqual(WeeklyGoalDraftValidation.timeMinutes(from:30),30)
+        XCTAssertEqual(WeeklyGoalDraftValidation.timeMinutes(from:6_000),6_000)
+
+        XCTAssertNil(WeeklyGoalDraftValidation.payload(distanceEnabled:true,kilometers:1.25,timeEnabled:false,minutes:30))
+        XCTAssertNil(WeeklyGoalDraftValidation.payload(distanceEnabled:false,kilometers:0,timeEnabled:true,minutes:31))
+        guard let both=WeeklyGoalDraftValidation.payload(distanceEnabled:true,kilometers:1,timeEnabled:true,minutes:30) else {
+            XCTFail("The lowest valid distance and time values should be accepted");return
+        }
+        XCTAssertEqual(both.0,1_000)
+        XCTAssertEqual(both.1,1_800)
+    }
+
+    @MainActor func testProgressFailureDoesNotHideWeeklyGoalAndEachReadCanRetryIndependently() async {
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.failure(.serviceUnavailable(requestID:"progress-outage")),.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400))]
+        )
+        let loader=RunningProgressLoader(client:mock)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:loader))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.progressState,.failed(.serviceUnavailable(requestID:"progress-outage")))
+        guard case .loaded(let goal)=bridge.weeklyGoalState else {XCTFail("A successful weekly goal read must remain available when statistics fail");return}
+        XCTAssertEqual(goal.distance.done,12_400)
+
+        bridge.retryProgress()
+        for _ in 0..<500 {
+            if case .loaded = bridge.progressState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let progress)=bridge.progressState else {XCTFail("The failed statistics read should retry independently");return}
+        XCTAssertEqual(progress.total.distanceMeters,12_400)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(goal))
+        let calls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(calls,2,"Retrying statistics must not refetch the successful goal")
+        XCTAssertEqual(weeklyCalls,1)
+    }
+
+    @MainActor func testWeeklyGoalFailureDoesNotHideProgressAndGoalCanRetryIndependently() async {
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
+            weeklyResults:[.failure(.serviceUnavailable(requestID:"weekly-outage")),.success(WireframeProgressGoalsTestData.goals(done:12_400))]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        guard case .loaded(let progress)=bridge.progressState else {XCTFail("The successful statistics read must survive a weekly goal failure");return}
+        XCTAssertEqual(progress.total.distanceMeters,12_400)
+        XCTAssertEqual(bridge.weeklyGoalState,.failed(.serviceUnavailable(requestID:"weekly-outage")))
+
+        bridge.retryWeeklyGoal()
+        for _ in 0..<500 {
+            if case .loaded = bridge.weeklyGoalState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let goal)=bridge.weeklyGoalState else {XCTFail("The weekly goal read should retry independently");return}
+        XCTAssertEqual(goal.distance.done,12_400)
+        XCTAssertEqual(bridge.progressState,.loaded(progress))
+        let calls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(calls,1,"Retrying the goal must not refetch successful statistics")
+        XCTAssertEqual(weeklyCalls,2)
+    }
+
+    @MainActor func testProgressGoalsAccountSwitchClearsAndRejectsLatePreviousAccountData() async {
+        let gate=WireframeRemoteReadGate()
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400)),.success(WireframeProgressGoalsTestData.summary(distance:7_200))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400)),.success(WireframeProgressGoalsTestData.goals(done:7_200))],
+            progressGates:[0:gate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        XCTAssertTrue(bridge.hasRunningProgressDependency)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H00"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H07"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H08"),.progressGoals)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("H09"),.progressGoals)
+
+        let accountARead=Task{@MainActor in await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"Account A's weekly goal request must begin before switching accounts")
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.progressState,.idle)
+        XCTAssertEqual(bridge.weeklyGoalState,.idle)
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        guard case .loaded(let accountBProgress)=bridge.progressState else {XCTFail("Expected account B statistics");return}
+        guard case .loaded(let accountBGoal)=bridge.weeklyGoalState else {XCTFail("Expected account B weekly goal");return}
+        XCTAssertEqual(accountBProgress.total.distanceMeters,7_200)
+        XCTAssertEqual(accountBGoal.distance.done,7_200)
+
+        await gate.release()
+        await accountARead.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.progressState,.loaded(accountBProgress),"A late account A response must not overwrite account B")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal))
+        let calls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(calls,2)
+        XCTAssertEqual(weeklyCalls,2)
+    }
+
+    @MainActor func testCancelledProgressReadCanBeActivatedAgainWithoutLosingSeparateStates() async {
+        let gate=WireframeRemoteReadGate()
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400)),.success(WireframeProgressGoalsTestData.summary(distance:7_200))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400)),.success(WireframeProgressGoalsTestData.goals(done:7_200))],
+            progressGates:[0:gate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        let request=Task{@MainActor in await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            let waiting=await gate.isWaiting()
+            if waiting {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"The parallel weekly read must begin before cancellation")
+        request.cancel()
+        await request.value
+        XCTAssertEqual(bridge.progressState,.idle)
+        XCTAssertNil(bridge.activeFeature,"A cancelled activation must allow the screen to start a fresh read")
+        let cancelledCalls=await mock.observedCancelledProgressCalls()
+        XCTAssertEqual(cancelledCalls,1)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        guard case .loaded(let progress)=bridge.progressState else {XCTFail("The retried statistics read should load");return}
+        guard case .loaded(let goal)=bridge.weeklyGoalState else {XCTFail("The retried goal read should load");return}
+        XCTAssertEqual(progress.total.distanceMeters,7_200)
+        XCTAssertEqual(goal.distance.done,7_200)
+        let progressCalls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(progressCalls,2)
+        XCTAssertEqual(weeklyCalls,2)
+    }
+
+    @MainActor func testDuplicateProgressActivationDoesNotInvalidateIndependentReads() async {
+        let gate=WireframeRemoteReadGate()
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400))],
+            progressGates:[0:gate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        let request=Task{@MainActor in await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        for _ in 0..<500 {
+            if await mock.observedWeeklyCalls()==1 { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        let initialWeeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(initialWeeklyCalls,1,"The parallel weekly read must begin during the first activation")
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.progressState,.loading)
+        let progressCalls=await mock.observedProgressCalls()
+        let weeklyCalls=await mock.observedWeeklyCalls()
+        XCTAssertEqual(progressCalls,1)
+        XCTAssertEqual(weeklyCalls,1)
+        await gate.release()
+        await request.value
+        guard case .loaded(let progress)=bridge.progressState else {XCTFail("The first statistics response should complete");return}
+        guard case .loaded(let goal)=bridge.weeklyGoalState else {XCTFail("The independent weekly goal response should complete");return}
+        XCTAssertEqual(progress.total.distanceMeters,12_400)
+        XCTAssertEqual(goal.distance.done,12_400)
+    }
+
+    @MainActor func testWeeklyGoalMutationIgnoresDuplicateTapAndRefreshesTheQueryAfterSave() async {
+        let gate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeGate:gate)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline))
+
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:40_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.saving)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"The prior query state stays visible while PUT is pending")
+        let pendingWriteCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(pendingWriteCalls,1,"A second tap must not start another PUT")
+
+        await gate.release()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalWriteState == .saved {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let refreshed)=bridge.weeklyGoalState else {XCTFail("The post-save query should load");return}
+        XCTAssertEqual(refreshed.version,4)
+        XCTAssertEqual(refreshed.distance.goal,30_000)
+        XCTAssertEqual(refreshed.time.goal,7_200)
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        XCTAssertEqual(weeklyReadCalls,2,"Saving should synchronize from a second GET")
+    }
+
+    @MainActor func testWeeklyGoalWriteFailurePreservesThePreviousLoadedStatus() async {
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeFailure:.serviceUnavailable(requestID:"weekly-put-outage"))
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if case .failed = bridge.weeklyGoalWriteState {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.failed(.serviceUnavailable(requestID:"weekly-put-outage")))
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"A rejected or unavailable PUT must not replace the previous query state")
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        let writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(weeklyReadCalls,1,"A failed write must not imply that a query was synchronized")
+        XCTAssertEqual(writeCalls,1)
+    }
+
+    @MainActor func testWeeklyGoalConflictRefreshIsGatedAndRequiresAConfirmedSaveWithTheNewVersion() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.failed(.weeklyGoalVersionConflict(requestID:"weekly-conflict")))
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline),"A version conflict keeps the previous query state visible until refresh")
+        XCTAssertTrue(bridge.needsWeeklyGoalConflictRefresh)
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        var readIsWaiting=false
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() {readIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(readIsWaiting,"Conflict recovery must wait for its latest-goal GET")
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.refreshing)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(baseline))
+        var writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCalls,1,"A GET must not auto-resubmit the draft")
+
+        await refreshGate.release()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .refreshed { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent))
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        writeCalls=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCalls,1,"The changed goal only loads; the user must confirm a second save")
+
+        bridge.saveWeeklyGoal(version:4,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalWriteState == .saved { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let saved)=bridge.weeklyGoalState else {XCTFail("The confirmed retry must synchronize the saved goal");return}
+        XCTAssertEqual(saved.version,5)
+        XCTAssertEqual(saved.distance.goal,30_000)
+        XCTAssertNil(saved.time.goal)
+        let writeVersions=await mock.observedWriteVersions()
+        XCTAssertEqual(writeVersions,[3,4])
+        let drafts=await mock.observedWriteDrafts()
+        XCTAssertEqual(drafts.count,2)
+        XCTAssertEqual(drafts[0].0,30_000)
+        XCTAssertNil(drafts[0].1)
+        XCTAssertEqual(drafts[1].0,30_000)
+        XCTAssertNil(drafts[1].1)
+    }
+
+    @MainActor func testWeeklyGoalConflictRefreshFailureCanBeRetriedWithoutSavingOrChangingTheDraft() async {
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,
+            weeklyReadFailures:[2:.serviceUnavailable(requestID:"conflict-refresh-outage")]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if case .failed = bridge.weeklyGoalConflictRefreshState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.failed(.serviceUnavailable(requestID:"conflict-refresh-outage")))
+        XCTAssertTrue(bridge.needsWeeklyGoalConflictRefresh)
+        let writeCallsAfterConflict=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCallsAfterConflict,1)
+
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .refreshed { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent))
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        let writeCallsAfterRetry=await mock.observedWriteCalls()
+        let weeklyReadsAfterRetry=await mock.observedWeeklyReadCalls()
+        XCTAssertEqual(writeCallsAfterRetry,1,"Refreshing after a read failure must not resubmit the saved draft")
+        XCTAssertEqual(weeklyReadsAfterRetry,3)
+    }
+
+    @MainActor func testLeavingEditorDuringConflictRefreshCancelsItsTaskAndReloadsWithoutSaving() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.activeScreen,"H00")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent),"Returning to the home screen must reload the pending version conflict")
+        XCTAssertFalse(bridge.needsWeeklyGoalConflictRefresh)
+        await refreshGate.release()
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(concurrent),"The canceled editor refresh cannot overwrite the new query")
+        let writeCallsAfterBack=await mock.observedWriteCalls()
+        XCTAssertEqual(writeCallsAfterBack,1,"Back navigation never confirms or repeats a PUT")
+    }
+
+    @MainActor func testAccountSwitchDuringConflictRefreshDropsTheOldAccountResponse() async {
+        let refreshGate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let concurrent=WireframeProgressGoalsTestData.goal(version:4,distance:40_000,time:12_000)
+        let accountBGoal=WireframeProgressGoalsTestData.goal(version:9,distance:nil,time:18_000)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:baseline,writeFailures:[.weeklyGoalVersionConflict(requestID:"weekly-conflict")],
+            conflictServerGoal:concurrent,weeklyReadGate:refreshGate,weeklyReadGateOnCall:2
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:nil,accountScopeID:"account-a",screen:"H04")
+        for _ in 0..<500 {
+            if bridge.weeklyGoalConflictRefreshState == .required { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        bridge.refreshWeeklyGoalAfterConflict()
+        for _ in 0..<500 {
+            if await refreshGate.isWaiting() { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+
+        await mock.enqueueReadGoal(accountBGoal)
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal))
+        XCTAssertEqual(bridge.weeklyGoalConflictRefreshState,.idle)
+        await refreshGate.release()
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal),"The late conflict refresh from account A cannot replace account B")
+        let versionsAfterSwitch=await mock.observedWriteVersions()
+        XCTAssertEqual(versionsAfterSwitch,[3],"Account switching never retries the conflicting PUT")
+    }
+
+    @MainActor func testCancelledWeeklyGoalWriteRefreshesAfterLateCommitWhenReturningToHome() async {
+        let gate=WireframeRemoteReadGate()
+        let baseline=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(initialGoal:baseline,writeGate:gate,commitAfterCancellation:true)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H00")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.idle,"Leaving the editor cancels its visible mutation state")
+        await gate.release()
+        for _ in 0..<500 {
+            if await mock.observedCompletedWrites()==1, await mock.observedWeeklyReadCalls()>=3,
+               case .loaded(let goal)=bridge.weeklyGoalState, goal.version==4 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let refreshed)=bridge.weeklyGoalState else {XCTFail("The late commit should cause a fresh query");return}
+        XCTAssertEqual(refreshed.version,4)
+        XCTAssertEqual(refreshed.distance.goal,30_000)
+        XCTAssertEqual(refreshed.time.goal,7_200)
+        let weeklyReadCalls=await mock.observedWeeklyReadCalls()
+        XCTAssertGreaterThanOrEqual(weeklyReadCalls,3,"The cancelled mutation requires an eventual consistency read")
+    }
+
+    @MainActor func testLateWeeklyGoalWriteCannotCrossAnAccountSwitch() async {
+        let gate=WireframeRemoteReadGate()
+        let accountAGoal=WireframeProgressGoalsTestData.goal(version:3,distance:20_000,time:7_200)
+        let accountBGoal=WireframeProgressGoalsTestData.goal(version:9,distance:nil,time:12_000)
+        let lateACommit=WireframeProgressGoalsTestData.goal(version:4,distance:30_000,time:7_200)
+        let mock=WeeklyGoalMutationMock(
+            initialGoal:accountAGoal,nextReadGoals:[accountAGoal,accountBGoal],writeGate:gate,
+            commitAfterCancellation:true,lateWriteResult:lateACommit
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            runningProgressLoader:RunningProgressLoader(client:mock),weeklyGoalWriter:mock
+        ))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H04")
+        bridge.saveWeeklyGoal(version:3,distanceGoalMeters:30_000,timeGoalSeconds:7_200,accountScopeID:"account-a",screen:"H04")
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await gate.isWaiting() {requestIsWaiting=true;break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-b",screen:"H00")
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal))
+        await gate.release()
+        for _ in 0..<500 {
+            if await mock.observedCompletedWrites()==1 {break}
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        try? await Task.sleep(nanoseconds:20_000_000)
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.weeklyGoalState,.loaded(accountBGoal),"A delayed response from account A must not overwrite account B")
+        XCTAssertEqual(bridge.weeklyGoalWriteState,.idle)
+    }
+
+    func testH08ToH09SameRangeKeepsSwiftUITaskIdentityStable() throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let h08=WireframeDailyProgressTaskIdentity.key(screen:"H08",accountScopeID:"account-a",range:week)
+        let h09=WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-a",range:week)
+        XCTAssertEqual(h08,h09,"A statistics screen change alone must not cancel the same-range SwiftUI task")
+        XCTAssertNotEqual(h09,WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-b",range:week))
+        let month=try BackendDailyProgressRange(fromDate:"2026-09-01",toDate:"2026-09-30")
+        XCTAssertNotEqual(h09,WireframeDailyProgressTaskIdentity.key(screen:"H09",accountScopeID:"account-a",range:month))
+    }
+
+    @MainActor func testH08ToH09SameRangeMovementSurvivesViewTaskCancellationBeforeH09Read() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let inFlightGate=WireframeRemoteReadGate()
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],
+            weeklyResults:[],
+            dailyResults:[.success(weekRows)],
+            dailyGates:[0:inFlightGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let initialRead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await inFlightGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        initialRead.cancel()
+        XCTAssertTrue(initialRead.isCancelled)
+        let requestStillWaiting=await inFlightGate.isWaiting()
+        XCTAssertTrue(requestStillWaiting,"Cancelling the view task must not cancel the bridge-owned request")
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H09")
+        guard case .loading(let loadingRange)=bridge.dailyProgressState else {XCTFail("H09 should keep the matching in-flight weekly read");return}
+        XCTAssertEqual(loadingRange,week)
+
+        await inFlightGate.release()
+        await initialRead.value
+        guard case .loaded(let current)=bridge.dailyProgressState else {XCTFail("The same-range H08 response must complete for the active H09 screen");return}
+        XCTAssertEqual(current.range,week)
+        XCTAssertEqual(current.distanceMeters,7_200)
+        let requestedRanges=await mock.observedDailyRanges()
+        XCTAssertEqual(requestedRanges,[week],"The H09 screen should reuse the single matching request")
+    }
+
+    @MainActor func testH08ToH09SameRangeMovementAfterCancelledTaskCompletesReusesLoadedRead() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let inFlightGate=WireframeRemoteReadGate()
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],
+            weeklyResults:[],
+            dailyResults:[.success(weekRows)],
+            dailyGates:[0:inFlightGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let initialRead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await inFlightGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        initialRead.cancel()
+        XCTAssertTrue(initialRead.isCancelled)
+
+        await inFlightGate.release()
+        await initialRead.value
+        guard case .loaded(let completed)=bridge.dailyProgressState else {XCTFail("The owned read should finish after its view task is cancelled");return}
+        XCTAssertEqual(completed.range,week)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H09")
+        guard case .loaded(let current)=bridge.dailyProgressState else {XCTFail("H09 should reuse the completed same-range response");return}
+        XCTAssertEqual(current.distanceMeters,7_200)
+        let requestedRanges=await mock.observedDailyRanges()
+        XCTAssertEqual(requestedRanges,[week],"H09 should not refetch a completed matching range")
+    }
+
+    @MainActor func testH08ToH09RangeMovementRejectsLateOldRangeResponse() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let month=try BackendDailyProgressRange(fromDate:"2026-09-01",toDate:"2026-09-30")
+        let firstRangeGate=WireframeRemoteReadGate()
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let monthRows=[BackendDailyProgressDay(date:"2026-09-12",validDistanceMeters:23_000,validSeconds:8_625,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[.success(WireframeProgressGoalsTestData.summary(distance:12_400))],
+            weeklyResults:[.success(WireframeProgressGoalsTestData.goals(done:12_400))],
+            dailyResults:[.success(weekRows),.success(monthRows)],
+            dailyGates:[0:firstRangeGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let firstRead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var firstReadIsWaiting=false
+        for _ in 0..<500 {
+            if await firstRangeGate.isWaiting() { firstReadIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(firstReadIsWaiting)
+
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H09")
+        await bridge.loadDailyProgress(range:month,accountScopeID:"account-a",screen:"H09")
+        guard case .loaded(let monthly)=bridge.dailyProgressState else {XCTFail("H09 should load its current monthly range");return}
+        XCTAssertEqual(monthly.range,month)
+        XCTAssertEqual(monthly.distanceMeters,23_000)
+        await firstRangeGate.release()
+        await firstRead.value
+        guard case .loaded(let stillMonthly)=bridge.dailyProgressState else {XCTFail("A late H08 response must not replace the H09 range");return}
+        XCTAssertEqual(stillMonthly.range,month)
+        XCTAssertEqual(stillMonthly.distanceMeters,23_000)
+        let ranges=await mock.observedDailyRanges()
+        XCTAssertEqual(ranges,[week,month])
+    }
+
+    @MainActor func testCancelledDailyReadCannotCrossAccountSwitch() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let accountAGate=WireframeRemoteReadGate()
+        let accountADays=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let accountBDays=[BackendDailyProgressDay(date:"2026-10-02",validDistanceMeters:14_000,validSeconds:7_200,runCount:2,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.success(accountADays),.success(accountBDays)],dailyGates:[0:accountAGate]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        let accountARead=Task{@MainActor in await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")}
+        var requestIsWaiting=false
+        for _ in 0..<500 {
+            if await accountAGate.isWaiting() { requestIsWaiting=true;break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        XCTAssertTrue(requestIsWaiting)
+        accountARead.cancel()
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-b",screen:"H09")
+        guard case .loaded(let accountB)=bridge.dailyProgressState else {XCTFail("Expected account B daily progress");return}
+        XCTAssertEqual(accountB.distanceMeters,14_000)
+        await accountARead.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.loaded(accountB),"A cancelled account A response must not replace account B")
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,2)
+    }
+
+    @MainActor func testDailyProgressCanRetryAfterRemoteFailure() async throws {
+        let week=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let weekRows=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.failure(.serviceUnavailable(requestID:"daily-outage")),.success(weekRows)]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.activate(feature:.progressGoals,accountScopeID:"account-a",screen:"H08")
+        await bridge.loadDailyProgress(range:week,accountScopeID:"account-a",screen:"H08")
+        guard case .failed(let failedRange,let failure)=bridge.dailyProgressState else {XCTFail("Expected an explicit remote failure");return}
+        XCTAssertEqual(failedRange,week)
+        XCTAssertTrue(failure.canManuallyRetry)
+
+        bridge.retryDailyProgress(range:week)
+        for _ in 0..<500 {
+            if case .loaded = bridge.dailyProgressState { break }
+            try? await Task.sleep(nanoseconds:1_000_000)
+        }
+        guard case .loaded(let retried)=bridge.dailyProgressState else {XCTFail("Expected the explicit daily retry to load");return}
+        XCTAssertEqual(retried.distanceMeters,7_200)
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,2)
+    }
+
+    @MainActor func testRemoteDailyProgressUsesItsOwnRangeAndIsNotMixedAcrossAccounts() async throws {
+        let range=try BackendDailyProgressRange(fromDate:"2026-09-28",toDate:"2026-10-04")
+        let days=[BackendDailyProgressDay(date:"2026-10-01",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)]
+        let mock=WireframeProgressGoalsReadMock(
+            progressResults:[],weeklyResults:[],dailyResults:[.success(days)]
+        )
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runningProgressLoader:RunningProgressLoader(client:mock)))
+        await bridge.loadDailyProgress(range:range,accountScopeID:"account-a",screen:"H07")
+        guard case .loaded(let snapshot)=bridge.dailyProgressState else {XCTFail("Expected loaded daily progress");return}
+        XCTAssertEqual(snapshot.range,range)
+        XCTAssertEqual(snapshot.distanceMeters,7_200)
+        XCTAssertEqual(snapshot.seconds,3_600)
+        XCTAssertEqual(snapshot.runCount,1)
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.dailyProgressState,.idle)
+        let calls=await mock.observedDailyCalls()
+        XCTAssertEqual(calls,1)
+    }
+
+    @MainActor func testRemoteReadDependencyInjectionKeepsDefaultLocalModeAndScreenScopes() async {
+        let localBridge=WireframeRemoteReadBridge()
+        XCTAssertFalse(localBridge.isEnabled)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("M01"),.profile)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("POINTS"),.points)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("B02"),.points)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("L01"),.runs)
+        XCTAssertEqual(WireframeRemoteReadFeature.forScreen("L04"),.runs)
+        XCTAssertNil(WireframeRemoteReadFeature.forScreen("SHOP"))
+
+        await localBridge.activate(feature:.profile,accountScopeID:"local")
+        XCTAssertEqual(localBridge.memberProfileState,.idle)
+        XCTAssertEqual(localBridge.pointsState,.idle)
+        XCTAssertEqual(localBridge.runRecordsState,.idle)
+    }
+
+    @MainActor func testRemoteRunListAndDetailUseInjectedReadOnlyStateWithoutReplacingLocalRecords() async {
+        let summary=BackendRunSummary(
+            id:"run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:1,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"서버 밤 러닝",memo:nil,createdAt:Date(timeIntervalSince1970:1_791_215_462),updatedAt:Date(timeIntervalSince1970:1_791_215_462),
+            pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+        )
+        let detail=BackendRunDetail(summary:summary,points:[],pauses:[],judgement:nil)
+        let mock=WireframeRunRecordsReadMock(pages:[BackendRunPage(items:[summary],nextCursor:"opaque-run-cursor")],details:[summary.id:detail])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:mock,pageSize:1)))
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Expected an explicit loaded server page");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[summary.id])
+        XCTAssertEqual(snapshot.nextCursor,"opaque-run-cursor")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:summary.id)
+        XCTAssertEqual(bridge.runDetailState,.loaded(detail))
+        XCTAssertEqual(bridge.runRecordsState,.loaded(snapshot),"Opening detail must keep the separate list snapshot")
+
+        let state=WireState()
+        state.screen="L01"
+        state.openRemoteRecord(id:summary.id)
+        XCTAssertEqual(state.screen,"L04")
+        XCTAssertEqual(state.remoteSelectedRunID,summary.id)
+        state.back()
+        XCTAssertEqual(state.screen,"L01")
+        XCTAssertNil(state.remoteSelectedRunID)
+
+        bridge.accountDidChange(to:"account-b")
+        XCTAssertEqual(bridge.runRecordsState,.idle)
+        XCTAssertEqual(bridge.runDetailState,.idle)
+    }
+
+    @MainActor func testRunListReentryReadsEveryPageAndRemovesRemoteDeletionWithoutStaleDetail() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-a",title:"삭제된 원격 기록",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-b",title:"남은 원격 기록",memo:nil)
+        let runC=makeRunEditNormalizationConflictDetail(id:"sync-c",title:"새 원격 기록",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB,runC],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:"older-list-cursor"),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ])
+        let loader=RunRecordsLoader(client:fake,pageSize:1)
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:loader))
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        bridge.loadNextRunRecordsPage()
+        let loadedSecondPage=await waitUntil {
+            guard case .loaded(let snapshot)=bridge.runRecordsState else{return false}
+            return snapshot.items.map(\.id)==[runA.summary.id,runB.summary.id]
+        }
+        XCTAssertTrue(loadedSecondPage)
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runDetailState,.loaded(runA))
+
+        await fake.setListPages([
+            BackendRunPage(items:[runB.summary],nextCursor:"new-list-cursor"),
+            BackendRunPage(items:[runC.summary],nextCursor:nil)
+        ])
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+
+        guard case .loaded(let refreshed)=bridge.runRecordsState else{XCTFail("Expected a completed full refresh");return}
+        XCTAssertEqual(refreshed.items.map(\.id),[runB.summary.id,runC.summary.id])
+        XCTAssertNil(refreshed.nextCursor,"A completed reconciliation has reached the terminal page")
+        XCTAssertEqual(bridge.runDetailState,.failed(runID:runA.summary.id,.recordNotFound),"A run absent from the completed list cannot remain displayed as current detail")
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,"older-list-cursor",nil,"new-list-cursor"])
+    }
+
+    @MainActor func testRunListRefreshFailureKeepsLastCompleteRowsAndCanRetry() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-cache-a",title:"기존 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-cache-b",title:"기존 B",memo:nil)
+        let runC=makeRunEditNormalizationConflictDetail(id:"sync-new-c",title:"새 C",memo:nil)
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB,runC],listPages:[
+            BackendRunPage(items:[runA.summary,runB.summary],nextCursor:nil)
+        ])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await fake.failNextListFetch()
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await fake.setListPages([
+            BackendRunPage(items:[runB.summary,runC.summary],nextCursor:"tail"),
+            BackendRunPage(items:[runC.summary],nextCursor:nil)
+        ])
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+
+        guard case .loaded(let preserved)=bridge.runRecordsState else{XCTFail("The prior completed list must stay visible");return}
+        XCTAssertEqual(preserved.items.map(\.id),[runA.summary.id,runB.summary.id])
+        XCTAssertEqual(bridge.runRecordsRefreshState,.failed(.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")))
+
+        await fake.setListPages([BackendRunPage(items:[runB.summary,runC.summary],nextCursor:nil)])
+        await bridge.refreshRunRecords()
+        guard case .loaded(let recovered)=bridge.runRecordsState else{XCTFail("Expected retry to complete the list refresh");return}
+        XCTAssertEqual(recovered.items.map(\.id),[runB.summary.id,runC.summary.id])
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+    }
+
+    @MainActor func testRunListRefreshIsolatedFromAccountSwitchAndDuplicateRefresh() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-account-a",title:"계정 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"sync-account-b",title:"계정 B",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ],listFetchGates:[2:gate])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let refresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting)
+        await bridge.refreshRunRecords()
+        let callsDuringRefresh=await fake.listFetchCount()
+        XCTAssertEqual(callsDuringRefresh,2,"A second refresh tap is ignored while the first scan is active")
+
+        bridge.accountDidChange(to:"account-b")
+        await bridge.activate(feature:.runs,accountScopeID:"account-b",screen:"L01")
+        guard case .loaded(let accountB)=bridge.runRecordsState else{XCTFail("Account B must read its own list");return}
+        XCTAssertEqual(accountB.items.map(\.id),[runB.summary.id])
+        await gate.release()
+        await refresh.value
+        XCTAssertEqual(bridge.accountScopeID,"account-b")
+        guard case .loaded(let stillB)=bridge.runRecordsState else{XCTFail("A late account A response cannot replace account B");return}
+        XCTAssertEqual(stillB.items.map(\.id),[runB.summary.id])
+    }
+
+    @MainActor func testParentCancellationCancelsOwnedRefreshBeforeNextPageEvenIfReaderIgnoresCancellation() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"cancel-parent-a",title:"기록 A",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:"must-not-fetch"),
+            BackendRunPage(items:[],nextCursor:nil)
+        ],listFetchGates:[2:gate],listFetchIgnoresCancellation:[2])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let refresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting)
+
+        refresh.cancel()
+        let cancelled=await waitUntil{bridge.runRecordsRefreshState == .idle}
+        XCTAssertTrue(cancelled,"Cancelling the SwiftUI parent must cancel the bridge-owned refresh")
+        await gate.release()
+        let responseReturned=await waitUntil{await fake.completedListFetchCount()==2}
+        XCTAssertTrue(responseReturned)
+        await refresh.value
+
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,nil],"A transport response after cancellation must not start another cursor request")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("Cancellation preserves the last complete list");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[runA.summary.id])
+    }
+
+    @MainActor func testExplicitRunListRetryIsOwnedAndCancelledOnScreenExit() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"cancel-retry-a",title:"기록 A",memo:nil)
+        let gate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil)
+        ],listFetchGates:[3:gate],listFetchIgnoresCancellation:[3])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        await fake.failNextListFetch()
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        XCTAssertEqual(bridge.runRecordsRefreshState,.failed(.serverFailure(statusCode:503,requestID:"fixture-runs-refresh")))
+
+        await fake.setListPages([
+            BackendRunPage(items:[runA.summary],nextCursor:"retry-tail"),
+            BackendRunPage(items:[],nextCursor:nil)
+        ])
+        bridge.retryRunRecords()
+        let waiting=await waitUntil{await gate.isWaiting()}
+        XCTAssertTrue(waiting,"The explicit retry action starts a bridge-owned refresh task")
+
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",runID:runA.summary.id,screen:"L04")
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+        await gate.release()
+        let responseReturned=await waitUntil{await fake.completedListFetchCount()==3}
+        XCTAssertTrue(responseReturned)
+        for _ in 0..<10 { await Task.yield() }
+
+        let cursors=await fake.observedListCursors()
+        XCTAssertEqual(cursors,[nil,nil,nil],"Leaving the list cancels an explicit retry before its next page")
+        guard case .loaded(let snapshot)=bridge.runRecordsState else{XCTFail("A cancelled retry cannot replace the prior list");return}
+        XCTAssertEqual(snapshot.items.map(\.id),[runA.summary.id])
+    }
+
+    @MainActor func testLateCancelledRefreshCannotClearNewAccountRefreshState() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"late-refresh-a",title:"계정 A",memo:nil)
+        let runB=makeRunEditNormalizationConflictDetail(id:"late-refresh-b",title:"계정 B",memo:nil)
+        let oldGate=WireframeRemoteReadGate()
+        let newGate=WireframeRemoteReadGate()
+        let fake=WireframeRunRecordsEditFake(details:[runA,runB],listPages:[
+            BackendRunPage(items:[runA.summary],nextCursor:nil),
+            BackendRunPage(items:[runA.summary],nextCursor:"old-account-tail"),
+            BackendRunPage(items:[runB.summary],nextCursor:nil),
+            BackendRunPage(items:[runB.summary],nextCursor:nil)
+        ],listFetchGates:[2:oldGate,4:newGate],listFetchIgnoresCancellation:[2,4])
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(runRecordsLoader:RunRecordsLoader(client:fake)))
+        await bridge.activate(feature:.runs,accountScopeID:"account-a",screen:"L01")
+        let oldRefresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let oldWaiting=await waitUntil{await oldGate.isWaiting()}
+        XCTAssertTrue(oldWaiting)
+
+        let activateAccountB=Task{@MainActor in await bridge.activate(feature:.runs,accountScopeID:"account-b",screen:"L01")}
+        await activateAccountB.value
+        guard case .loaded(let accountB)=bridge.runRecordsState else{XCTFail("Account B loads independently");return}
+        XCTAssertEqual(accountB.items.map(\.id),[runB.summary.id])
+
+        let newRefresh=Task{@MainActor in await bridge.refreshRunRecords()}
+        let newWaiting=await waitUntil{await newGate.isWaiting()}
+        XCTAssertTrue(newWaiting)
+        await oldGate.release()
+        await oldRefresh.value
+        XCTAssertEqual(bridge.runRecordsRefreshState,.refreshing,"The old task's defer must not clear the newer operation's state")
+        await bridge.refreshRunRecords()
+        XCTAssertEqual(bridge.runRecordsRefreshState,.refreshing,"A duplicate call cannot replace or clear the active account B refresh")
+        let afterOldResponse=await fake.observedListCursors()
+        XCTAssertEqual(afterOldResponse,[nil,nil,nil,nil],"The cancelled account A response does not request another cursor")
+
+        await newGate.release()
+        await newRefresh.value
+        XCTAssertEqual(bridge.runRecordsRefreshState,.idle)
+        guard case .loaded(let finalAccountB)=bridge.runRecordsState else{XCTFail("The current account refresh completes");return}
+        XCTAssertEqual(finalAccountB.items.map(\.id),[runB.summary.id])
+    }
+
+    @MainActor func testRunListRefreshCannotOverwriteAnEditOrConfirmedDelete() async {
+        let runA=makeRunEditNormalizationConflictDetail(id:"sync-race-a",title:"원래 제목",memo:nil)
+        let refreshedA=makeRunEditNormalizationConflictDetail(id:"sync-race-a",title:"오래된 목록 제목",memo:nil)
         let gate=WireframeRemoteReadGate()
         let fake=WireframeRunRecordsEditFake(details:[runA],listPages:[
             BackendRunPage(items:[runA.summary],nextCursor:nil),
@@ -2175,6 +5736,26 @@ extension ThemeTests {
         XCTAssertNotNil(try store.loadSnapshot())
     }
 
+    func testExpiredWithdrawalProofRequiresFreshAuthenticationAndKeepsSession() async throws {
+        let session = try AuthSessionFixtures.session(memberID: "41")
+        let store = AuthSessionFixtureStore(snapshot: session)
+        let unauthorized = AuthSessionFixtureTransport([
+            .response(APIClientResponse(statusCode: 401, data: Data(), requestID: "expired-withdrawal-proof"))
+        ])
+        let client = MemberWithdrawalClient(apiClient: unauthorized, tokenProvider: WithdrawalTokenProviderFake(token: "fixture-access-token"))
+
+        do {
+            _ = try await client.requestWithdrawal(reauthProof: String(repeating: "e", count: 43), confirmed: true)
+            XCTFail("The backend's 401 for an expired one-time proof is not a withdrawal receipt")
+        } catch let failure as MemberWithdrawalFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+
+        let rejectedProofRequests = await unauthorized.requests()
+        XCTAssertEqual(rejectedProofRequests.count, 1, "An expired proof does not trigger a POST retry")
+        XCTAssertEqual(try store.loadSnapshot(), session, "A proof rejection cannot clear the local session")
+    }
+
     @MainActor func testWithdrawalBridgeBlocksDuplicateSubmitAndIgnoresLateResponseAfterAccountSwitch() async throws {
         let store=AuthSessionFixtureStore(snapshot:try AuthSessionFixtures.session(memberID:"41"))
         let authClient=AuthSessionClient(apiClient:AuthSessionFixtureTransport([]),sessionStore:store)
@@ -2239,6 +5820,33 @@ extension ThemeTests {
         XCTAssertEqual(persistence.canonicalRecords.map(\.id),[memberB.id])
         let clearedOwners=await queue.cleared()
         XCTAssertEqual(clearedOwners,["41"])
+    }
+
+    @MainActor func testWithdrawalCleanupStorageFailureKeepsSessionAndRetryDoesNotResubmit() async throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let memberRun = RunRecord(date: Date(timeIntervalSince1970: 100), title: "member A", seconds: 120, kilometers: 1, uploadOwnerID: "41", clientRunID: UUID())
+        let persistence = RunStoreOwnedRecordsFake(snapshot: .canonical([memberRun]), failNextSave: true)
+        let runStore = RunStore(defaults: defaults, ownedRecordsPersistence: persistence)
+        let sessionSnapshot = try AuthSessionFixtures.session(memberID: "41")
+        let sessionStore = AuthSessionFixtureStore(snapshot: sessionSnapshot)
+        let authClient = AuthSessionClient(apiClient: AuthSessionFixtureTransport([]), sessionStore: sessionStore)
+        let receipt = ThemeTestsWithdrawalFixtures.receipt
+
+        let firstAttempt = await MemberWithdrawalLocalCleanup.clearAfterConfirmedReceipt(
+            receipt, memberID: "41", runStore: runStore, sessionStore: sessionStore, authSessionClient: authClient
+        )
+        XCTAssertFalse(firstAttempt, "A local persistence failure cannot report cleanup success")
+        XCTAssertEqual(try sessionStore.loadSnapshot(), sessionSnapshot, "The session remains until local cleanup succeeds")
+        XCTAssertTrue(runStore.records.contains(where: { $0.id == memberRun.id }))
+
+        let retry = await MemberWithdrawalLocalCleanup.clearAfterConfirmedReceipt(
+            receipt, memberID: "41", runStore: runStore, sessionStore: sessionStore, authSessionClient: authClient
+        )
+        XCTAssertTrue(retry, "Retrying local cleanup reuses the confirmed receipt without another withdrawal request")
+        XCTAssertNil(try sessionStore.loadSnapshot())
+        XCTAssertFalse(runStore.records.contains(where: { $0.id == memberRun.id }))
     }
 
     @MainActor func testWithdrawalCancellationAndBackDiscardUnusedProofWithoutPosting() async throws {

@@ -14,6 +14,17 @@ enum AuthSessionFixtureLaunchPolicy {
         return nil
     }
 
+    static func hasUUIDDefaultsSuite(arguments: [String]) -> Bool {
+        #if DEBUG
+        guard let index = arguments.firstIndex(of: "-wire-test-store-suite"),
+              arguments.indices.contains(index + 1),
+              let suffix = arguments[index + 1].split(separator: ".").last else { return false }
+        return UUID(uuidString: String(suffix)) != nil
+        #else
+        return false
+        #endif
+    }
+
     static func isFixtureServiceName(_ service: String) -> Bool {
         guard service.hasPrefix(servicePrefix) else { return false }
         return UUID(uuidString: String(service.dropFirst(servicePrefix.count))) != nil

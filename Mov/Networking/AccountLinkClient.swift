@@ -570,6 +570,17 @@ private struct UnavailableAccountLinkCredentialProvider: AccountLinkCredentialPr
 }
 
 enum AccountLinkFlowFactory {
+    static func make(
+        apiClient: any APIResponseSending,
+        tokenProvider: any AccessTokenProviding,
+        credentialProvider: (any AccountLinkCredentialProviding)? = nil
+    ) -> any AccountLinkFlowServing {
+        AccountLinkFlowCoordinator(
+            service: AccountLinkClient(apiClient: apiClient, tokenProvider: tokenProvider),
+            credentials: credentialProvider ?? UnavailableAccountLinkCredentialProvider()
+        )
+    }
+
     static func resolve(
         configuration: APIClientConfiguration?,
         authSessionStore: (any AuthSessionStoring)?,
@@ -580,11 +591,7 @@ enum AccountLinkFlowFactory {
 
         let apiClient = APIClient(configuration: configuration)
         let tokenProvider = AuthSessionClient(apiClient: apiClient, sessionStore: authSessionStore)
-        let service = AccountLinkClient(apiClient: apiClient, tokenProvider: tokenProvider)
-        let flow = AccountLinkFlowCoordinator(
-            service: service,
-            credentials: credentialProvider ?? UnavailableAccountLinkCredentialProvider()
-        )
+        let flow = make(apiClient: apiClient, tokenProvider: tokenProvider, credentialProvider: credentialProvider)
         return .available(flow: flow, providerAuthorizationConfigured: credentialProvider != nil)
     }
 }

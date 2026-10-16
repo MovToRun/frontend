@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 67757)
-Total output lines: 4994
-
 import SwiftUI
 
 enum WCommunityDiscardContext:Equatable {
@@ -1618,7 +1615,2352 @@ extension WireframeAccountLinkState {
     ) async {
         let routeStillCurrent=routeIsCurrent()
         guard !Task.isCancelled, routeStillCurrent else { return }
-        if self.accountScopeID != accountScopeID { accountDidChange(to: accountScope…27757 tokens truncated…,
+        if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        let previousScreen = activeScreen
+        let nextScreen = screen ?? feature?.rawValue
+        guard !isAccountLinkMutationInFlight || (self.accountScopeID == accountScopeID && nextScreen == activeScreen) else { return }
+        if activeFeature == .runs, activeScreen == "L01",
+           (feature != .runs || nextScreen != "L01" || runID != nil) {
+            runRecordsNeedsRefresh = true
+            cancelRunRecordsRefresh()
+        }
+        if activeScreen != nextScreen { cancelSessionLogout() }
+        if runRecordEditOperationID != nil,
+           (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
+            cancelRunRecordEdit()
+        }
+        if runRecordEditState != .idle,
+           (feature != .runs || activeScreen != nextScreen || (feature == .runs && activeRunID != runID)) {
+            runRecordEditState = .idle
+        }
+        if runRecordDeleteOperationID != nil,
+           (feature != .runs || activeScreen != nextScreen || activeRunID != runID || nextScreen != "L07") {
+            cancelRunRecordDeletion()
+        }
+        if runRecordDeleteState != .idle,
+           (feature != .runs || activeScreen != nextScreen || activeRunID != runID || nextScreen != "L07") {
+            runRecordDeleteState = .idle
+        }
+        if weeklyGoalConflictRefreshState == .refreshed, nextScreen != activeScreen {
+            weeklyGoalConflictRefreshState = .idle
+        }
+        if weeklyGoalWriteOperationID != nil, nextScreen != activeScreen {
+            cancelWeeklyGoalMutation()
+        }
+        if memberProfileWriteOperationID != nil, nextScreen != activeScreen {
+            cancelMemberProfileMutation()
+        }
+        if activeFeature == feature, activeScreen == nextScreen, activeRunID == (feature == .runs ? runID : nil) {
+            return
+        }
+        let sameFeature = activeFeature == feature && feature != nil
+        cancelManualOperation(restorePreviousState: sameFeature)
+        generation &+= 1
+        let requestGeneration = generation
+        activeFeature = feature
+        activeScreen = nextScreen
+
+        let preserveUnlinkFailure = previousScreen == "T15" && nextScreen == "T08"
+            && { if case .failed = accountLinkState { return true }; return false }()
+        let preservingWithdrawalProof = previousScreen == "T15" && nextScreen == "T11"
+        if (previousScreen == "T15" || previousScreen == "T06"), !preservingWithdrawalProof,
+           nextScreen != "T15", nextScreen != "T06", accountLinkState != .completed, !preserveUnlinkFailure {
+            cancelAccountLinkFlow()
+        }
+        let leavingWithdrawalFlow = ["T11", "T16"].contains(previousScreen ?? "")
+            && !["T11", "T16", "T15", "T12"].contains(nextScreen ?? "")
+        if leavingWithdrawalFlow && !isMemberWithdrawalAccepted {
+            _ = cancelMemberWithdrawalFlow()
+        }
+        if nextScreen == "T05" || nextScreen == "T15" {
+            await refreshAccountLinkMethods(expectedScreen:nextScreen)
+        }
+        if nextScreen == "T11", hasMemberWithdrawalDependency {
+            await loadMemberWithdrawalConfirmation(accountScopeID: accountScopeID, screen: "T11")
+        }
+
+        guard let feature else {
+            memberProfileState = .idle
+            pointsState = .idle
+            runRecordsState = .idle
+            runDetailState = .idle
+            runRecordDeleteState = .idle
+            activeRunID = nil
+            progressState = .idle
+            weeklyGoalState = .idle
+            dailyProgressState = .idle
+            invalidateDailyProgressRead()
+            return
+        }
+
+        if !sameFeature {
+            memberProfileState = .idle
+            pointsState = .idle
+            runRecordsState = .idle
+            runDetailState = .idle
+            runRecordDeleteState = .idle
+            activeRunID = nil
+            progressState = .idle
+            weeklyGoalState = .idle
+            dailyProgressState = .idle
+            invalidateDailyProgressRead()
+        } else {
+            if memberProfileState == .loading { memberProfileState = .idle }
+            switch pointsState {
+            case .loading, .loadingMore:
+                pointsState = .idle
+            default:
+                break
+            }
+            if activeRunID != runID { runDetailState = .idle }
+            if feature == .progressGoals {
+                if progressState == .loading { progressState = .idle }
+                if weeklyGoalState == .loading { weeklyGoalState = .idle }
+                if !["H07","H08","H09"].contains(nextScreen ?? "") {
+                    dailyProgressState = .idle
+                    invalidateDailyProgressRead()
+                }
+            }
+        }
+        activeRunID = feature == .runs ? runID : nil
+
+        switch feature {
+        case .profile:
+            guard let memberProfileLoader else { memberProfileState = .idle; return }
+            guard memberProfileState == .idle else { return }
+            memberProfileState = .loading
+            await memberProfileLoader.load()
+            let result = await memberProfileLoader.state
+            guard requestGeneration == generation else { return }
+            if Task.isCancelled {
+                memberProfileState = .idle
+                activeFeature = nil
+            } else {
+                memberProfileState = result
+            }
+        case .points:
+            guard let pointsWalletLoader else { pointsState = .idle; return }
+            guard pointsState == .idle else { return }
+            pointsState = .loading
+            await pointsWalletLoader.load()
+            let result = await pointsWalletLoader.state
+            guard requestGeneration == generation else { return }
+            if Task.isCancelled {
+                pointsState = .idle
+                activeFeature = nil
+            } else {
+                pointsState = result
+            }
+        case .runs:
+            guard let runRecordsLoader else { runRecordsState = .idle; runDetailState = .idle; return }
+            if let runID {
+                let detailNeedsRefresh = staleRunDetailIDs.contains(runID)
+                if case .loaded(let detail) = runDetailState, detail.summary.id == runID, !detailNeedsRefresh { return }
+                if case .failed(let failedID, _) = runDetailState, failedID == runID, !detailNeedsRefresh { return }
+                runDetailState = .loading(runID: runID)
+                await runRecordsLoader.loadDetail(runID: runID)
+                let result = await runRecordsLoader.detailState
+                guard requestGeneration == generation else { return }
+                if Task.isCancelled {
+                    runDetailState = .idle
+                    activeFeature = nil
+                } else {
+                    runDetailState = result
+                    if case .loaded(let detail) = result, detail.summary.id == runID {
+                        staleRunDetailIDs.remove(runID)
+                    }
+                    if case .failed(let failedID, .recordNotFound) = result, failedID == runID {
+                        invalidateRunListAfterMissingRecord(runID: runID)
+                    }
+                }
+            } else {
+                if runRecordsNeedsRefresh {
+                    await refreshRunRecords()
+                    return
+                }
+                guard runRecordsState == .idle else { return }
+                runRecordsState = .loading
+                await runRecordsLoader.load()
+                let result = await runRecordsLoader.state
+                guard requestGeneration == generation else { return }
+                if Task.isCancelled {
+                    runRecordsState = .idle
+                    activeFeature = nil
+                } else {
+                    runRecordsState = result
+                    if case .loaded = result { runRecordsNeedsRefresh = false }
+                }
+            }
+        case .progressGoals:
+            guard let runningProgressLoader else {
+                progressState = .idle
+                weeklyGoalState = .idle
+                dailyProgressState = .idle
+                return
+            }
+            let shouldLoadProgress = progressState == .idle
+            let shouldLoadWeeklyGoal = weeklyGoalState == .idle || weeklyGoalNeedsRefresh
+            guard shouldLoadProgress || shouldLoadWeeklyGoal else { return }
+            if shouldLoadProgress { progressState = .loading }
+            if shouldLoadWeeklyGoal {
+                weeklyGoalState = .loading
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .refreshing }
+            }
+            if shouldLoadProgress && shouldLoadWeeklyGoal {
+                async let progressRead: Void = completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+                async let weeklyGoalRead: Void = completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+                await progressRead
+                await weeklyGoalRead
+            } else if shouldLoadProgress {
+                await completeProgressRead(using: runningProgressLoader, generation: requestGeneration)
+            } else {
+                await completeWeeklyGoalRead(using: runningProgressLoader, generation: requestGeneration)
+            }
+        }
+    }
+
+    func refreshRunRecords() async {
+        guard let operation = beginRunRecordsRefresh() else { return }
+        await withTaskCancellationHandler {
+            await operation.task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelRunRecordsRefresh(operationID: operation.operationID)
+            }
+        }
+    }
+
+    private func beginRunRecordsRefresh() -> (operationID: UUID, task: Task<Void, Never>)? {
+        guard let loader = runRecordsLoader,
+              runRecordsRefreshOperationID == nil,
+              activeFeature == .runs,
+              activeScreen == "L01",
+              activeRunID == nil,
+              let accountScopeID else { return nil }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        runRecordsRefreshOperationID = operationID
+        runRecordsNeedsRefresh = true
+        switch runRecordsState {
+        case .idle, .failed:
+            runRecordsState = .loading
+        default:
+            break
+        }
+        runRecordsRefreshState = .refreshing
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRunRecordsRefresh(
+                using: loader,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            )
+        }
+        runRecordsRefreshTask = task
+        return (operationID, task)
+    }
+
+    private func performRunRecordsRefresh(
+        using loader: RunRecordsLoader,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String
+    ) async {
+        var restartAfterStaleCompletion = false
+        defer {
+            if runRecordsRefreshOperationID == operationID {
+                runRecordsRefreshTask = nil
+                runRecordsRefreshOperationID = nil
+                if restartAfterStaleCompletion,
+                   runRecordsNeedsRefresh,
+                   self.accountScopeID == accountScopeID,
+                   activeFeature == .runs,
+                   activeScreen == "L01",
+                   activeRunID == nil {
+                    _ = beginRunRecordsRefresh()
+                }
+            }
+        }
+
+        do {
+            let candidate = try await loader.fetchCompleteList()
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else {
+                await loader.discardCompleteList(candidate)
+                return
+            }
+            guard await loader.applyCompleteList(candidate) else {
+                runRecordsRefreshState = .idle
+                runRecordsNeedsRefresh = true
+                restartAfterStaleCompletion = true
+                return
+            }
+            runRecordsState = await loader.state
+            // A successful list refresh can prove that a previously viewed run was deleted.
+            // Keep that explicit not-found result, but do not restore a still-existing detail
+            // into the list screen after returning from an edit.
+            if case .failed(let runID, .recordNotFound) = await loader.detailState {
+                runDetailState = .failed(runID: runID, .recordNotFound)
+            } else {
+                runDetailState = .idle
+            }
+            runRecordsNeedsRefresh = false
+            runRecordsRefreshState = .idle
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else { return }
+            if failure == .cancelled || Task.isCancelled {
+                if case .loading = runRecordsState { runRecordsState = .idle }
+                runRecordsRefreshState = .idle
+            } else {
+                if case .loading = runRecordsState { runRecordsState = .failed(failure) }
+                runRecordsRefreshState = .failed(failure)
+            }
+            runRecordsNeedsRefresh = true
+        } catch {
+            guard isCurrentRunRecordsRefresh(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID
+            ) else { return }
+            if case .loading = runRecordsState {
+                runRecordsState = Task.isCancelled ? .idle : .failed(.invalidResponse)
+            }
+            runRecordsRefreshState = Task.isCancelled ? .idle : .failed(.invalidResponse)
+            runRecordsNeedsRefresh = true
+        }
+    }
+
+    private func cancelRunRecordsRefresh(operationID: UUID? = nil, markNeedsRefresh: Bool = true) {
+        guard let currentOperationID = runRecordsRefreshOperationID,
+              operationID == nil || operationID == currentOperationID else { return }
+        let task = runRecordsRefreshTask
+        runRecordsRefreshTask = nil
+        runRecordsRefreshOperationID = nil
+        if markNeedsRefresh { runRecordsNeedsRefresh = true }
+        if runRecordsRefreshState == .refreshing { runRecordsRefreshState = .idle }
+        task?.cancel()
+    }
+
+    private func isCurrentRunRecordsRefresh(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String
+    ) -> Bool {
+        runRecordsRefreshOperationID == operationID
+            && generation == requestGeneration
+            && self.accountScopeID == accountScopeID
+            && activeFeature == .runs
+            && activeScreen == "L01"
+            && activeRunID == nil
+    }
+
+    private func completeProgressRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadProgress()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            progressState = .idle
+            activeFeature = nil
+        } else {
+            progressState = result
+        }
+    }
+
+    private func completeWeeklyGoalRead(using loader: RunningProgressLoader, generation requestGeneration: UInt64) async {
+        let result = await loader.loadWeeklyGoal()
+        guard requestGeneration == generation else { return }
+        if Task.isCancelled {
+            weeklyGoalState = .idle
+            activeFeature = nil
+        } else {
+            weeklyGoalState = result
+            finishWeeklyGoalRead(result)
+        }
+    }
+
+    func saveRunRecordField(
+        _ field: BackendRunEditField,
+        value: String,
+        runID: String,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        guard let updater = runRecordsUpdater,
+              let loader = runRecordsLoader,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              screen == "L04",
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID,
+              runRecordEditOperationID == nil else { return false }
+
+        let characterLimit = field == .title ? 40 : 300
+        guard value.utf16.count <= characterLimit else {
+            runRecordEditState = .failed(runID: runID, field: field, failure: .invalidEdit)
+            return false
+        }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        let baseVersion = detail.summary.version
+        let patch = BackendRunEditPatch(
+            title: field == .title ? value : nil,
+            memo: field == .memo ? value : nil
+        )
+        runRecordEditOperationID = operationID
+        runRecordEditState = .saving(runID: runID, field: field)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performRunRecordFieldSave(
+                updater: updater,
+                loader: loader,
+                field: field,
+                value: value,
+                runID: runID,
+                baseVersion: baseVersion,
+                patch: patch,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen
+            )
+        }
+        runRecordEditTask = task
+        let saved = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelRunRecordEdit(operationID: operationID) }
+        }
+        if runRecordEditOperationID == operationID {
+            runRecordEditTask = nil
+            runRecordEditOperationID = nil
+        }
+        return saved
+    }
+
+    private func performRunRecordFieldSave(
+        updater: any RunRecordsUpdating,
+        loader: RunRecordsLoader,
+        field: BackendRunEditField,
+        value: String,
+        runID: String,
+        baseVersion: Int64,
+        patch: BackendRunEditPatch,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        do {
+            let summary = try await updater.updateRun(id: runID, version: baseVersion, patch: patch)
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            guard baseVersion < Int64.max, summary.version == baseVersion + 1 else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: .invalidResponse)
+                return false
+            }
+            await applyRunRecordSummary(summary, using: loader)
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            runRecordEditState = .idle
+            return true
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            if failure == .cancelled || Task.isCancelled {
+                runRecordEditState = .idle
+                return false
+            }
+            guard failure == .versionConflict else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: failure)
+                if failure == .recordNotFound { invalidateRunListAfterMissingRecord(runID: runID) }
+                return false
+            }
+
+            runRecordEditState = .refreshingConflict(runID: runID, field: field)
+            await loader.loadDetail(runID: runID)
+            let refreshedState = await loader.detailState
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            switch refreshedState {
+            case .loaded(let latest) where latest.summary.id == runID:
+                await applyRunRecordSummary(latest.summary, using: loader)
+                guard isCurrentRunRecordEdit(
+                    operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                    screen: screen, runID: runID
+                ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+                let latestValue = field == .title ? latest.summary.title ?? "" : latest.summary.memo ?? ""
+                if latestValue.utf16.elementsEqual(value.utf16) {
+                    runRecordEditState = .idle
+                    return true
+                }
+                runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflict)
+            case .failed(let failedID, .recordNotFound) where failedID == runID:
+                runRecordEditState = .failed(runID: runID, field: field, failure: .recordNotFound)
+                invalidateRunListAfterMissingRecord(runID: runID)
+            default:
+                runRecordEditState = .failed(runID: runID, field: field, failure: .versionConflictRefreshFailed)
+            }
+            return false
+        } catch {
+            guard isCurrentRunRecordEdit(
+                operationID: operationID, generation: requestGeneration, accountScopeID: accountScopeID,
+                screen: screen, runID: runID
+            ) else { handleStaleRunEditResponse(runID: runID, accountScopeID: accountScopeID, using: loader); return false }
+            if Task.isCancelled {
+                runRecordEditState = .idle
+            } else {
+                runRecordEditState = .failed(runID: runID, field: field, failure: .invalidResponse)
+            }
+            return false
+        }
+    }
+
+    private func isCurrentRunRecordEdit(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String,
+        runID: String
+    ) -> Bool {
+        guard runRecordEditOperationID == operationID,
+              generation == requestGeneration,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState else { return false }
+        return detail.summary.id == runID
+    }
+
+    private func applyRunRecordSummary(_ summary: BackendRunSummary, using loader: RunRecordsLoader) async {
+        await loader.applyUpdatedSummary(summary)
+        staleRunDetailIDs.remove(summary.id)
+        runRecordsState = await loader.state
+        if case .loaded(let detail) = await loader.detailState,
+           detail.summary.id == summary.id {
+            runDetailState = .loaded(detail)
+        }
+    }
+
+    private func invalidateRunListAfterMissingRecord(runID: String) {
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        runRecordsState = .idle
+    }
+
+    private func handleStaleRunEditResponse(runID: String, accountScopeID: String, using loader: RunRecordsLoader) {
+        guard self.accountScopeID == accountScopeID else { return }
+        staleRunDetailIDs.insert(runID)
+        runRecordsNeedsRefresh = true
+        guard activeFeature == .runs, activeScreen == "L01", activeRunID == nil else { return }
+        let requestGeneration = generation
+        runRecordsState = .loading
+        Task { @MainActor [weak self] in
+            await loader.load()
+            let result = await loader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .runs,
+                  self.activeScreen == "L01",
+                  self.activeRunID == nil else { return }
+            self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
+        }
+    }
+
+    func cancelRunRecordEdit() {
+        guard runRecordEditOperationID != nil else { return }
+        runRecordEditTask?.cancel()
+        runRecordEditTask = nil
+        runRecordEditOperationID = nil
+        runRecordEditState = .idle
+    }
+
+    private func cancelRunRecordEdit(operationID: UUID) {
+        guard runRecordEditOperationID == operationID else { return }
+        cancelRunRecordEdit()
+    }
+
+    func deleteRunRecord(id runID: String, accountScopeID: String, screen: String = "L07") async -> Bool {
+        guard let deleter = runRecordsDeleter,
+              let loader = runRecordsLoader,
+              canDeleteRunRecord(runID),
+              runRecordDeleteOperationID == nil,
+              self.accountScopeID == accountScopeID,
+              activeScreen == screen,
+              screen == "L07",
+              case .loaded(let detail) = runDetailState,
+              detail.summary.id == runID else { return false }
+
+        let operationID = UUID()
+        let requestGeneration = generation
+        let version = detail.summary.version
+        runRecordDeleteOperationID = operationID
+        runRecordDeleteState = .deleting(runID: runID)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            return await self.performRunRecordDeletion(
+                deleter: deleter,
+                loader: loader,
+                runID: runID,
+                version: version,
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen
+            )
+        }
+        runRecordDeleteTask = task
+        let deleted = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelRunRecordDeletion(operationID: operationID) }
+        }
+        if runRecordDeleteOperationID == operationID {
+            runRecordDeleteTask = nil
+            runRecordDeleteOperationID = nil
+        }
+        return deleted
+    }
+
+    private func performRunRecordDeletion(
+        deleter: any RunRecordsDeleting,
+        loader: RunRecordsLoader,
+        runID: String,
+        version: Int64,
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String
+    ) async -> Bool {
+        do {
+            try await deleter.deleteRun(id: runID, version: version)
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: true)
+                return false
+            }
+
+            await loader.applyDeletedRun(id: runID)
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: true)
+                return false
+            }
+            runRecordsState = await loader.state
+            runDetailState = await loader.detailState
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            invalidateRunSummariesAfterDeletion()
+            runRecordDeleteState = .idle
+            return true
+        } catch let failure as RunRecordsFailure {
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: false)
+                return false
+            }
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            if failure == .cancelled || Task.isCancelled {
+                runRecordDeleteState = .idle
+            } else {
+                runRecordDeleteState = .failed(runID: runID, failure: failure)
+            }
+            return false
+        } catch {
+            guard isCurrentRunRecordDeletion(
+                operationID: operationID,
+                generation: requestGeneration,
+                accountScopeID: accountScopeID,
+                screen: screen,
+                runID: runID
+            ) else {
+                await reconcileStaleRunDeletion(runID: runID, accountScopeID: accountScopeID, loader: loader, confirmed: false)
+                return false
+            }
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+            runRecordDeleteState = .failed(runID: runID, failure: .invalidResponse)
+            return false
+        }
+    }
+
+    private func isCurrentRunRecordDeletion(
+        operationID: UUID,
+        generation requestGeneration: UInt64,
+        accountScopeID: String,
+        screen: String,
+        runID: String
+    ) -> Bool {
+        guard runRecordDeleteOperationID == operationID,
+              generation == requestGeneration,
+              self.accountScopeID == accountScopeID,
+              activeFeature == .runs,
+              activeScreen == screen,
+              screen == "L07",
+              activeRunID == runID,
+              case .loaded(let detail) = runDetailState else { return false }
+        return detail.summary.id == runID
+    }
+
+    private func reconcileStaleRunDeletion(
+        runID: String,
+        accountScopeID: String,
+        loader: RunRecordsLoader,
+        confirmed: Bool
+    ) async {
+        guard self.accountScopeID == accountScopeID else { return }
+        if confirmed { await loader.applyDeletedRun(id: runID) }
+        runRecordsState = await loader.state
+        runRecordsNeedsRefresh = true
+        staleRunDetailIDs.insert(runID)
+        invalidateRunSummariesAfterDeletion()
+        guard activeFeature == .runs, activeScreen == "L01", activeRunID == nil else { return }
+        let requestGeneration = generation
+        runRecordsState = .loading
+        Task { @MainActor [weak self] in
+            await loader.load()
+            let result = await loader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .runs,
+                  self.activeScreen == "L01",
+                  self.activeRunID == nil else { return }
+            self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
+        }
+    }
+
+    private func invalidateRunSummariesAfterDeletion() {
+        progressState = .idle
+        weeklyGoalState = .idle
+        dailyProgressState = .idle
+        invalidateDailyProgressRead()
+    }
+
+    func cancelRunRecordDeletion(markStale: Bool = true) {
+        guard runRecordDeleteOperationID != nil else { return }
+        let runID: String? = {
+            if case .deleting(let id) = runRecordDeleteState { return id }
+            return activeRunID
+        }()
+        runRecordDeleteTask?.cancel()
+        runRecordDeleteTask = nil
+        runRecordDeleteOperationID = nil
+        runRecordDeleteState = .idle
+        if markStale, let runID {
+            runRecordsNeedsRefresh = true
+            staleRunDetailIDs.insert(runID)
+        }
+    }
+
+    private func cancelRunRecordDeletion(operationID: UUID) {
+        guard runRecordDeleteOperationID == operationID else { return }
+        cancelRunRecordDeletion()
+    }
+
+    private func finishWeeklyGoalRead(_ result: WeeklyGoalReadState) {
+        guard weeklyGoalNeedsRefresh else { return }
+        switch result {
+        case .loaded:
+            weeklyGoalNeedsRefresh = false
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .refreshed
+            }
+        case .failed(let failure):
+            if weeklyGoalConflictRefreshState != .idle {
+                weeklyGoalConflictRefreshState = .failed(failure)
+            }
+        case .idle, .loading:
+            break
+        }
+    }
+
+    func loadDailyProgress(range: BackendDailyProgressRange, accountScopeID: String, screen: String = "H07") async {
+        if self.accountScopeID != accountScopeID { accountDidChange(to: accountScopeID) }
+        guard let runningProgressLoader else { dailyProgressState = .idle; return }
+        guard ["H07","H08","H09"].contains(screen) else { return }
+        if activeFeature != .progressGoals || activeScreen != screen {
+            activeFeature = .progressGoals
+            activeScreen = screen
+        }
+        if case .loaded(let daily) = dailyProgressState, daily.range == range { return }
+        if case .loading(let loadingRange) = dailyProgressState,
+           loadingRange == range,
+           dailyProgressTask != nil { return }
+        if case .failed(let failedRange, _) = dailyProgressState, failedRange == range { return }
+        if manualOperationKind == .progressDailyRetry { cancelManualOperation() }
+        invalidateDailyProgressRead()
+        let requestGeneration = dailyGeneration
+        dailyProgressState = .loading(range)
+        let loader = runningProgressLoader
+        let requestTask = Task { @MainActor [weak self, loader] in
+            await loader.loadDaily(range: range)
+            let result = await loader.dailyState
+            guard let self,
+                  self.dailyGeneration == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeFeature == .progressGoals,
+                  ["H07","H08","H09"].contains(self.activeScreen ?? "") else { return }
+            self.dailyProgressTask = nil
+            if Task.isCancelled {
+                self.dailyProgressState = .idle
+            } else {
+                self.dailyProgressState = result
+            }
+        }
+        dailyProgressTask = requestTask
+        await requestTask.value
+    }
+
+    func retryMemberProfile() {
+        guard activeFeature == .profile,
+              manualOperationTask == nil,
+              case .failed = memberProfileState,
+              let memberProfileLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .profileRetry
+        memberProfileState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            await memberProfileLoader.retry()
+            let result = await memberProfileLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.memberProfileState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func saveMemberProfile(
+        _ patch: MemberProfilePatch,
+        accountScopeID: String,
+        screen: String
+    ) {
+        guard memberProfileWriteOperationID == nil else { return }
+        guard accountScopeID == self.accountScopeID, screen == activeScreen,
+              activeFeature == .profile else { return }
+        guard patch.hasChanges else { return }
+        guard case .loaded = memberProfileState else {
+            memberProfileWriteState = .failed(.profileWriteUnavailable)
+            return
+        }
+        guard let memberProfileUpdater else {
+            memberProfileWriteState = .failed(.profileWriteUnavailable)
+            return
+        }
+
+        let requestGeneration = generation
+        let operationID = UUID()
+        memberProfileWriteOperationID = operationID
+        memberProfileWriteState = .saving
+        memberProfileWriteTask = Task { @MainActor [weak self, memberProfileUpdater] in
+            do {
+                let saved = try await memberProfileUpdater.updateProfile(patch)
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileState = .loaded(saved)
+                self.memberProfileWriteState = .saved
+            } catch let failure as MemberProfileFailure {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(failure)
+            } catch is CancellationError {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(.cancelled)
+            } catch {
+                guard let self else { return }
+                guard self.memberProfileWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshMemberProfileAfterStaleWrite(accountScopeID: accountScopeID)
+                    return
+                }
+                self.memberProfileWriteTask = nil
+                self.memberProfileWriteOperationID = nil
+                self.memberProfileWriteState = .failed(.invalidResponse)
+            }
+        }
+    }
+
+    func cancelMemberProfileMutation() {
+        guard memberProfileWriteOperationID != nil else { return }
+        memberProfileWriteTask?.cancel()
+        memberProfileWriteTask = nil
+        memberProfileWriteOperationID = nil
+        memberProfileWriteState = .idle
+        memberProfileState = .idle
+    }
+
+    func consumeMemberProfileWriteResult() {
+        guard memberProfileWriteState == .saved else { return }
+        memberProfileWriteState = .idle
+    }
+
+    func clearMemberProfileWriteFailure() {
+        guard memberProfileWriteOperationID == nil else { return }
+        if case .failed = memberProfileWriteState { memberProfileWriteState = .idle }
+    }
+
+    private func refreshMemberProfileAfterStaleWrite(accountScopeID: String) {
+        guard self.accountScopeID == accountScopeID,
+              activeFeature == .profile,
+              let memberProfileLoader else { return }
+        let requestGeneration = generation
+        let requestScreen = activeScreen
+        memberProfileState = .loading
+        Task { @MainActor [weak self] in
+            await memberProfileLoader.load()
+            let result = await memberProfileLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == accountScopeID,
+                  self.activeScreen == requestScreen else { return }
+            self.memberProfileState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryPoints() {
+        guard activeFeature == .points,
+              manualOperationTask == nil,
+              let pointsWalletLoader else { return }
+        let requestGeneration = generation
+        switch pointsState {
+        case .failed(let failure) where failure.canManuallyRetry:
+            pointsState = .loading
+        case .failedLoadingMore(let snapshot, let failure) where failure.canManuallyRetry:
+            pointsState = .loadingMore(snapshot)
+        default:
+            return
+        }
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsRetry
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.retry()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func loadNextPointsPage() {
+        guard activeFeature == .points,
+              manualOperationTask == nil,
+              case .loaded(let snapshot) = pointsState,
+              snapshot.nextCursor != nil,
+              let pointsWalletLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .pointsPage
+        manualPointsPreviousState = pointsState
+        pointsState = .loadingMore(snapshot)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await pointsWalletLoader.loadNextPage()
+            let result = await pointsWalletLoader.state
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualPointsPreviousState = nil
+            self.pointsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryRunRecords() {
+        guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              runRecordsRefreshOperationID == nil,
+              let runRecordsLoader else { return }
+        if runRecordsNeedsRefresh {
+            _ = beginRunRecordsRefresh()
+            return
+        }
+        switch runRecordsState {
+        case .failed(let failure) where failure.canManuallyRetry:
+            runRecordsState = .loading
+        case .failedLoadingMore(let snapshot, let failure) where failure.canManuallyRetry:
+            manualRunsPreviousState = .failedLoadingMore(snapshot, failure)
+            runRecordsState = .loadingMore(snapshot)
+        default:
+            return
+        }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runsRetry
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.retry()
+            let result = await runRecordsLoader.state
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualRunsPreviousState = nil
+            self.runRecordsState = Task.isCancelled ? .idle : result
+            if case .loaded = result { self.runRecordsNeedsRefresh = false }
+        }
+    }
+
+    func loadNextRunRecordsPage() {
+        guard activeFeature == .runs, activeRunID == nil, manualOperationTask == nil,
+              runRecordsRefreshOperationID == nil,
+              case .loaded(let snapshot) = runRecordsState, snapshot.nextCursor != nil,
+              let runRecordsLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runsPage
+        manualRunsPreviousState = runRecordsState
+        runRecordsState = .loadingMore(snapshot)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.loadNextPage()
+            let result = await runRecordsLoader.state
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualRunsPreviousState = nil
+            self.runRecordsState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryRunDetail() {
+        guard activeFeature == .runs, let runID = activeRunID, manualOperationTask == nil,
+              case .failed(let failedID, let failure) = runDetailState, failedID == runID,
+              failure.canManuallyRetry, let runRecordsLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .runDetailRetry
+        runDetailState = .loading(runID: runID)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runRecordsLoader.retryDetail(runID: runID)
+            let result = await runRecordsLoader.detailState
+            guard let self, self.generation == requestGeneration, self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.runDetailState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryProgress() {
+        guard activeFeature == .progressGoals, manualOperationTask == nil,
+              case .failed(let failure) = progressState,
+              failure.canManuallyRetry, let runningProgressLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .progressRetry
+        progressState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.retryProgress()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.progressState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func retryWeeklyGoal() {
+        if weeklyGoalNeedsRefresh {
+            refreshWeeklyGoalAfterConflict()
+            return
+        }
+        guard activeFeature == .progressGoals, manualOperationTask == nil,
+              case .failed(let failure) = weeklyGoalState,
+              failure.canManuallyRetry, let runningProgressLoader else { return }
+        let requestGeneration = generation
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalRetry
+        weeklyGoalState = .loading
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.retryWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.weeklyGoalState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    func refreshWeeklyGoalAfterConflict() {
+        guard activeFeature == .progressGoals,
+              weeklyGoalNeedsRefresh,
+              manualOperationTask == nil,
+              let runningProgressLoader,
+              weeklyGoalConflictRefreshState == .required || isWeeklyGoalConflictRefreshFailed else { return }
+        let requestGeneration = generation
+        let requestScopeID = accountScopeID
+        let requestScreen = activeScreen
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .weeklyGoalConflictRefresh
+        manualWeeklyGoalPreviousState = weeklyGoalState
+        weeklyGoalConflictRefreshState = .refreshing
+        let previousState = weeklyGoalState
+        manualOperationTask = Task { @MainActor [weak self] in
+            let result = await runningProgressLoader.loadWeeklyGoal()
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.accountScopeID == requestScopeID,
+                  self.activeScreen == requestScreen,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.manualWeeklyGoalPreviousState = nil
+            if Task.isCancelled {
+                self.weeklyGoalState = previousState
+                self.weeklyGoalConflictRefreshState = .required
+            } else {
+                self.weeklyGoalState = result
+                self.finishWeeklyGoalRead(result)
+            }
+        }
+    }
+
+    private var isWeeklyGoalConflictRefreshFailed: Bool {
+        if case .failed = weeklyGoalConflictRefreshState { return true }
+        return false
+    }
+
+    func saveWeeklyGoal(
+        version: Int64,
+        distanceGoalMeters: Int64?,
+        timeGoalSeconds: Int64?,
+        accountScopeID: String,
+        screen: String
+    ) {
+        guard weeklyGoalWriteOperationID == nil else { return }
+        guard accountScopeID == self.accountScopeID, screen == activeScreen else { return }
+        guard !weeklyGoalNeedsRefresh else { return }
+        guard let weeklyGoalWriter, let runningProgressLoader else {
+            weeklyGoalWriteState = .failed(.weeklyGoalWriteUnavailable)
+            return
+        }
+        guard case .loaded(let baseline) = weeklyGoalState, baseline.version == version else {
+            weeklyGoalWriteState = .failed(.weeklyGoalBaselineUnavailable)
+            return
+        }
+
+        let requestGeneration = generation
+        let operationID = UUID()
+        weeklyGoalWriteOperationID = operationID
+        weeklyGoalConflictRefreshState = .idle
+        weeklyGoalWriteState = .saving
+        weeklyGoalWriteTask = Task { @MainActor [weak self, weeklyGoalWriter, runningProgressLoader] in
+            do {
+                let saved = try await weeklyGoalWriter.saveWeeklyGoal(
+                    version: version,
+                    distanceGoalMeters: distanceGoalMeters,
+                    timeGoalSeconds: timeGoalSeconds
+                )
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+
+                let refreshed = await runningProgressLoader.loadWeeklyGoal()
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                if case .loaded(let current) = refreshed {
+                    self.weeklyGoalState = .loaded(current)
+                } else {
+                    // PUT already returned the server's complete status. Keep that committed state if the follow-up read is unavailable.
+                    self.weeklyGoalState = .loaded(saved)
+                    self.weeklyGoalNeedsRefresh = true
+                }
+                self.weeklyGoalConflictRefreshState = .idle
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .saved
+            } catch let failure as ProgressGoalsFailure {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(failure)
+                if case .weeklyGoalVersionConflict = failure {
+                    self.weeklyGoalNeedsRefresh = true
+                    self.weeklyGoalConflictRefreshState = .required
+                }
+            } catch is CancellationError {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(.cancelled)
+            } catch {
+                guard let self else { return }
+                guard self.weeklyGoalWriteOperationID == operationID,
+                      self.generation == requestGeneration,
+                      self.accountScopeID == accountScopeID,
+                      self.activeScreen == screen else {
+                    self.refreshWeeklyGoalAfterStaleMutation(accountScopeID:accountScopeID,using:runningProgressLoader)
+                    return
+                }
+                self.weeklyGoalWriteTask = nil
+                self.weeklyGoalWriteOperationID = nil
+                self.weeklyGoalWriteState = .failed(.invalidResponse)
+            }
+        }
+    }
+
+    func cancelWeeklyGoalMutation() {
+        guard weeklyGoalWriteOperationID != nil else { return }
+        weeklyGoalWriteTask?.cancel()
+        weeklyGoalWriteTask = nil
+        weeklyGoalWriteOperationID = nil
+        weeklyGoalNeedsRefresh = true
+        weeklyGoalWriteState = .idle
+    }
+
+    func consumeWeeklyGoalWriteResult() {
+        guard weeklyGoalWriteState == .saved else { return }
+        weeklyGoalWriteState = .idle
+    }
+
+    private func refreshWeeklyGoalAfterStaleMutation(accountScopeID: String, using loader: RunningProgressLoader) {
+        guard self.accountScopeID == accountScopeID else { return }
+        weeklyGoalNeedsRefresh = true
+        guard activeFeature == .progressGoals else { return }
+        let requestGeneration = generation
+        Task { @MainActor [weak self] in
+            let refreshed = await loader.loadWeeklyGoal()
+            guard let self,
+                  self.accountScopeID == accountScopeID,
+                  self.generation == requestGeneration,
+                  self.activeFeature == .progressGoals,
+                  self.weeklyGoalNeedsRefresh else { return }
+            self.weeklyGoalState = refreshed
+            self.weeklyGoalNeedsRefresh = false
+        }
+    }
+
+    func retryDailyProgress(range: BackendDailyProgressRange) {
+        guard activeFeature == .progressGoals, ["H07","H08","H09"].contains(activeScreen ?? ""), manualOperationTask == nil,
+              case .failed(let failedRange, let failure) = dailyProgressState,
+              failedRange == range, failure.canManuallyRetry,
+              let runningProgressLoader else { return }
+        let requestGeneration = generation
+        dailyGeneration &+= 1
+        let dailyRequestGeneration = dailyGeneration
+        let operationID = UUID()
+        manualOperationID = operationID
+        manualOperationKind = .progressDailyRetry
+        dailyProgressState = .loading(range)
+        manualOperationTask = Task { @MainActor [weak self] in
+            await runningProgressLoader.retryDaily(range: range)
+            let result = await runningProgressLoader.dailyState
+            guard let self,
+                  self.generation == requestGeneration,
+                  self.dailyGeneration == dailyRequestGeneration,
+                  self.manualOperationID == operationID else { return }
+            self.manualOperationTask = nil
+            self.manualOperationID = nil
+            self.manualOperationKind = nil
+            self.dailyProgressState = Task.isCancelled ? .idle : result
+        }
+    }
+
+    private func cancelManualOperation(restorePreviousState: Bool = false) {
+        let task = manualOperationTask
+        manualOperationTask = nil
+        manualOperationID = nil
+        if restorePreviousState {
+            switch manualOperationKind {
+            case .profileRetry:
+                memberProfileState = .idle
+            case .pointsRetry:
+                pointsState = .idle
+            case .pointsPage:
+                if let previous = manualPointsPreviousState { pointsState = previous }
+            case .runsRetry:
+                if let previous = manualRunsPreviousState { runRecordsState = previous }
+                else { runRecordsState = .idle }
+            case .runsPage:
+                if let previous = manualRunsPreviousState { runRecordsState = previous }
+            case .runDetailRetry:
+                runDetailState = .idle
+            case .progressRetry:
+                progressState = .idle
+            case .weeklyGoalRetry:
+                weeklyGoalState = .idle
+            case .weeklyGoalConflictRefresh:
+                if let previous = manualWeeklyGoalPreviousState { weeklyGoalState = previous }
+                if weeklyGoalNeedsRefresh { weeklyGoalConflictRefreshState = .required }
+            case .progressDailyRetry:
+                dailyProgressState = .idle
+            case nil:
+                break
+            }
+        }
+        manualOperationKind = nil
+        manualPointsPreviousState = nil
+        manualRunsPreviousState = nil
+        manualWeeklyGoalPreviousState = nil
+        task?.cancel()
+    }
+}
+
+enum WCommunityVerificationStatus:String,Codable,CaseIterable {case none,pending,approved,rejected}
+enum WCommunityVerificationSubmissionResult:Equatable {case submitted,invalidActivity,alreadyPending,alreadyApproved}
+
+struct WCommunityVerificationState:Codable,Equatable {
+    var status:WCommunityVerificationStatus = .none
+    var note=""
+    var reason=""
+    var isVerified:Bool{status == .approved}
+
+    mutating func submit(_ value:String)->WCommunityVerificationSubmissionResult {
+        guard status != .pending else{return .alreadyPending}
+        guard status != .approved else{return .alreadyApproved}
+        let trimmed=value.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !trimmed.isEmpty,trimmed.count<=300 else{return .invalidActivity}
+        note=trimmed;reason="";status = .pending;return .submitted
+    }
+
+    mutating func review(as result:WCommunityVerificationStatus)->Bool {
+        guard status == .pending,result == .approved || result == .rejected else{return false}
+        status=result;reason=result == .rejected ? "신청 내용을 조금 더 구체적으로 적어 주세요.":"";return true
+    }
+}
+
+@MainActor @Observable final class WireState {
+    private let defaults:UserDefaults
+    var profile:WLocalProfile
+    var remoteAccountScopeID=UUID().uuidString
+    var screen="H00"
+    var rootIndex=2;var previousRootIndex=2;var forward=true
+    var calendarMonth=Date();var calendarDay:Date?
+    var path:[String]=[]
+    var selected:UUID?
+    var remoteSelectedRunID:String?
+    var communityPosts=WCommunityFixtures.posts
+    var communityAttachmentStore=WCommunityAttachmentStore()
+    var communityDraftAttachments:[WCommunityAttachment]=[]
+    var communityMediaImportCoordinator=WCommunityMediaImportCoordinator()
+    var communityMediaImporting=false
+    var communityDraftSessionID=UUID().uuidString
+    var communityVideoPlayback=WCommunityVideoPlaybackController()
+    var communityImageViewerIndex=0
+    var communityImageViewerIsDraft=false
+    var communityImageZoomScale:CGFloat=1
+    var communityNotificationCenter=WCommunityNotificationCenter()
+    var communityNotificationError=""
+    var communitySelectedPostID="p1"
+    var communitySearchQuery=""
+    var communitySelectedUserID="fixture-member-ga-on"
+    var communityCardOriginScreen="C01"
+    var communityCardOriginAnonymous=false
+    var communityProfileEditing=false
+    var communityConnectionsKind="followers"
+    var communityFollowProvider=WLocalCommunityFollowProvider()
+    var communityActivityProvider=WLocalCommunityActivityProvider()
+    var communityModerationProvider=WLocalCommunityModerationProvider()
+    var communityReportTarget:WCommunityReportTarget?
+    var communityReportReason="욕설·괴롭힘"
+    var communityReportDetail=""
+    var communityReportError=""
+    var communityMoreMenu:WCommunityMoreMenu?
+    var communityModerationDialog:WCommunityModerationDialog?
+    var communityPostDeleteConfirmationID:String?
+    var communityViewerMemberID="fixture-member-current"
+    var communityViewCountProvider:WCommunityViewCountProvider=WLocalCommunityViewCountProvider()
+    var communityBoard="러닝 인증"
+    var communityDraftBoard="러닝 인증"
+    var communityDraftCrewID:String?
+    var communityDraftPostID:String?
+    var communityDraftTitle=""
+    var communityDraftBody=""
+    var communityComment=""
+    var communityReplyToID:String?
+    var communityError=""
+    var communityLikedPosts:Set<String>=[]
+    var communityVerification=WCommunityVerificationState()
+    var communityVerificationError=""
+    var communityAccountVerified:Bool{communityVerification.isVerified}
+    var communityCourseTitle="강변 아침 코스"
+    var communityCourseIntroduction="강변을 따라 편하게 달리는 예시 코스예요."
+    var communityCourseDistance=4.82
+    var communityCourseSeconds=1808.0
+    var communityCourseHideEnds=true
+    var communityCourseRecordID=""
+    var communityCourseDraftOwnerID=""
+    var communitySelectedCourse:WCommunityCourse?
+    var communityCourseDraft=false
+    var communityCoursePlayback=0.0
+    var communityCoursePlaying=false
+    var communityCourseError=""
+    var communityCrewTab="my"
+    var communityCrewFilter="내 주변"
+    var communitySelectedCrewID="river"
+    var communityCrewBoardID="dawn-board-0"
+    var communityCrewJoinMemo=""
+    var communityCrewJoinError=""
+    var communityCrewApplications=WCommunityCrewFixtures.applications
+    var communityJoinedCrewIDs:Set<String>=["dawn"]
+    var communityCrewOverrides:[String:WCommunityCrew]=[:]
+    var communityLocalCrews:[WCommunityCrew]=[]
+    var communityCrewDraftID:String?
+    var communityCrewDraftName=""
+    var communityCrewDraftIntroduction=""
+    var communityCrewDraftRegion="모브시 중앙"
+    var communityCrewDraftRank=0
+    var communityCrewDraftPhoto:Data?
+    var communityCrewDraftError=""
+    var communityCrewNameCheck=""
+    var communityCrewReviewApplicationID="fixture-request-dawn-early"
+    var communityCrewReviewError=""
+    var communitySelectedCrewMemberID=""
+    var communityCrewMemberWarningDraft=""
+    var communityCrewMemberFeedback=""
+    var communityCrewMemberError=""
+    var communityCrewManageDraft:WCommunityCrewManageDraft?
+    var communityCrewManageError=""
+    var communityCrewManageFeedback=""
+    var selectedPointProductID="line"
+    var provider="Google"
+    var pending="T05"
+    var pendingBack="T05"
+    var error=""
+    var completionFeedbackSeen:Set<UUID>=[]
+    var collapsed=false
+    var month=false
+    var gradeExpanded=false;var validityExpanded=false;var consentBusy=false
+    var consentTerms=false;var consentPrivacy=false;var deleteConsent=false
+    var consentSequenceID:UUID?
+    var consentSequenceOriginalTerms=false;var consentSequenceOriginalPrivacy=false
+    var consentTopic="이용약관"
+    var nickname="";var introduction="";var region="";var weight=""
+    var title="";var memo="";var photo:Data?
+    var challengeIssued:Date?;var challengeCode="482619";var otpCodeIssuer=WLocalOTPCodeIssuer();var passwordReset:WPasswordResetSession
+    var authErrorField="";var authFilled=false;var authEmail="";var authPassword="";var authConfirm="";var authCurrent="";var revealedFields:Set<String>=[];var settingsGrant=false;var otpSuccess=false;var otpFocused=false;var otpVerifying=false;var otpVerificationID:UUID?;var lastAttemptedOTP:String?;var code="";var codeAttempts=0;var verified=false
+    var goal=RunGoal();var weekly=WeeklyGoal()
+    var testing=false
+    var saving=false;var passwordChanged=false;var resetBack="A01"
+    init(){defaults=WWireDefaults.resolve().defaults;profile=defaults.data(forKey:"mov.wireframe.profile.v1").flatMap{try? JSONDecoder().decode(WLocalProfile.self,from:$0)} ?? WLocalProfile();communityVerification=defaults.data(forKey:"mov.wireframe.community-verification.v1").flatMap{try? JSONDecoder().decode(WCommunityVerificationState.self,from:$0)} ?? WCommunityVerificationState();passwordReset=WPasswordResetSession()}
+    func seedCommunityPhotoFixtures(draft:Bool,post:Bool,videoPost:Bool=false,videoDraft:Bool=false){
+        if draft,let photos=try? communityAttachmentStore.makeReviewFixtures(){communityDraftAttachments=photos.map(WCommunityAttachment.photo);communityDraftTitle="사진 첨부 예시";communityDraftBody=""}
+        if post,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let draft=try? communityAttachmentStore.makeReviewFixtures(count:1),let photos=try? communityAttachmentStore.commit(draft,forPost:"p1"){communityPosts[index].attachments=photos.map(WCommunityAttachment.photo)}
+        if videoPost,let index=communityPosts.firstIndex(where:{$0.id=="p1"}),let fixture=try? communityAttachmentStore.makeReviewVideoFixture(),let attachments=try? communityAttachmentStore.commit([.video(fixture)],forPost:"p1"){communityPosts[index].attachments += attachments}
+        if videoDraft,let fixture=try? communityAttachmentStore.makeReviewVideoFixture(){communityDraftAttachments=[.video(fixture)];communityDraftTitle="영상 첨부 예시";communityDraftBody=""}
+    }
+    func save(){if let data=try? JSONEncoder().encode(profile){defaults.set(data,forKey:"mov.wireframe.profile.v1")}}
+    func setLoggedIn(_ loggedIn:Bool){if profile.logged != loggedIn{profile.logged=loggedIn;remoteAccountScopeID=UUID().uuidString}}
+    func resetRemoteAccountScope(){remoteAccountScopeID=UUID().uuidString}
+    func submitCommunityVerification()->Bool{
+        switch communityVerification.submit(communityVerification.note){
+        case .submitted:communityVerificationError="";saveCommunityVerification();communityNotificationCenter.append(WCommunityNotification(id:UUID().uuidString,title:"인증 신청이 접수됐어요",text:"커뮤니티 계정 인증 상태를 확인해 보세요.",target:.verification));return true
+        case .invalidActivity:communityVerificationError="활동 소개를 300자 안으로 입력해 주세요."
+        case .alreadyPending:communityVerificationError="인증 신청을 검토하고 있어요."
+        case .alreadyApproved:communityVerificationError="계정 인증이 완료됐어요."
+        }
+        return false
+    }
+    func reviewCommunityVerification(as result:WCommunityVerificationStatus){guard communityVerification.review(as:result)else{return};saveCommunityVerification()}
+    private func saveCommunityVerification(){if let data=try? JSONEncoder().encode(communityVerification){defaults.set(data,forKey:"mov.wireframe.community-verification.v1")}}
+    var notificationIDs:[Int]{WReviewMode.tools && ProcessInfo.processInfo.arguments.contains("-wire-empty-notifications") ? []:[0,1]}
+    var hasUnreadNotifications:Bool{notificationIDs.contains{!profile.notificationRead.contains($0)}}
+    var hasUnreadCommunityNotifications:Bool{communityNotificationCenter.hasUnread}
+    func cancelReauthentication(){guard screen=="T15" else{return};settingsGrant=false;let destination=pendingBack;if path.last==destination{path.removeLast()};leaveAuth(for:destination);forward=false;screen=destination;error=""}
+    struct Account:Codable {var profile:WLocalProfile;var records:[RunRecord];var goal:RunGoal;var weekly:WeeklyGoal}
+    func switchLocalAccount(_ store:RunStore,clearShare:()->Void = {}){
+        guard store.session==nil else{go("T14");return}
+        let owner=defaults.string(forKey:"mov.local.owner") ?? "primary"
+        var accounts=defaults.data(forKey:"mov.local.accounts").flatMap{try? JSONDecoder().decode([String:Account].self,from:$0)} ?? [:]
+        accounts[owner]=Account(profile:profile,records:store.records,goal:store.goal,weekly:store.weekly)
+        let next=owner=="existing-kakao" ? "primary":"existing-kakao"
+        var fallback=WLocalProfile();fallback.nickname="카카오러너"
+        let target=accounts[next] ?? Account(profile:fallback,records:[],goal:RunGoal(),weekly:WeeklyGoal())
+        guard let encoded=try? JSONEncoder().encode(accounts)else{return}
+        defaults.set(encoded,forKey:"mov.local.accounts");defaults.set(next,forKey:"mov.local.owner")
+        profile=target.profile;store.records=target.records;store.goal=target.goal;store.weekly=target.weekly;remoteAccountScopeID=UUID().uuidString;store.persist();save();clearShare();go("H00")
+    }
+    static let otpScreens:Set<String>=["A19","A20","A21","A22","A23"]
+    static let passwordResetScreens:Set<String>=["A10","A11","A12","A13","A24","A25","A26","A27","A28"]
+    func clearAuthSecrets(preservingOTP:Bool=false){authErrorField="";authPassword="";authConfirm="";authCurrent="";authFilled=false;revealedFields=[];if !preservingOTP{code="";otpFocused=false;lastAttemptedOTP=nil}}
+    func leaveAuth(for next:String){
+        if screen=="A02" && next != "A02",consentSequenceID != nil{consentTerms=consentSequenceOriginalTerms;consentPrivacy=consentSequenceOriginalPrivacy;consentSequenceID=nil;consentBusy=false}
+        let preservingOTP=Self.otpScreens.contains(screen) && Self.otpScreens.contains(next)
+        if !preservingOTP{otpSuccess=false;otpVerifying=false;otpVerificationID=nil}
+        if !Self.passwordResetScreens.contains(screen) || !Self.passwordResetScreens.contains(next){passwordReset.invalidate()}
+        clearAuthSecrets(preservingOTP:preservingOTP)
+        if !Self.otpScreens.contains(next){challengeIssued=nil;challengeCode="482619";otpCodeIssuer.reset();codeAttempts=0;lastAttemptedOTP=nil;authEmail=""}
+        if !["A16","A17","A18","T15","T06"].contains(next){settingsGrant=false}
+    }
+    static let providerRoutes:Set<String>=["T06","T07","T08","T09","T15","T17","A16","A17","A18"]
+    func returnToProviders(){
+        if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index))}
+        else{path.removeAll{Self.providerRoutes.contains($0)};if path.isEmpty{path=["T01"]}}
+        leaveAuth(for:"T05");forward=false;screen="T05";pending="T05";error=""
+    }
+    func go(_ next:String){guard next != screen else{return};
+        if ["L04","L07"].contains(screen), !["L04","L07"].contains(next) { remoteSelectedRunID = nil }
+        if (next=="H00" && screen.hasPrefix("A")) || (next=="A01" && ["T10","A13","A18","T12","A04"].contains(screen)){
+            leaveAuth(for:next);path=[];screen=next;forward=true;rootIndex=2;error="";return
+        };if next=="T05" && (Self.providerRoutes.contains(screen) || resetBack=="T05"){returnToProviders();return};if ["T17","A18"].contains(next){if let index=path.firstIndex(of:"T05"){path=Array(path.prefix(index+1))}else{path=["T01","T05"]};leaveAuth(for:next);forward=true;screen=next;error="";return};if screen=="A18" && next=="A01"{path=[];leaveAuth(for:next);screen=next;error="";return};leaveAuth(for:next);forward=true;let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][next] ?? roots.firstIndex(of:next){forward=index>rootIndex;previousRootIndex=rootIndex;rootIndex=index};path.append(screen);screen=next;error=""}
+    func openRecord(_ record:RunRecord){remoteSelectedRunID=nil;selected=record.id;forward=true;path.append(screen);screen="L04";error=""}
+    func openRemoteRecord(id:String){remoteSelectedRunID=id;selected=nil;forward=true;path.append(screen);screen="L04";error=""}
+    func back(){
+        if screen=="A15"{go("H00");return}
+        if screen=="A13"{return}
+        if screen=="A18" && passwordChanged{go("A01");return}
+        if ["T17","A18"].contains(screen){returnToProviders();return};let destination=path.popLast() ?? "H00";if ["L04","L07"].contains(screen), !["L04","L07"].contains(destination){remoteSelectedRunID=nil};leaveAuth(for:destination);forward=false;screen=destination;error="";let roots=["POINTS","H01","H00","C01","M01"];if let index=["H02":1,"H05":1][screen] ?? roots.firstIndex(of:screen){rootIndex=index}}
+}
+actor WireframeAccountLinkFixture: AccountLinkFlowServing {
+    private var providers: [AccountLinkProvider]
+    private let localPassword: Bool
+    private var reauthProof: String?
+    private var reauthProofPurpose: AccountLinkPurpose?
+    private var failCompletionOnce: Bool
+    private var failUnlinkWithMethodRequiredOnce: Bool
+    private var failUnlinkOnce: Bool
+    private let cancelReauthentication: Bool
+    private let cancelLinkCredential: Bool
+    private var delaysLinkCompletion: Bool
+    private let delaysUnlinkCompletion: Bool
+    private let delaysMethodsAfterUnlinkForAccountSwitch: Bool
+    private var loseCompletionResponseOnce: Bool
+    private var loseCompletionStatusOnce: Bool
+    private var loseUnlinkResponseOnce: Bool
+    private var loseUnlinkStatusOnce: Bool
+    private var failMethodsAfterUnlinkOnce:Bool
+    private var expireLinkChallengeOnce:Bool
+    private var expireUnlinkProofOnce:Bool
+    private var loseNextStatusResponse = false
+    private var unlinkHasCompleted = false
+    private var delayNextUnlinkMethodsRead = false
+    private var postUnlinkMethodsReadCount = 0
+
+    init(initiallyLinkedGoogle: Bool, onlyGoogleLinked: Bool, localPassword: Bool, failCompletionOnce: Bool, failUnlinkWithMethodRequiredOnce: Bool, failUnlinkOnce: Bool, cancelReauthentication: Bool, cancelLinkCredential: Bool, delaysLinkCompletion: Bool, delaysUnlinkCompletion: Bool, delaysMethodsAfterUnlinkForAccountSwitch:Bool, loseCompletionResponseOnce: Bool, loseCompletionStatusOnce: Bool, loseUnlinkResponseOnce: Bool, loseUnlinkStatusOnce: Bool, failMethodsAfterUnlinkOnce:Bool, expireLinkChallengeOnce:Bool, expireUnlinkProofOnce:Bool) {
+        providers = onlyGoogleLinked ? [.google] : initiallyLinkedGoogle ? [.kakao, .google] : [.kakao]
+        self.localPassword = localPassword
+        self.failCompletionOnce = failCompletionOnce
+        self.failUnlinkWithMethodRequiredOnce = failUnlinkWithMethodRequiredOnce
+        self.failUnlinkOnce = failUnlinkOnce
+        self.cancelReauthentication = cancelReauthentication
+        self.cancelLinkCredential = cancelLinkCredential
+        self.delaysLinkCompletion = delaysLinkCompletion
+        self.delaysUnlinkCompletion = delaysUnlinkCompletion
+        self.delaysMethodsAfterUnlinkForAccountSwitch=delaysMethodsAfterUnlinkForAccountSwitch
+        self.loseCompletionResponseOnce = loseCompletionResponseOnce
+        self.loseUnlinkResponseOnce = loseUnlinkResponseOnce
+        self.loseNextStatusResponse = false
+        self.loseCompletionStatusOnce = loseCompletionStatusOnce
+        self.loseUnlinkStatusOnce = loseUnlinkStatusOnce
+        self.failMethodsAfterUnlinkOnce=failMethodsAfterUnlinkOnce
+        self.expireLinkChallengeOnce=expireLinkChallengeOnce
+        self.expireUnlinkProofOnce=expireUnlinkProofOnce
+    }
+
+    func methods() async throws -> AccountLinkMethods {
+        if loseNextStatusResponse {
+            loseNextStatusResponse = false
+            throw AccountLinkFailure.transport(.networkConnectionLost)
+        }
+        if unlinkHasCompleted && failMethodsAfterUnlinkOnce {
+            failMethodsAfterUnlinkOnce=false
+            throw AccountLinkFailure.serviceUnavailable
+        }
+        if delayNextUnlinkMethodsRead {
+            delayNextUnlinkMethodsRead=false
+            postUnlinkMethodsReadCount += 1
+            let delayedSnapshot=AccountLinkMethods(localPassword:localPassword,socialProviders:providers)
+            try await Task.sleep(for:.seconds(5))
+            return delayedSnapshot
+        }
+        if delaysMethodsAfterUnlinkForAccountSwitch && unlinkHasCompleted {
+            postUnlinkMethodsReadCount += 1
+            if postUnlinkMethodsReadCount > 1 {
+                return AccountLinkMethods(localPassword:false,socialProviders:[.google])
+            }
+        }
+        return AccountLinkMethods(localPassword: localPassword, socialProviders: providers)
+    }
+
+    func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws {
+        guard localPassword, !password.isEmpty else { throw AccountLinkFailure.invalidCredentials }
+        reauthProof = Self.token("r")
+        reauthProofPurpose = purpose
+    }
+
+    func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws {
+        guard providers.contains(provider) else { throw AccountLinkFailure.invalidCredentials }
+        if cancelReauthentication { throw AccountLinkFailure.cancelled }
+        reauthProof = Self.token("r")
+        reauthProofPurpose = purpose
+    }
+
+    func consumeReauthenticationProof(for purpose: AccountLinkPurpose) async throws -> String {
+        guard reauthProofPurpose == purpose, let proof = reauthProof else {
+            throw AccountLinkFailure.reauthenticationRequired
+        }
+        reauthProof = nil
+        reauthProofPurpose = nil
+        return proof
+    }
+
+    func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
+        guard reauthProof != nil, reauthProofPurpose == .link else { throw AccountLinkFailure.reauthenticationRequired }
+        guard !providers.contains(provider) else { throw AccountLinkFailure.alreadyLinked }
+        if cancelLinkCredential {
+            self.reauthProof = nil
+            self.reauthProofPurpose = nil
+            throw AccountLinkFailure.cancelled
+        }
+        guard await onMutationRequestWillSubmit() else {
+            self.reauthProof = nil
+            self.reauthProofPurpose = nil
+            throw AccountLinkFailure.cancelled
+        }
+        if delaysLinkCompletion {
+            delaysLinkCompletion=false
+            try await Task.sleep(for: .seconds(6))
+        }
+        if expireLinkChallengeOnce {
+            expireLinkChallengeOnce=false
+            reauthProof=nil
+            reauthProofPurpose=nil
+            throw AccountLinkFailure.unauthenticated
+        }
+        if failCompletionOnce {
+            failCompletionOnce = false
+            self.reauthProof = nil
+            self.reauthProofPurpose = nil
+            throw AccountLinkFailure.accountLinkConflict
+        }
+        providers.append(provider)
+        self.reauthProof = nil
+        self.reauthProofPurpose = nil
+        if loseCompletionResponseOnce {
+            loseCompletionResponseOnce = false
+            loseNextStatusResponse = loseCompletionStatusOnce
+            loseCompletionStatusOnce = false
+            throw AccountLinkFailure.transport(.networkConnectionLost)
+        }
+    }
+
+    func unlink(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
+        guard reauthProof != nil, reauthProofPurpose == .unlink else { throw AccountLinkFailure.reauthenticationRequired }
+        guard providers.contains(provider) else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountLinkNotFound
+        }
+        guard await onMutationRequestWillSubmit() else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.cancelled
+        }
+        if delaysUnlinkCompletion { try await Task.sleep(for: .seconds(6)) }
+        if expireUnlinkProofOnce {
+            expireUnlinkProofOnce=false
+            reauthProof=nil
+            reauthProofPurpose=nil
+            throw AccountLinkFailure.unauthenticated
+        }
+        if failUnlinkWithMethodRequiredOnce {
+            failUnlinkWithMethodRequiredOnce = false
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountMethodRequired
+        }
+        if failUnlinkOnce {
+            failUnlinkOnce = false
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.serviceUnavailable
+        }
+        guard localPassword || providers.count > 1 else {
+            reauthProof = nil
+            reauthProofPurpose = nil
+            throw AccountLinkFailure.accountMethodRequired
+        }
+        providers.removeAll { $0 == provider }
+        unlinkHasCompleted=true
+        if delaysMethodsAfterUnlinkForAccountSwitch { delayNextUnlinkMethodsRead=true }
+        reauthProof = nil
+        reauthProofPurpose = nil
+        if loseUnlinkResponseOnce {
+            loseUnlinkResponseOnce = false
+            loseNextStatusResponse = loseUnlinkStatusOnce
+            loseUnlinkStatusOnce = false
+            throw AccountLinkFailure.transport(.networkConnectionLost)
+        }
+    }
+
+    func cancel() async {
+        reauthProof = nil
+        reauthProofPurpose = nil
+    }
+
+    private static func token(_ prefix: String) -> String {
+        prefix + String(repeating: "x", count: 42)
+    }
+}
+
+#if DEBUG
+/// In-memory withdrawal transport for isolated UUID-backed UI fixtures only.
+private actor WireframeMemberWithdrawalFixture: MemberWithdrawalServing {
+    private var failOnce: Bool
+    private var expireProofOnce: Bool
+    private var loseResponseOnce: Bool
+    private var delayOnce: Bool
+    private var requestCount = 0
+
+    init(arguments: [String]) {
+        failOnce = arguments.contains("-wire-member-withdrawal-fail-once")
+        expireProofOnce = arguments.contains("-wire-member-withdrawal-expired-proof-once")
+        loseResponseOnce = arguments.contains("-wire-member-withdrawal-response-lost-once")
+        delayOnce = arguments.contains("-wire-member-withdrawal-delay-once")
+    }
+
+    func confirmationNotice() async throws -> MemberWithdrawalConfirmationNotice {
+        MemberWithdrawalConfirmationNotice(
+            message: "탈퇴 범위와 처리 항목을 확인해 주세요.",
+            recentReauthenticationValiditySeconds: 300
+        )
+    }
+
+    func requestWithdrawal(reauthProof: String, confirmed: Bool) async throws -> MemberWithdrawalReceipt {
+        guard confirmed else { throw MemberWithdrawalFailure.confirmationRequired }
+        guard reauthProof.utf8.count == 43 else { throw MemberWithdrawalFailure.reauthenticationRequired }
+        requestCount += 1
+
+        if delayOnce {
+            delayOnce = false
+            do { try await Task.sleep(for: .seconds(3)) }
+            catch { throw MemberWithdrawalFailure.transport(.cancelled, outcomeUnknown: true) }
+        }
+        if expireProofOnce {
+            expireProofOnce = false
+            throw MemberWithdrawalFailure.unauthenticated
+        }
+        if failOnce {
+            failOnce = false
+            throw MemberWithdrawalFailure.serviceUnavailable
+        }
+        if loseResponseOnce {
+            loseResponseOnce = false
+            // Model a committed request whose 202 response was lost. No receipt is exposed.
+            throw MemberWithdrawalFailure.transport(.networkConnectionLost, outcomeUnknown: true)
+        }
+
+        return MemberWithdrawalReceipt(
+            requestId: "debug-withdrawal-\(requestCount)",
+            status: "WITHDRAWN",
+            gpsStatus: .completed,
+            profilePhotoStatus: .pending,
+            communityAttachmentsStatus: .retryableFailure
+        )
+    }
+}
+#endif
+
+struct RootView:View {
+    @Environment(\.dynamicTypeSize) var systemSize
+    let remoteReadDependencies: WireframeRemoteReadDependencies?
+    var captureViewport:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-capture-viewport")}
+
+    init(remoteReadDependencies: WireframeRemoteReadDependencies? = nil) {
+        self.remoteReadDependencies = remoteReadDependencies
+    }
+
+    private var resolvedRemoteReadDependencies:WireframeRemoteReadDependencies? {
+        if let remoteReadDependencies { return remoteReadDependencies }
+        let args = ProcessInfo.processInfo.arguments
+        let authComposition = WireframeAuthSessionComposition.resolve(arguments: args)
+        let runFixture = args.contains("-wire-run-records-fixture")
+        let runEditFixture = args.contains("-wire-run-records-edit-fixture")
+        let runDeleteFixture = args.contains("-wire-run-records-delete-fixture")
+        let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
+        let progressFixture = args.contains("-wire-progress-goals-fixture") || weeklyGoalWriteFixture
+        let logoutFixture = WReviewMode.tools && args.contains("-wire-auth-logout-fixture")
+            ? WireframeAuthLogoutFixture(
+                failureSequence: {
+                    if args.contains("-wire-auth-logout-fail-once-500") {
+                        return [.serverFailure(statusCode:500,requestID:"fixture-logout-500")]
+                    }
+                    if args.contains("-wire-auth-logout-response-lost-then-401") {
+                        return [.transport(.timedOut),.unauthenticated]
+                    }
+                    if args.contains("-wire-auth-logout-fail-once") {
+                        return [.serviceUnavailable(requestID:"fixture-logout-unavailable")]
+                    }
+                    return []
+                }(),
+                alwaysFails:args.contains("-wire-auth-logout-fail"),
+                delaysResponse:args.contains("-wire-auth-logout-delay")
+            ) : nil
+        let passwordResetFixture: WireframePasswordResetFixture? = WReviewMode.tools && args.contains("-wire-fixture")
+            ? WireframePasswordResetFixture(
+                initialChallenge: {
+                    guard let index=args.firstIndex(of:"-wire-screen"),args.indices.contains(index+1) else{return false}
+                    return WireState.passwordResetScreens.contains(args[index+1]) && args[index+1] != "A10"
+                }(),
+                initialCode: args.contains("-wire-screen") && args.indices.contains((args.firstIndex(of:"-wire-screen") ?? 0)+1) && args[(args.firstIndex(of:"-wire-screen") ?? 0)+1] == "A28" ? "700001":"700000",
+                initialChallengeAge: {
+                    guard let index=args.firstIndex(of:"-wire-screen"),args.indices.contains(index+1) else{return 0}
+                    if args[index+1]=="A26"{return PasswordResetPolicy.codeLifetime+1}
+                    if args[index+1]=="A28" || args.contains("-wire-password-reset-resend-ready"){return PasswordResetPolicy.resendInterval}
+                    return 0
+                }(),
+                failChallengeOnce:args.contains("-wire-password-reset-challenge-timeout-once"),
+                failVerificationOnce:args.contains("-wire-password-reset-confirm-timeout-once"),
+                loseCompletionResponseOnce:args.contains("-wire-password-reset-completion-response-lost-once")
+            ) : nil
+        let passwordResetSessionStore: (any AuthSessionStoring)? = WReviewMode.tools && args.contains("-wire-password-reset-session-store-fixture")
+            ? WireframePasswordResetSessionFixtureStore(failReplacementOnce:args.contains("-wire-password-reset-session-store-fail-once")) : nil
+        // User-flow auth fixtures disable the broader review mode. Permit this mock only
+        // when both the defaults suite and Keychain service are UUID-isolated.
+        let uuidScopedAuthFixture = AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: args)
+            && AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: args) != nil
+        let accountLinkFixture: (any AccountLinkFlowServing)? = (WReviewMode.tools || uuidScopedAuthFixture)
+            && (args.contains("-wire-account-link-fixture") || args.contains("-wire-member-withdrawal-fixture"))
+            ? WireframeAccountLinkFixture(
+                initiallyLinkedGoogle:args.contains("-wire-account-link-google-already-linked"),
+                onlyGoogleLinked:args.contains("-wire-account-unlink-last-method"),
+                localPassword:args.contains("-wire-account-link-local-password") || args.contains("-wire-member-withdrawal-fixture"),
+                failCompletionOnce:args.contains("-wire-account-link-fail-once"),
+                failUnlinkWithMethodRequiredOnce:args.contains("-wire-account-unlink-last-method-race"),
+                failUnlinkOnce:args.contains("-wire-account-unlink-fail-once"),
+                cancelReauthentication:args.contains("-wire-account-link-cancel-reauth"),
+                cancelLinkCredential:args.contains("-wire-account-link-cancel-target"),
+                delaysLinkCompletion:args.contains("-wire-account-link-delay-completion"),
+                delaysUnlinkCompletion:args.contains("-wire-account-unlink-delay-completion"),
+                delaysMethodsAfterUnlinkForAccountSwitch:args.contains("-wire-account-link-scope-switch-regression"),
+                loseCompletionResponseOnce:args.contains("-wire-account-link-response-lost-once"),
+                loseCompletionStatusOnce:args.contains("-wire-account-link-status-read-lost-once"),
+                loseUnlinkResponseOnce:args.contains("-wire-account-unlink-response-lost-once"),
+                loseUnlinkStatusOnce:args.contains("-wire-account-unlink-status-read-lost-once"),
+                failMethodsAfterUnlinkOnce:args.contains("-wire-account-link-methods-fail-after-unlink-once"),
+                expireLinkChallengeOnce:args.contains("-wire-account-link-expired-challenge-once"),
+                expireUnlinkProofOnce:args.contains("-wire-account-unlink-expired-proof-once")
+            ) : nil
+#if DEBUG
+        let memberWithdrawalFixture: (any MemberWithdrawalServing)? = (WReviewMode.tools || uuidScopedAuthFixture)
+            && args.contains("-wire-member-withdrawal-fixture")
+            && AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: args)
+            && AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: args) != nil
+            ? WireframeMemberWithdrawalFixture(arguments: args) : nil
+#else
+        let memberWithdrawalFixture: (any MemberWithdrawalServing)? = nil
+#endif
+        let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
+            ? WireframeMemberProfileFixture(
+                failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
+                failWrite:args.contains("-wire-member-profile-write-fail"),
+                conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
+                delayWrite:args.contains("-wire-member-profile-write-delay")
+            ) : nil
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
+        let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
+        let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
+            fails:args.contains("-wire-run-records-fail"),
+            failsWrite:args.contains("-wire-run-records-write-fail"),
+            conflictsFirstWrite:args.contains("-wire-run-records-write-conflict"),
+            missingWrite:args.contains("-wire-run-records-write-404"),
+            deletionFailure:args.contains("-wire-run-records-delete-404") ? .recordNotFound : args.contains("-wire-run-records-delete-fail") ? .serverFailure(statusCode:503,requestID:"fixture-run-delete-unavailable") : nil,
+            losesFirstDeleteResponse:args.contains("-wire-run-records-delete-response-lost"),
+            removesRunOnNextRefresh:args.contains("-wire-run-records-remote-delete-on-refresh")
+        ):nil
+        let runLoader = runClient.map { RunRecordsLoader(client:$0) }
+        let progressClient = progressFixture ? WireframeProgressGoalsFixture(
+            failsOverview:args.contains("-wire-progress-goals-fail"),
+            failsDaily:args.contains("-wire-progress-daily-fail"),
+            failsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-fail"),
+            conflictsWeeklyGoalWrite:args.contains("-wire-weekly-goal-write-conflict"),
+            failsConflictRefreshOnce:args.contains("-wire-weekly-goal-conflict-refresh-fail-once")
+        ):nil
+        let progressLoader = progressClient.map { RunningProgressLoader(client:$0) }
+        let accountLinkFlow: (any AccountLinkFlowServing)?
+        if let accountLinkFixture {
+            accountLinkFlow = accountLinkFixture
+        } else if WReviewMode.tools {
+            accountLinkFlow = nil
+        } else {
+            if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+                accountLinkFlow = AccountLinkFlowFactory.make(apiClient: apiClient, tokenProvider: authClient)
+            } else {
+                accountLinkFlow = nil
+            }
+        }
+        let memberWithdrawalService: (any MemberWithdrawalServing)?
+#if DEBUG
+        if let memberWithdrawalFixture {
+            memberWithdrawalService = memberWithdrawalFixture
+        } else if WReviewMode.tools {
+            memberWithdrawalService = nil
+        } else if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+            memberWithdrawalService = MemberWithdrawalClient(apiClient: apiClient, tokenProvider: authClient)
+        } else {
+            memberWithdrawalService = nil
+        }
+#else
+        if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+            memberWithdrawalService = MemberWithdrawalClient(apiClient: apiClient, tokenProvider: authClient)
+        } else {
+            memberWithdrawalService = nil
+        }
+#endif
+        return WireframeRemoteReadDependencies(
+            memberProfileLoader:profileLoader,
+            memberProfileUpdater:profileFixture,
+            runRecordsLoader:runLoader,
+            runRecordsUpdater:runEditFixture ? runClient:nil,
+            runRecordsDeleter:runDeleteFixture ? runClient:nil,
+            runningProgressLoader:progressLoader,
+            weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
+            sessionLogoutRequester:logoutFixture ?? authComposition.client,
+            passwordResetService:passwordResetFixture ?? authComposition.apiClient.map { PasswordResetClient(apiClient: $0) },
+            authSessionStore:passwordResetSessionStore ?? authComposition.store,
+            authSessionClient:authComposition.client,
+            accountLinkFlow:accountLinkFlow,
+            memberWithdrawalService:memberWithdrawalService
+        )
+    }
+
+    var body: some View {
+        Group {
+            if captureViewport {
+                ZStack(alignment:.top){W.paper;Text("SIMULATION · 가상 데이터 · 실제 GPS·인증 없음").font(.system(size:8)).foregroundStyle(Color(white:0.4)).frame(maxWidth:.infinity).frame(height:24).background(Color(white:0.93));WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:390,height:766).clipped().offset(y:24)}
+                    .frame(width:390,height:790,alignment:.top).clipped().ignoresSafeArea()
+            } else if ProcessInfo.processInfo.arguments.contains("-wire-fixture") && ProcessInfo.processInfo.arguments.contains("-wire-compact-review") {
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:320,height:568).clipped()
+            } else if ProcessInfo.processInfo.arguments.contains("-wire-review-size") {
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies).frame(width:388,height:764).clipped()
+            } else {
+                WireframeRoot(remoteReadDependencies:resolvedRemoteReadDependencies)
+            }
+        }.dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("-wire-large") ? .accessibility3:systemSize).statusBarHidden(captureViewport)
+    }
+}
+
+/// An in-memory profile API fake for isolated UI review and test suites.
+private actor WireframeMemberProfileFixture:MemberProfileFetching, MemberProfileUpdating {
+    private var profile=MemberProfile(
+        nickname:"RunMate",introduction:"아침마다 달려요",region:"모브시 북부권",weightKg:Decimal(string:"63.12")!
+    )
+    private var failReadOnce:Bool
+    private let failWrite:Bool
+    private let conflictNickname:Bool
+    private let delayWrite:Bool
+
+    init(failReadOnce:Bool,failWrite:Bool,conflictNickname:Bool,delayWrite:Bool){
+        self.failReadOnce=failReadOnce;self.failWrite=failWrite;self.conflictNickname=conflictNickname;self.delayWrite=delayWrite
+    }
+
+    func fetchProfile() async throws -> MemberProfile {
+        if failReadOnce {failReadOnce=false;throw MemberProfileFailure.serviceUnavailable(requestID:"fixture-profile-read")}
+        return profile
+    }
+
+    func updateProfile(_ patch:MemberProfilePatch) async throws -> MemberProfile {
+        if delayWrite {try await Task.sleep(for:.milliseconds(350))}
+        if failWrite {throw MemberProfileFailure.serviceUnavailable(requestID:"fixture-profile-write")}
+        if conflictNickname,case .set=patch.nickname {
+            throw MemberProfileFailure.nicknameAlreadyUsed(requestID:"fixture-profile-conflict")
+        }
+        var nickname=profile.nickname
+        var introduction=profile.introduction
+        var region=profile.region
+        var weightKg=profile.weightKg
+        switch patch.nickname {
+        case .unchanged:break
+        case .set(let value):nickname=value.precomposedStringWithCanonicalMapping
+        case .clear:throw MemberProfileFailure.invalidProfileDraft
+        }
+        switch patch.introduction {
+        case .unchanged:break
+        case .set(let value):introduction=value
+        case .clear:introduction=nil
+        }
+        switch patch.region {
+        case .unchanged:break
+        case .set(let value):region=value
+        case .clear:region=nil
+        }
+        switch patch.weightKg {
+        case .unchanged:break
+        case .set(let value):
+            guard value>=20,value<=300 else{throw MemberProfileFailure.validationFailed(requestID:"fixture-profile-validation")}
+            var input=value;var stored=Decimal();NSDecimalRound(&stored,&input,2,.down);weightKg=stored
+        case .clear:weightKg=nil
+        }
+        profile=MemberProfile(nickname:nickname,introduction:introduction,region:region,weightKg:weightKg)
+        return profile
+    }
+}
+
+private actor WireframeProgressGoalsFixture: RunningProgressReading, RunningWeeklyGoalWriting {
+    private let failsOverview: Bool
+    private let failsDaily: Bool
+    private let failsWeeklyGoalWrite: Bool
+    private let conflictsWeeklyGoalWrite: Bool
+    private var failsConflictRefreshOnce: Bool
+    private var weeklyGoalReadCalls=0
+    private var didConflictWeeklyGoalWrite=false
+    private var weeklyGoal = BackendWeeklyGoalStatus(
+        weekStartDate:"2026-09-28",weekEndDate:"2026-10-04",version:3,
+        distance:.init(goal:20_000,done:12_400,remaining:7_600,achieved:false),
+        time:.init(goal:7_200,done:3_900,remaining:3_300,achieved:false)
+    )
+
+    init(
+        failsOverview: Bool,
+        failsDaily: Bool,
+        failsWeeklyGoalWrite: Bool = false,
+        conflictsWeeklyGoalWrite: Bool = false,
+        failsConflictRefreshOnce: Bool = false
+    ) {
+        self.failsOverview=failsOverview
+        self.failsDaily=failsDaily
+        self.failsWeeklyGoalWrite=failsWeeklyGoalWrite
+        self.conflictsWeeklyGoalWrite=conflictsWeeklyGoalWrite
+        self.failsConflictRefreshOnce=failsConflictRefreshOnce
+    }
+
+    func fetchProgress() async throws -> BackendProgressSummary {
+        if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-progress") }
+        return BackendProgressSummary(
+            grade:"SPROUT",gradeAchievedAt:nil,
+            window:.init(fromDate:"2026-07-04",toDate:"2026-10-01",distanceMeters:12_400,activityDays:8),
+            nextGrade:.init(grade:"PASSION",requiredDistanceMeters:30_000,requiredActivityDays:10,remainingDistanceMeters:17_600,remainingActivityDays:2),
+            total:.init(distanceMeters:48_200,seconds:17_350,activityDays:31,runCount:40)
+        )
+    }
+
+    func fetchWeeklyGoal() async throws -> BackendWeeklyGoalStatus {
+        weeklyGoalReadCalls+=1
+        if weeklyGoalReadCalls>1 && failsConflictRefreshOnce {
+            failsConflictRefreshOnce=false
+            throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-conflict-refresh")
+        }
+        if failsOverview { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal") }
+        return weeklyGoal
+    }
+
+    func saveWeeklyGoal(version: Int64, distanceGoalMeters: Int64?, timeGoalSeconds: Int64?) async throws -> BackendWeeklyGoalStatus {
+        if failsWeeklyGoalWrite { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-weekly-goal-write") }
+        if conflictsWeeklyGoalWrite && !didConflictWeeklyGoalWrite {
+            didConflictWeeklyGoalWrite=true
+            weeklyGoal=BackendWeeklyGoalStatus(
+                weekStartDate:weeklyGoal.weekStartDate,weekEndDate:weeklyGoal.weekEndDate,version:weeklyGoal.version+1,
+                distance:.init(goal:40_000,done:weeklyGoal.distance.done,remaining:27_600,achieved:false),
+                time:.init(goal:12_000,done:weeklyGoal.time.done,remaining:8_100,achieved:false)
+            )
+            throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict")
+        }
+        guard version == weeklyGoal.version else { throw ProgressGoalsFailure.weeklyGoalVersionConflict(requestID:"fixture-weekly-goal-write-conflict") }
+        guard Self.isValidGoal(distanceGoalMeters, step:1_000, maximum:500_000),
+              Self.isValidGoal(timeGoalSeconds, step:600, maximum:360_000) else {
+            throw ProgressGoalsFailure.weeklyGoalValidationFailed(requestID:"fixture-weekly-goal-validation")
+        }
+        weeklyGoal = BackendWeeklyGoalStatus(
+            weekStartDate:weeklyGoal.weekStartDate,
+            weekEndDate:weeklyGoal.weekEndDate,
+            version:weeklyGoal.version + 1,
+            distance:Self.axis(distanceGoalMeters, done:weeklyGoal.distance.done),
+            time:Self.axis(timeGoalSeconds, done:weeklyGoal.time.done)
+        )
+        return weeklyGoal
+    }
+
+    func fetchDaily(range:BackendDailyProgressRange) async throws -> BackendDailyProgress {
+        if failsDaily { throw ProgressGoalsFailure.serviceUnavailable(requestID:"fixture-daily") }
+        let all=[
+            BackendDailyProgressDay(date:"2026-09-28",validDistanceMeters:6_400,validSeconds:2_400,runCount:1,activityDay:true),
+            BackendDailyProgressDay(date:"2026-09-30",validDistanceMeters:6_000,validSeconds:1_500,runCount:1,activityDay:true),
+            BackendDailyProgressDay(date:"2026-10-05",validDistanceMeters:7_200,validSeconds:3_600,runCount:1,activityDay:true)
+        ]
+        return BackendDailyProgress(range:range,days:all.filter{$0.date >= range.fromDate && $0.date <= range.toDate})
+    }
+
+    private static func isValidGoal(_ value:Int64?,step:Int64,maximum:Int64)->Bool {
+        guard let value else{return true}
+        return value >= step && value <= maximum && value.isMultiple(of:step)
+    }
+
+    private static func axis(_ goal:Int64?,done:Int64)->BackendWeeklyGoalAxis {
+        guard let goal else{return .init(goal:nil,done:done,remaining:nil,achieved:false)}
+        return .init(goal:goal,done:done,remaining:max(0,goal-done),achieved:done>=goal)
+    }
+}
+
+/// An in-memory UI test seam. The normal app entry point never supplies this reader.
+private actor WireframeAuthLogoutFixture: SessionLogoutRequesting {
+    private let failureSequence: [SessionLogoutFailure]
+    private let alwaysFails: Bool
+    private let delaysResponse: Bool
+    private var attempts = 0
+
+    init(failureSequence: [SessionLogoutFailure], alwaysFails: Bool, delaysResponse: Bool) {
+        self.failureSequence = failureSequence
+        self.alwaysFails = alwaysFails
+        self.delaysResponse = delaysResponse
+    }
+
+    func logout() async throws {
+        if delaysResponse {
+            // Keep the response alive after request cancellation to exercise the bridge's scope guard.
+            await Task.detached { try? await Task.sleep(nanoseconds: 5_000_000_000) }.value
+        }
+        let attempt = attempts
+        attempts += 1
+        if failureSequence.indices.contains(attempt) {
+            throw failureSequence[attempt]
+        }
+        if alwaysFails {
+            throw SessionLogoutFailure.serviceUnavailable(requestID: "fixture-logout-unavailable")
+        }
+    }
+}
+
+private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating,RunRecordsDeleting {
+    let fails:Bool
+    let failsWrite:Bool
+    let missingWrite:Bool
+    private let deletionFailure:RunRecordsFailure?
+    private var losesFirstDeleteResponse:Bool
+    private var conflictsFirstWrite:Bool
+    private var recordMissing=false
+    private var removesRunOnNextRefresh:Bool
+    private var listReadCount=0
+    private var currentSummary:BackendRunSummary
+
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false,removesRunOnNextRefresh:Bool=false){
+        self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
+        self.missingWrite=missingWrite;self.deletionFailure=deletionFailure;self.losesFirstDeleteResponse=losesFirstDeleteResponse
+        self.removesRunOnNextRefresh=removesRunOnNextRefresh;self.currentSummary=Self.makeSummary()
+    }
+
+    func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
+        if fails { throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-unavailable") }
+        if cursor == nil {
+            listReadCount += 1
+            if removesRunOnNextRefresh && listReadCount > 1 {
+                recordMissing=true
+                removesRunOnNextRefresh=false
+            }
+        }
+        if recordMissing { return BackendRunPage(items:[],nextCursor:nil) }
+        guard cursor == nil else { return BackendRunPage(items:[],nextCursor:nil) }
+        return BackendRunPage(items:[currentSummary],nextCursor:nil)
+    }
+
+    func fetchRun(id:String) async throws -> BackendRunDetail {
+        guard id == currentSummary.id,!recordMissing else { throw RunRecordsFailure.recordNotFound }
+        return BackendRunDetail(summary:currentSummary,points:[],pauses:[],judgement:nil)
+    }
+
+    func updateRun(id:String,version:Int64,patch:BackendRunEditPatch) async throws -> BackendRunSummary {
+        guard id == currentSummary.id,!recordMissing else{throw RunRecordsFailure.recordNotFound}
+        if missingWrite {recordMissing=true;throw RunRecordsFailure.recordNotFound}
+        if failsWrite{throw RunRecordsFailure.serverFailure(statusCode:503,requestID:"fixture-run-edit-unavailable")}
+        if conflictsFirstWrite{
+            conflictsFirstWrite=false
+            currentSummary=Self.updated(currentSummary,version:currentSummary.version+1,title:"외부 수정 제목",memo:currentSummary.memo)
+            throw RunRecordsFailure.versionConflict
+        }
+        guard currentSummary.version==version else{throw RunRecordsFailure.versionConflict}
+        guard patch.field != nil,
+              patch.title.map({$0.utf16.count<=40}) ?? true,
+              patch.memo.map({$0.utf16.count<=300}) ?? true else{throw RunRecordsFailure.invalidEdit}
+        var title=currentSummary.title
+        var memo=currentSummary.memo
+        if let value=patch.title{title=value.isEmpty ? nil:value}
+        if let value=patch.memo{memo=value.isEmpty ? nil:value}
+        currentSummary=Self.updated(currentSummary,version:version+1,title:title,memo:memo)
+        return currentSummary
+    }
+
+    func deleteRun(id:String,version:Int64) async throws {
+        guard id==currentSummary.id else{throw RunRecordsFailure.recordNotFound}
+        if let deletionFailure {throw deletionFailure}
+        if recordMissing {return}
+        guard currentSummary.version==version else{throw RunRecordsFailure.versionConflict}
+        recordMissing=true
+        if losesFirstDeleteResponse {
+            losesFirstDeleteResponse=false
+            throw RunRecordsFailure.transport(.networkConnectionLost)
+        }
+    }
+
+    private static func makeSummary()->BackendRunSummary {
+        BackendRunSummary(
+            id:"fixture-run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:2,
+            startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
+            runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
+            verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
+            title:"서버 밤 러닝",memo:"fixture only",createdAt:Date(timeIntervalSince1970:1_791_215_462),
+            updatedAt:Date(timeIntervalSince1970:1_791_215_462),pointReward:BackendRunPointReward(status:.settled,pointsAwarded:0)
+        )
+    }
+
+    private static func updated(_ summary:BackendRunSummary,version:Int64,title:String?,memo:String?)->BackendRunSummary {
+        BackendRunSummary(
+            id:summary.id,clientRunID:summary.clientRunID,version:version,startedAt:summary.startedAt,endedAt:summary.endedAt,
+            runDate:summary.runDate,elapsedSeconds:summary.elapsedSeconds,movingSeconds:summary.movingSeconds,
+            distanceMeters:summary.distanceMeters,verdict:summary.verdict,verdictReason:summary.verdictReason,
+            validDistanceMeters:summary.validDistanceMeters,validSeconds:summary.validSeconds,paceSecondsPerKm:summary.paceSecondsPerKm,
+            title:title,memo:memo,createdAt:summary.createdAt,updatedAt:summary.updatedAt.addingTimeInterval(1),pointReward:summary.pointReward
+        )
+    }
+}
+
+struct WireframeRoot:View {
+    @MainActor private static var didPrepareFixture=false
+    @State var store:RunStore
+    @State var shareWorkspace=ShareWorkspace()
+    @State var pointsStore:WPointsStore
+    @State var remoteReads:WireframeRemoteReadBridge
+    @State var passwordResetService: (any PasswordResetServing)?
+    @State var authSessionStore: (any AuthSessionStoring)?
+    #if DEBUG
+    @State var authSessionFixtureStore: WireframeAuthSessionFixtureStore?
+    #endif
+    @State var authSessionClient: AuthSessionClient?
+    @State var authLoginBusy = false
+    @State var authLoginInvocationID: UUID?
+    @State var authLoginTask: Task<Void, Never>?
+    @State var socialLoginCoordinator: SocialLoginCoordinator?
+    @State var socialLoginPendingAttempt: SocialLoginAttempt?
+    @State var socialLoginPendingCompletion: SocialLoginCompletionRequest?
+    @State var socialLoginNextCompletionRequestID: UUID?
+    @State var socialLoginCompletionSubmitted = false
+    @State var socialLoginBusy = false
+    @State var socialLoginInvocationID: UUID?
+    @State var socialLoginTask: Task<Void,Never>?
+    @State var accountLinkPasswordInput = ""
+    @State var weeklyGoalDraftVersion:Int64?
+    @State var weeklyGoalDraftScopeID:String?
+    @State var weeklyGoalDraftDirty=false
+    @State var weeklyTimeDraftInvalid=false
+    @State var memberProfileDraftBaseline:MemberProfile?
+    @State var memberProfileDraftScopeID:String?
+    init(
+        remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
+        runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
+        runUploadQueue: (any RunUploadEnqueueing)? = nil,
+        runUploadDrainer: (any RunUploadDraining)? = nil
+    ){
+        let args=ProcessInfo.processInfo.arguments
+        _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
+        _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
+        #if DEBUG
+        _authSessionFixtureStore=State(initialValue:remoteReadDependencies?.authSessionStore as? WireframeAuthSessionFixtureStore)
+        #endif
+        _authSessionClient=State(initialValue:remoteReadDependencies?.authSessionClient)
+        #if DEBUG
+        let socialLoginFixture: SocialLoginCoordinator? = {
+            guard WReviewMode.tools, args.contains("-wire-social-login-fixture") else{return nil}
+            let service=WireframeSocialLoginServiceFixture(
+                requiresSignup:args.contains("-wire-social-login-new"),
+                failVerificationOnce:args.contains("-wire-social-login-fail-once"),
                 delayChallenge:args.contains("-wire-social-login-delay-challenge"),
                 delayCompletion:args.contains("-wire-social-login-delay-completion"),
                 expireSignupProofOnce:args.contains("-wire-social-login-expired-proof-once"),
@@ -2099,6 +4441,19 @@ extension WireframeAccountLinkState {
     func performBack(){
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         let source=ui.screen
+        if source=="T11" {
+            _=remoteReads.cancelMemberWithdrawalFlow()
+            ui.deleteConsent=false
+            withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
+            return
+        }
+        if source=="T15",ui.pending=="T11" {
+            if ui.pendingBack=="T16" { _=remoteReads.cancelAccountLinkFlow() }
+            else { _=remoteReads.cancelMemberWithdrawalFlow() }
+            ui.deleteConsent=false
+            ui.cancelReauthentication()
+            return
+        }
         let destination=ui.path.last ?? "H00"
         guard prepareSocialLoginNavigation(to:destination) else{return}
         if source=="L07"{remoteReads.cancelRunRecordDeletion()}

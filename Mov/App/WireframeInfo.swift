@@ -1,4 +1,25 @@
 import SwiftUI
+
+@MainActor enum MemberWithdrawalLocalCleanup {
+    static func clearAfterConfirmedReceipt(
+        _ receipt: MemberWithdrawalReceipt,
+        memberID: String,
+        runStore: RunStore,
+        sessionStore: any AuthSessionStoring,
+        authSessionClient: AuthSessionClient
+    ) async -> Bool {
+        guard receipt.status == "WITHDRAWN" else { return false }
+        let current: AuthSessionSnapshot?
+        do { current = try sessionStore.loadSnapshot() }
+        catch { return false }
+        guard current?.memberID == memberID else { return false }
+        guard await runStore.clearOwnedRecords(for: memberID) else { return false }
+        do { try await authSessionClient.clearAfterConfirmedWithdrawal(expectedMemberID: memberID) }
+        catch { return false }
+        return true
+    }
+}
+
 struct WInfo {
     var title:String;var heading:String;var text:String;var notice:String="";var buttons:[(String,String,Int)]=[]
 }
@@ -169,7 +190,7 @@ extension WireframeRoot {
             case .failed(let failure):
                 return .init(title:"탈퇴 요청",heading:"탈퇴 요청을\n처리하지 못했어요",text:failure.userMessage,buttons:[("다시 인증하고 시도","withdrawal-retry",0),("취소","cancel-withdrawal",1)])
             case .outcomeUnknown(let failure):
-                return .init(title:"탈퇴 요청",heading:"요청 결과를\n확인하지 못했어요",text:failure.userMessage+" 자동으로 다시 요청하지 않았어요. 다시 진행하려면 새로운 재인증을 거쳐야 해요.",buttons:[("다시 인증하고 시도","withdrawal-retry",0),("취소","cancel-withdrawal",1)])
+                return .init(title:"탈퇴 요청",heading:"요청 결과를\n확인하지 못했어요",text:failure.userMessage+" 서버에서 처리 여부를 확인할 수 없어 요청을 다시 보내지 않았어요. 이 기기의 로그인 상태와 기록은 정리하지 않았어요.",buttons:[("설정으로 돌아가기","cancel-withdrawal",1)])
             case .accepted(let receipt):
                 return .init(title:"탈퇴 요청",heading:"요청을\n확인했어요",text:receipt.allReportedDeletionComplete ? "서버가 탈퇴 요청과 응답된 삭제 항목을 완료로 확인했어요.":"탈퇴 요청은 확인됐어요. 일부 연결 미디어는 계속 처리되거나 재시도가 필요할 수 있어요.",buttons:[("완료 화면","withdrawal-finish",0)])
             case .cleanupFailed:
@@ -289,7 +310,7 @@ extension WireframeRoot {
         if ui.screen=="T10",case .failed(let failure)=remoteReads.sessionLogoutState{WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("authLogoutFailure")}
         if ui.screen=="H10",!ui.error.isEmpty{WNotice(text:ui.error,danger:true)}
         if ui.screen=="H10"{weeklyGoalConflictRecovery}
-        if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
+        if ui.screen=="T04"{WRow(title:"이 기기의 기록 삭제",subtitle:"회원은 유지",action:{go(store.session==nil ? "T13":"T14")});WRow(title:"회원 탈퇴",subtitle:"계정 삭제 범위 확인",action:{ui.deleteConsent=false;ui.pending="T11";ui.pendingBack="T04";go(store.session==nil ? "T15":"T14")});WText(text:"이 기기의 기록 삭제와 회원 탈퇴는 별도로 관리해요.",small:true)}
         if ui.screen=="T07" && reviewTools{Text("제공자 인증 결과가 기존 계정 연결이 확인된 예시에요.\n실제 로그인이나 계정 합치기는 하지 않아요.").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted)}else if ["A14","A15","A18"].contains(ui.screen){authDemoNote}
     }actions:{ForEach(Array(data.buttons.enumerated()),id:\.offset){_,item in if item.2==3 && !(ui.screen=="T15" && item.1.hasPrefix("reauth:")) && !(ui.screen=="T06" && ["link","reauth-link-retry"].contains(item.1)) && !(ui.screen=="A14" && item.1=="social-success"){Button(item.0){infoAction(item.1)}.font(W.font(13)).frame(maxWidth:.infinity,minHeight:32,alignment:.leading)}else if ui.screen=="A14" && item.1=="social-success"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(ui.provider.isEmpty || socialLoginBusy).accessibilityIdentifier("socialLoginStart")}else if ui.screen=="A15" && item.1=="H00"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).accessibilityIdentifier("signupCompletionStart")}else if ui.screen=="T10" && item.1=="logout"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isLoggingOut).accessibilityIdentifier("authLogoutConfirm")}else if ui.screen=="L07" && item.1=="L04"{Button(item.0){back()}.buttonStyle(WButtonStyle(kind:item.2))}else if ui.screen=="L07",let runID=ui.remoteSelectedRunID,item.1=="delete-record"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isDeletingRunRecord || !remoteReads.canDeleteRunRecord(runID)).accessibilityIdentifier("confirmDeleteRecord")}else if ui.screen=="T15" && item.1.hasPrefix("reauth:"){Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T15") || remoteReads.isAccountLinkBusy || (item.1=="reauth:password" && accountLinkPasswordInput.isEmpty) || (item.1 != "reauth:password" && !remoteReads.canAuthorizeAccountLinkProvider)).accessibilityIdentifier("accountLinkReauthenticate-\(item.1.dropFirst(7))")}else if ui.screen=="T06" && item.1=="link"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T06") || remoteReads.isAccountLinkBusy || remoteReads.accountLinkState != .ready).accessibilityIdentifier("accountLinkSubmit")}else if ui.screen=="T06" && item.1=="confirm-link-status"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T06") || remoteReads.isAccountLinkBusy).accessibilityIdentifier("accountLinkStatusRetry")}else if ui.screen=="T06" && item.1=="cancel-link"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkMutationInFlight).accessibilityIdentifier("accountLinkCancel")}else if ui.screen=="T06" && item.1=="reauth-link-retry"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkBusy || !remoteReads.canAuthorizeAccountLinkProvider).accessibilityIdentifier("accountLinkRetry")}else if ui.screen=="T08" && item.1=="unlink"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T08") || remoteReads.isAccountLinkBusy || remoteReads.accountLinkMethods?.socialProviders.contains(where:{$0.displayName==ui.provider}) != true).accessibilityIdentifier("accountUnlinkSubmit")}else if ui.screen=="T08" && item.1=="reauth-unlink-retry"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T08") || remoteReads.isAccountLinkBusy || !remoteReads.canReauthenticateAccountLink).accessibilityIdentifier("accountUnlinkRetry")}else if ui.screen=="T15" && item.1=="confirm-unlink-status"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(!remoteReads.isAccountLinkScreenActive("T15") || remoteReads.isAccountLinkBusy).accessibilityIdentifier("accountUnlinkStatusRetry")}else if ui.screen=="T15" && item.1=="cancel-reauth"{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled(remoteReads.isAccountLinkMutationInFlight).accessibilityIdentifier("accountUnlinkCancel")}else{Button(item.0){infoAction(item.1)}.buttonStyle(WButtonStyle(kind:item.2)).disabled((ui.screen=="A14" && item.1=="social-success" && ui.provider.isEmpty) || (ui.screen=="H10" && item.1=="delete-week" && (remoteReads.isSavingWeeklyGoal || remoteReads.needsWeeklyGoalConflictRefresh)) || (ui.screen=="T16" && item.1=="withdraw-account" && (!remoteReads.hasMemberWithdrawalDependency || remoteReads.memberWithdrawalNotice == nil || remoteReads.memberWithdrawalState != .ready)) || (ui.screen=="T16" && item.1=="withdrawal-retry-cleanup" && !remoteReads.isMemberWithdrawalCleanupFailed) || (ui.screen=="T16" && item.1=="withdrawal-finish" && !remoteReads.isMemberWithdrawalAccepted) || (ui.screen=="T16" && item.1=="withdrawal-retry" && (!remoteReads.hasAccountLinkDependency || remoteReads.isAccountLinkBusy)) || (ui.screen=="T16" && item.1=="cancel-withdrawal" && remoteReads.isMemberWithdrawalMutationInFlight))}}}}
     func runSocialLoginFixture(){
@@ -596,8 +617,10 @@ extension WireframeRoot {
                 } else {
                     ui.cancelReauthentication()
                 }
-            } else if authenticated { go(purpose == .withdrawal ? "T11":"T06") }
-            else if case .cancelled=remoteReads.accountLinkState { ui.cancelReauthentication() }
+            } else if authenticated {
+                if purpose == .withdrawal { ui.deleteConsent=false }
+                go(purpose == .withdrawal ? "T11":"T06")
+            } else if case .cancelled=remoteReads.accountLinkState { ui.cancelReauthentication() }
         }
     case "reauth-unlink-retry":
         guard ui.screen=="T08",remoteReads.canReauthenticateAccountLink else{return}
@@ -683,18 +706,18 @@ extension WireframeRoot {
         accountScopeID: String
     ) async {
         guard receipt.status=="WITHDRAWN",ui.remoteAccountScopeID==accountScopeID,ui.screen=="T16",
-              let authSessionClient else{return}
+              remoteReads.memberWithdrawalMemberID==memberID,
+              let authSessionClient,let authSessionStore else{return}
         remoteReads.beginMemberWithdrawalCleanup(receipt)
-        let runsCleared=await store.clearOwnedRecords(for:memberID)
+        let didClear=await MemberWithdrawalLocalCleanup.clearAfterConfirmedReceipt(
+            receipt,
+            memberID:memberID,
+            runStore:store,
+            sessionStore:authSessionStore,
+            authSessionClient:authSessionClient
+        )
         guard ui.remoteAccountScopeID==accountScopeID,ui.screen=="T16" else{return}
-        guard runsCleared else {
-            remoteReads.markMemberWithdrawalCleanupFailed(receipt)
-            return
-        }
-        do {
-            try await authSessionClient.clearAfterConfirmedWithdrawal(expectedMemberID:memberID)
-        } catch {
-            guard ui.remoteAccountScopeID==accountScopeID,ui.screen=="T16" else{return}
+        guard didClear else {
             remoteReads.markMemberWithdrawalCleanupFailed(receipt)
             return
         }

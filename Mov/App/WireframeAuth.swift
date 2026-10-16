@@ -942,9 +942,13 @@ extension WireframeRoot {
             Button(loading ? "안내를 불러오는 중…":"안내 확인하고 계속") { infoAction("withdrawal-continue") }
                 .buttonStyle(WButtonStyle(kind:2)).disabled(!canContinue).accessibilityIdentifier("confirmAccountDeletion")
             if remoteReads.hasMemberWithdrawalDependency && notice == nil && !loading {
-                button("안내 다시 불러오기","retry-withdrawal-notice",kind:1)
+                Button("안내 다시 불러오기") { infoAction("retry-withdrawal-notice") }
+                    .buttonStyle(WButtonStyle(kind:1))
+                    .accessibilityIdentifier("memberWithdrawalNoticeRetry")
             } else {
-                button("계정 유지","cancel-withdrawal",kind:1)
+                Button("계정 유지") { infoAction("cancel-withdrawal") }
+                    .buttonStyle(WButtonStyle(kind:1))
+                    .accessibilityIdentifier("memberWithdrawalCancel")
             }
         }
     }
