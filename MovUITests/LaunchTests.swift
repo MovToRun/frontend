@@ -555,6 +555,39 @@ import UIKit
         XCTAssertTrue(app.buttons["tab-1"].isSelected,"Back from detail returns to the records root")
     }
 
+    func testGPSRunFlowShowsProvisionalLocalTrackAndRetryState() {
+        app.launchArguments=["-wire-screen","H01","-wire-fixture","-wire-run-location-fixture","-wire-run-upload-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-H01"].waitForExistence(timeout:10),app.debugDescription)
+        tap("startRun")
+        XCTAssertTrue(app.buttons["pauseRun"].waitForExistence(timeout:8),app.debugDescription)
+        tap("pauseRun")
+        XCTAssertTrue(app.buttons["resumeRun"].waitForExistence(timeout:5),app.debugDescription)
+        tap("resumeRun")
+        XCTAssertTrue(app.buttons["pauseRun"].waitForExistence(timeout:5),app.debugDescription)
+        tap("pauseRun")
+        tap("finishRun")
+        XCTAssertTrue(app.buttons["saveRun"].waitForExistence(timeout:5),app.debugDescription)
+        tap("saveRun")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-S01"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["serverJudgementNotice"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["runUploadStatus"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["retryRunUpload"].exists,"The local record offers manual retry when upload is unavailable")
+        XCTAssertTrue(app.staticTexts["runUploadStatus"].label.contains("네트워크 전송이 실패"),app.debugDescription)
+        tap("retryRunUpload")
+        XCTAssertTrue(waitForLayout({self.app.staticTexts["runUploadStatus"].label.contains("업로드 접수 완료")},timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["retryRunUpload"].exists,"A successful retry clears the upload error affordance")
+
+        tap("기록 보기")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["runDistanceMetric"].label.contains("km"),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["mapSurface"].exists,"The saved record keeps its GPS route points")
+        let splits=app.buttons.matching(NSPredicate(format:"label CONTAINS %@","구간 기록")).firstMatch
+        XCTAssertTrue(splits.waitForExistence(timeout:5),app.debugDescription)
+        splits.tap()
+        XCTAssertTrue(app.staticTexts["기기 임시 페이스 (분/km) · 위로 갈수록 빨라요"].waitForExistence(timeout:5),app.debugDescription)
+    }
+
     func testRunPointRewardContractAcrossCompletionListAndDetail() {
         let scenarios:[(String?,String)] = [
             ("pending","러닝 포인트 적립 확인 중"),

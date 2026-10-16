@@ -1,5 +1,131 @@
 import Foundation
 import Observation
+@preconcurrency import CoreLocation
+import Network
+
+struct RunLocationFix: Equatable, Sendable {
+    var recordedAt: Date
+    var latitude: Double
+    var longitude: Double
+    var accuracyMeters: Double
+    var altitudeMeters: Double?
+    var speedMetersPerSecond: Double?
+}
+
+@MainActor protocol RunLocationCapturing: AnyObject {
+    var onFix: ((RunLocationFix) -> Void)? { get set }
+    var onStatus: ((String) -> Void)? { get set }
+    func start()
+    func stop()
+}
+
+@MainActor final class CoreLocationRunCapture: NSObject, @preconcurrency CLLocationManagerDelegate, RunLocationCapturing {
+    private let manager = CLLocationManager()
+    private var active = false
+    var onFix: ((RunLocationFix) -> Void)?
+    var onStatus: ((String) -> Void)?
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = kCLDistanceFilterNone
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
+    }
+
+    func start() {
+        active = true
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            manager.startUpdatingLocation()
+            onStatus?("위치 측정 중")
+        case .notDetermined:
+            onStatus?("위치 권한을 확인해 주세요")
+            manager.requestAlwaysAuthorization()
+        case .denied, .restricted:
+            onStatus?("위치 권한이 없어 거리 측정을 할 수 없어요")
+        @unknown default:
+            onStatus?("위치 상태를 확인할 수 없어요")
+        }
+    }
+
+    func stop() {
+        active = false
+        manager.stopUpdatingLocation()
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard active else { return }
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+            onStatus?("위치 측정 중")
+        } else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+            onStatus?("위치 권한이 없어 거리 측정을 할 수 없어요")
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard active else { return }
+        for location in locations {
+            onFix?(RunLocationFix(
+                recordedAt: location.timestamp,
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude,
+                accuracyMeters: location.horizontalAccuracy,
+                altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                speedMetersPerSecond: location.speed >= 0 ? location.speed : nil
+            ))
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        onStatus?("GPS 신호를 받지 못했어요. 다시 시도할 수 있어요")
+    }
+}
+
+@MainActor @Observable final class RunUploadNetworkMonitor {
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "com.movtorun.run-upload-network")
+    private var started = false
+    var isOnline = false
+    var onReconnect: (() -> Void)?
+
+    func start() {
+        guard !started else { return }
+        started = true
+        monitor.pathUpdateHandler = { [weak self] path in
+            let online = path.status == .satisfied
+            Task { @MainActor in
+                guard let self else { return }
+                let wasOnline = self.isOnline
+                self.isOnline = online
+                if online && !wasOnline { self.onReconnect?() }
+            }
+        }
+        monitor.start(queue: queue)
+    }
+
+    deinit { monitor.cancel() }
+}
+
+enum RunServerJudgement: String, Codable, Equatable {
+    case pending
+    case valid
+    case invalid
+}
+
+struct RunLocalSplit: Equatable, Identifiable {
+    var id: Int
+    var distanceMeters: Double
+    var seconds: Double
+    var pace: String {
+        guard distanceMeters > 0 else { return "—" }
+        let value = max(0, Int(seconds / (distanceMeters / 1_000)))
+        return String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
 
 /// Supplies the authenticated member identity at run start. UI-only account scopes
 /// are deliberately not accepted by this boundary.
@@ -146,9 +272,55 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var uploadPayload:RunUploadPayload? = nil
     /// True once the immutable snapshot has been persisted in the outbox.
     var uploadEnqueued:Bool? = nil
-    var caloriesText:String {guard isValid else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
-    var isValid: Bool { kilometers > 0 }
+    var routePoints:[RunUploadPoint]? = nil
+    var pauseIntervals:[RunUploadPause]? = nil
+    var serverJudgement:RunServerJudgement? = nil
+    var caloriesText:String {guard isValid || serverJudgement == .pending else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
+    var isValid: Bool {
+        switch serverJudgement {
+        case .valid: true
+        case .pending, .invalid: false
+        case nil: kilometers > 0
+        }
+    }
+    var hasMeasuredDistance:Bool {kilometers > 0}
     var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }
+    var provisionalSplits:[RunLocalSplit] {
+        guard let routePoints, routePoints.count > 1 else { return [] }
+        var accumulatedDistance = 0.0
+        var accumulatedSeconds = 0.0
+        var result:[RunLocalSplit] = []
+        for pair in zip(routePoints, routePoints.dropFirst()) {
+            let distance = Self.distanceMeters(from: pair.0, to: pair.1)
+            guard distance.isFinite, distance > 0 else { continue }
+            var seconds = max(0, pair.1.recordedAt.timeIntervalSince(pair.0.recordedAt))
+            for pause in pauseIntervals ?? [] {
+                let overlapStart = max(pair.0.recordedAt, pause.startedAt)
+                let overlapEnd = min(pair.1.recordedAt, pause.endedAt)
+                if overlapEnd > overlapStart { seconds -= overlapEnd.timeIntervalSince(overlapStart) }
+            }
+            accumulatedDistance += distance
+            accumulatedSeconds += max(0, seconds)
+            if accumulatedDistance >= 1_000 {
+                result.append(RunLocalSplit(id: result.count, distanceMeters: accumulatedDistance, seconds: accumulatedSeconds))
+                accumulatedDistance = 0
+                accumulatedSeconds = 0
+            }
+        }
+        if accumulatedDistance > 0 {
+            result.append(RunLocalSplit(id: result.count, distanceMeters: accumulatedDistance, seconds: accumulatedSeconds))
+        }
+        return result
+    }
+    private static func distanceMeters(from first:RunUploadPoint, to second:RunUploadPoint)->Double {
+        let radius = 6_371_000.0
+        let lat1 = first.latitude * .pi / 180
+        let lat2 = second.latitude * .pi / 180
+        let dLat = (second.latitude - first.latitude) * .pi / 180
+        let dLon = (second.longitude - first.longitude) * .pi / 180
+        let a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2)
+        return radius * 2 * atan2(sqrt(a), sqrt(max(0, 1 - a)))
+    }
     var validityDetails: [String] {
         guard let segments, !segments.isEmpty else { return ["구간별 판별 정보가 없어 제외 이유를 확인할 수 없어요."] }
         let labels = ["gps-gap":"GPS 누락", "pause":"일시정지", "vehicle":"차량 이동", "transit":"대중교통", "gps-spike":"GPS 튐", "long-idle":"오랜 정지", "unknown":"판별 정보 없음"]
@@ -189,8 +361,13 @@ struct DemoSession: Codable {
     var weightKg:Double? = nil
     var uploadOwnerID:String? = nil
     var clientRunID:UUID? = nil
+    var routePoints:[RunUploadPoint]? = nil
+    var pauseIntervals:[RunUploadPause]? = nil
+    var activePauseStartedAt:Date? = nil
+    var locationCaptureEnabled:Bool? = nil
     var paused: Bool { segmentStart == nil }
-    func elapsed(at now: Date) -> Double { accumulated + (segmentStart.map { max(0, now.timeIntervalSince($0)) } ?? 0) }
+    var maximumEndedAt:Date { startedAt.addingTimeInterval(21_600) }
+    func elapsed(at now: Date) -> Double { accumulated + (segmentStart.map { max(0, min(now, maximumEndedAt).timeIntervalSince($0)) } ?? 0) }
     func record(at now: Date) -> RunRecord {
         let seconds = elapsed(at: now)
         return RunRecord(
@@ -200,7 +377,10 @@ struct DemoSession: Codable {
             kilometers: distance ?? 0,
             weightKg: weightKg,
             uploadOwnerID: uploadOwnerID,
-            clientRunID: clientRunID
+            clientRunID: clientRunID,
+            routePoints: routePoints,
+            pauseIntervals: pauseIntervals,
+            serverJudgement: locationCaptureEnabled == true ? .pending : nil
         )
     }
 }
@@ -386,6 +566,7 @@ enum RunStoreUploadDrainResult: Equatable {
     private let uploadQueue: (any RunUploadEnqueueing)?
     private let uploadDrainer: (any RunUploadDraining)?
     private let ownedRecordsPersistence: any RunStoreOwnedRecordsPersisting
+    private let locationCapture: (any RunLocationCapturing)?
     private var uploadDrainOperationID: UUID?
     private var uploadDrainGeneration: UInt64 = 0
     private var uploadDrainTask: Task<RunUploadDrainReport, Error>?
@@ -394,20 +575,34 @@ enum RunStoreUploadDrainResult: Equatable {
     var weekly = WeeklyGoal()
     var session: DemoSession?
     var storageMessage: String?
+    var locationMessage = "위치 확인 중"
+    var uploadMessage: String?
+    var uploadNeedsRetry = false
     init(
         defaults: UserDefaults = .standard,
         uploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
         uploadQueue: (any RunUploadEnqueueing)? = nil,
         uploadDrainer: (any RunUploadDraining)? = nil,
-        ownedRecordsPersistence: (any RunStoreOwnedRecordsPersisting)? = nil
+        ownedRecordsPersistence: (any RunStoreOwnedRecordsPersisting)? = nil,
+        locationCapture: (any RunLocationCapturing)? = nil
     ) {
         self.defaults = defaults
         self.uploadIdentityProvider = uploadIdentityProvider
         self.uploadQueue = uploadQueue
         self.uploadDrainer = uploadDrainer
         self.ownedRecordsPersistence = ownedRecordsPersistence ?? FileRunStoreOwnedRecordsPersistence()
+        self.locationCapture = locationCapture
+        locationCapture?.onFix = { [weak self] fix in self?.recordLocation(fix) }
+        locationCapture?.onStatus = { [weak self] message in self?.locationMessage = message }
         if let data = defaults.data(forKey: "mov.demo.v1") {
-            do { let state = try JSONDecoder().decode(Saved.self, from: data); records=state.records; goal=state.goal; weekly=state.weekly; session=state.session; session?.segmentStart=nil }
+            do {
+                let state = try JSONDecoder().decode(Saved.self, from: data)
+                records=state.records; goal=state.goal; weekly=state.weekly; session=state.session
+                if session?.locationCaptureEnabled == true, let priorSegmentStart=session?.segmentStart {
+                    session?.activePauseStartedAt=priorSegmentStart
+                }
+                session?.segmentStart=nil
+            }
             catch { storageMessage = "저장한 기록을 읽지 못했습니다. 새 데이터를 저장하기 전에 앱을 다시 실행해 주세요." }
         } else {
             records=[]
@@ -590,22 +785,92 @@ enum RunStoreUploadDrainResult: Equatable {
             goal: goal,
             weightKg: weight,
             uploadOwnerID: memberID,
-            clientRunID: UUID()
+            clientRunID: UUID(),
+            routePoints: locationCapture == nil ? nil : [],
+            pauseIntervals: locationCapture == nil ? nil : [],
+            locationCaptureEnabled: locationCapture != nil
         )
         guard persist() else {
             session = nil
             return false
         }
+        locationMessage = locationCapture == nil ? "GPS 연결을 사용할 수 없어요" : "위치 확인 중"
+        locationCapture?.start()
         return true
     }
-    func pause(at now: Date = Date()) { guard var current=session, !current.paused else { return }; current.accumulated=current.elapsed(at:now); current.segmentStart=nil; session=current; persist() }
-    func resume(at now: Date = Date()) { guard var current=session, current.paused else { return }; current.segmentStart=now; session=current; persist() }
+    func pause(at now: Date = Date()) {
+        guard var current=session, !current.paused else { return }
+        let cappedNow = min(now, current.maximumEndedAt)
+        current.accumulated=current.elapsed(at:cappedNow)
+        current.segmentStart=nil
+        current.activePauseStartedAt=cappedNow
+        session=current
+        locationCapture?.stop()
+        locationMessage="일시정지 중"
+        persist()
+    }
+    func resume(at now: Date = Date()) {
+        guard var current=session, current.paused, now < current.maximumEndedAt else { return }
+        if let pauseStart=current.activePauseStartedAt {
+            current.pauseIntervals=(current.pauseIntervals ?? []) + [RunUploadPause(startedAt:pauseStart,endedAt:now)]
+        }
+        current.activePauseStartedAt=nil
+        current.segmentStart=now
+        session=current
+        persist()
+        locationCapture?.start()
+        locationMessage="위치 확인 중"
+    }
+
+    func recordLocation(_ fix:RunLocationFix) {
+        guard var current=session, let segmentStart=current.segmentStart,
+              fix.recordedAt >= segmentStart,
+              fix.recordedAt >= current.startedAt, fix.recordedAt <= current.maximumEndedAt,
+              fix.latitude.isFinite, (-90...90).contains(fix.latitude),
+              fix.longitude.isFinite, (-180...180).contains(fix.longitude),
+              fix.accuracyMeters.isFinite, fix.accuracyMeters >= 0,
+              fix.altitudeMeters.map({$0.isFinite && $0 >= 0}) != false,
+              fix.speedMetersPerSecond.map({$0.isFinite && $0 >= 0}) != false else { return }
+        var points=current.routePoints ?? []
+        guard points.count < 21_600 else { locationMessage="GPS 샘플 상한에 도달했어요";locationCapture?.stop();return }
+        let point=RunUploadPoint(
+            recordedAt:fix.recordedAt,
+            latitude:fix.latitude,
+            longitude:fix.longitude,
+            accuracyMeters:fix.accuracyMeters,
+            altitudeMeters:fix.altitudeMeters,
+            speedMetersPerSecond:fix.speedMetersPerSecond
+        )
+        if let last=points.last, fix.recordedAt < last.recordedAt { return }
+        if points.last?.recordedAt == fix.recordedAt && points.last?.latitude == fix.latitude && points.last?.longitude == fix.longitude { return }
+        if let last=points.last { current.distance=(current.distance ?? 0) + Self.distanceMeters(from:last,to:point)/1_000 }
+        else { current.distance=0 }
+        current.accumulated=current.elapsed(at:fix.recordedAt)
+        current.segmentStart=fix.recordedAt
+        points.append(point)
+        current.routePoints=points
+        session=current
+        locationMessage="위치 측정 중 · \(points.count)개 샘플"
+        persist()
+    }
+
     @discardableResult func finish(save: Bool, at now: Date = Date()) -> RunRecord? {
-        guard let current=session else { return nil }
-        if save && (current.elapsed(at:now)<=0 || storageMessage != nil) { return nil }
-        var record=current.record(at:now)
+        guard var current=session else { return nil }
+        let endedAt=max(current.startedAt,min(now,current.maximumEndedAt))
+        if let pauseStart=current.activePauseStartedAt, endedAt > pauseStart {
+            current.pauseIntervals=(current.pauseIntervals ?? []) + [RunUploadPause(startedAt:pauseStart,endedAt:endedAt)]
+        }
+        current.activePauseStartedAt=nil
+        if let points=current.routePoints {
+            let retainedPoints=points.filter{$0.recordedAt <= endedAt}
+            current.routePoints=retainedPoints
+            current.distance=Self.totalDistanceMeters(retainedPoints)/1_000
+        }
+        if save && (current.elapsed(at:endedAt)<=0 || storageMessage != nil) { return nil }
+        var record=current.record(at:endedAt)
+        record.pauseIntervals=current.pauseIntervals
         if save {
-            record.uploadPayload = Self.uploadPayload(for: current, record: record, endedAt: now)
+            record.uploadPayload = Self.uploadPayload(for: current, record: record, endedAt: endedAt)
             record.uploadEnqueued = record.uploadPayload == nil ? nil : false
             guard record.seconds.isFinite,
                   record.kilometers.isFinite,
@@ -640,6 +905,7 @@ enum RunStoreUploadDrainResult: Equatable {
 
         let previousRecords = records
         if save, !records.contains(where: { $0.id == record.id }) { records.insert(record,at:0) }
+        locationCapture?.stop()
         session=nil
         if save, record.uploadOwnerID != nil {
             // The canonical file is the durability boundary. UserDefaults is refreshed only as
@@ -651,6 +917,11 @@ enum RunStoreUploadDrainResult: Equatable {
             return nil
         }
         return save ? record : nil
+    }
+
+    @discardableResult func finishIfPastSixHourLimit(at now:Date=Date()) async -> RunRecord? {
+        guard let current=session, now >= current.maximumEndedAt else { return nil }
+        return await finishAndEnqueue(save:true,at:current.maximumEndedAt)
     }
 
     /// Saves locally first. If queue persistence fails or the app stops before enqueue,
@@ -708,9 +979,15 @@ enum RunStoreUploadDrainResult: Equatable {
     func drainPendingRunUploads() async -> RunStoreUploadDrainResult {
         guard uploadDrainOperationID == nil else { return .alreadyRunning }
         guard let ownerID = uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID) else {
+            uploadMessage = "기기에 저장됨 · 로그인 후 서버 업로드를 할 수 있어요"
+            uploadNeedsRetry = false
             return .authenticationUnavailable
         }
-        guard let uploadDrainer else { return .drainerUnavailable }
+        guard let uploadDrainer else {
+            uploadMessage = "기기에 안전하게 저장했어요 · 서버 업로드 준비를 확인해 주세요"
+            uploadNeedsRetry = true
+            return .drainerUnavailable
+        }
 
         let operationID = UUID()
         let generation = uploadDrainGeneration
@@ -738,16 +1015,48 @@ enum RunStoreUploadDrainResult: Equatable {
             return .ignored
         }
 
+        let result:RunStoreUploadDrainResult
         switch drainResult {
         case .success(let report):
-            return Self.uploadDrainResult(for: report)
+            result = Self.uploadDrainResult(for: report)
         case .failure(let error):
-            if error is CancellationError { return .cancelled }
-            if let failure = error as? RunUploadOutboxPersistenceFailure, failure == .writeFailed {
-                return .retryableAcknowledgementFailure
-            }
-            return .storageFailure
+            if error is CancellationError { result = .cancelled }
+            else if let failure = error as? RunUploadOutboxPersistenceFailure, failure == .writeFailed {
+                result = .retryableAcknowledgementFailure
+            } else { result = .storageFailure }
         }
+        switch result {
+        case .completed(let uploadedCount, _):
+            uploadMessage = uploadedCount > 0 ? "업로드 접수 완료 · 서버 판정은 서버 기록에서 확인해 주세요" : "업로드할 기록이 없어요"
+            uploadNeedsRetry = false
+        case .permanentFailure(let count, _, _):
+            uploadMessage = "\(count)개 기록의 업로드를 완료하지 못했어요. 저장된 측정값을 확인해 주세요"
+            uploadNeedsRetry = false
+        case .retryableFailure(_, let code, _, _, _):
+            uploadMessage = code == "TRANSPORT" ? "네트워크 전송이 실패했어요 · 기록은 기기에 보관했고 다시 시도할 수 있어요" : "업로드를 완료하지 못했어요 · 기록은 기기에 보관했고 다시 시도할 수 있어요"
+            uploadNeedsRetry = true
+        case .retryableAcknowledgementFailure, .storageFailure:
+            uploadMessage = "업로드 상태를 저장하지 못했어요 · 같은 기록으로 다시 시도할 수 있어요"
+            uploadNeedsRetry = true
+        case .authenticationUnavailable:
+            uploadMessage = "기기에 저장됨 · 로그인 후 서버 업로드를 할 수 있어요"
+            uploadNeedsRetry = false
+        case .drainerUnavailable:
+            uploadMessage = "기기에 안전하게 저장했어요 · 서버 업로드 준비를 확인해 주세요"
+            uploadNeedsRetry = true
+        case .alreadyRunning:
+            uploadMessage = "업로드 중이에요"
+            uploadNeedsRetry = false
+        case .ownerMismatch, .accountChanged, .cancelled, .ignored:
+            uploadMessage = "업로드가 보류됐어요 · 계정을 확인한 뒤 다시 시도해 주세요"
+            uploadNeedsRetry = true
+        }
+        return result
+    }
+
+    func retryPendingRunUploads() async -> RunStoreUploadDrainResult {
+        await recoverPendingRunUploads()
+        return await drainPendingRunUploads()
     }
 
     /// Call on logout, account transition, or cancellation. A later response from this
@@ -851,10 +1160,7 @@ enum RunStoreUploadDrainResult: Equatable {
         let meters = measuredKilometers * 1_000
         guard meters.isFinite else { return nil }
         let wholeMeters = meters.rounded()
-        // The backend accepts integer meters. Do not invent a rounding policy for
-        // fractional-meter values that this RunStore cannot represent exactly.
-        guard abs(meters - wholeMeters) <= max(1, abs(meters)) * 1e-12,
-              let distanceMeters = Int(exactly: wholeMeters) else { return nil }
+        guard let distanceMeters = Int(exactly: wholeMeters) else { return nil }
 
         let wholeSeconds = record.seconds.rounded(.towardZero)
         guard let movingSeconds = Int(exactly: wholeSeconds) else { return nil }
@@ -867,9 +1173,23 @@ enum RunStoreUploadDrainResult: Equatable {
             distanceMeters: distanceMeters,
             title: record.title,
             memo: record.memo,
-            points: [],
-            pauses: []
+            points: session.routePoints ?? [],
+            pauses: session.pauseIntervals ?? []
         )
+    }
+
+    private static func distanceMeters(from first:RunUploadPoint,to second:RunUploadPoint)->Double {
+        let radius=6_371_000.0
+        let lat1=first.latitude * .pi / 180
+        let lat2=second.latitude * .pi / 180
+        let dLat=(second.latitude-first.latitude) * .pi / 180
+        let dLon=(second.longitude-first.longitude) * .pi / 180
+        let a=sin(dLat/2)*sin(dLat/2)+cos(lat1)*cos(lat2)*sin(dLon/2)*sin(dLon/2)
+        return radius * 2 * atan2(sqrt(a),sqrt(max(0,1-a)))
+    }
+
+    private static func totalDistanceMeters(_ points:[RunUploadPoint])->Double {
+        zip(points,points.dropFirst()).reduce(0){$0+distanceMeters(from:$1.0,to:$1.1)}
     }
     func update(_ record: RunRecord) {
         guard storageMessage == nil else { return }

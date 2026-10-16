@@ -47,6 +47,7 @@ struct MetricView: View {
 nonisolated struct SampleMap: View, Animatable {
     @MainActor @Environment(\.colorScheme) private var scheme
     var route=false
+    var routePoints:[RunUploadPoint]=[]
     var focusUser=false
     var userCenterY:CGFloat=0
     var panOffset:CGSize = .zero
@@ -70,7 +71,21 @@ nonisolated struct SampleMap: View, Animatable {
         let roads:[[(CGFloat,CGFloat)]]=[ [(-20,84),(202,84),(404,182)],[(101,-10),(101,242),(142,377),(173,491)],[(-20,173),(190,173),(408,301)],[(-21,253),(217,266),(405,393)],[(-20,382),(327,76)],[(8,-10),(390,457)] ]
         for vertices in roads{var p=Path();for (i,v) in vertices.enumerated(){if i==0{p.move(to:CGPoint(x:v.0,y:v.1))}else{p.addLine(to:CGPoint(x:v.0,y:v.1))}};stroke(p,color(0xFFFFFF,0x414141),8)}
         var track=Path();track.move(to:CGPoint(x:36,y:343));track.addQuadCurve(to:CGPoint(x:226,y:161),control:CGPoint(x:145,y:276));track.addQuadCurve(to:CGPoint(x:343,y:32),control:CGPoint(x:307,y:46));track.move(to:CGPoint(x:51,y:361));track.addQuadCurve(to:CGPoint(x:244,y:179),control:CGPoint(x:163,y:295));track.addQuadCurve(to:CGPoint(x:361,y:50),control:CGPoint(x:325,y:63));stroke(track,color(0xF0F0F0,0x4B4B4B),2)
-        if route{var p=Path();p.move(to:CGPoint(x:75,y:348));for v in [(120,334),(156,307),(190,295),(217,269)]{p.addLine(to:CGPoint(x:v.0,y:v.1))};c.stroke(p,with:.color(W.lime),style:StrokeStyle(lineWidth:7,lineCap:.round))};if route && !focusUser{let point=Path(ellipseIn:CGRect(x:207,y:259,width:20,height:20));c.fill(point,with:.color(W.lime));stroke(point,.white,3)}
+        if route && routePoints.count>1 {
+            let latitudes=routePoints.map(\.latitude),longitudes=routePoints.map(\.longitude)
+            let minLat=latitudes.min() ?? 0,maxLat=latitudes.max() ?? 0,minLon=longitudes.min() ?? 0,maxLon=longitudes.max() ?? 0
+            let latSpan=max(0.00001,maxLat-minLat),lonSpan=max(0.00001,maxLon-minLon)
+            var measured=Path()
+            for (index,point) in routePoints.enumerated(){
+                let x=62+CGFloat((point.longitude-minLon)/lonSpan)*265
+                let y=365-CGFloat((point.latitude-minLat)/latSpan)*290
+                if index==0{measured.move(to:CGPoint(x:x,y:y))}else{measured.addLine(to:CGPoint(x:x,y:y))}
+            }
+            c.stroke(measured,with:.color(W.lime),style:StrokeStyle(lineWidth:7,lineCap:.round,lineJoin:.round))
+        } else if route {
+            var p=Path();p.move(to:CGPoint(x:75,y:348));for v in [(120,334),(156,307),(190,295),(217,269)]{p.addLine(to:CGPoint(x:v.0,y:v.1))};c.stroke(p,with:.color(W.lime),style:StrokeStyle(lineWidth:7,lineCap:.round))
+        }
+        if route && !focusUser{let point=Path(ellipseIn:CGRect(x:207,y:259,width:20,height:20));c.fill(point,with:.color(W.lime));stroke(point,.white,3)}
         for (text,x,y) in [("주거 구역",34.0,130.0),("하천",245.0,332.0),("산책로",116.0,357.0)]{c.draw(Text(text).font(.custom("Arial",size:12)).foregroundStyle(color(0x707070,0xBDBDBD)),at:CGPoint(x:x,y:y),anchor:.bottomLeading)}
     }.accessibilityLabel("실제 장소가 아닌 도식 지도").accessibilityHidden(focusUser).overlay{if focusUser{GeometryReader{g in Circle().fill(W.lime).overlay(Circle().stroke(.white,lineWidth:3)).frame(width:20,height:20).position(x:g.size.width/2+panOffset.width,y:userCenterY+panOffset.height).accessibilityElement().accessibilityLabel("사용자 위치").accessibilityIdentifier("runUserPosition")}}}.accessibilityElement(children:.contain)}
 }

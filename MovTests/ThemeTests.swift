@@ -25,6 +25,15 @@ private struct V1PointsFixture: Codable {
     func currentAuthenticatedMemberID() -> String? { memberID }
 }
 
+@MainActor private final class RunLocationCaptureFake:RunLocationCapturing {
+    var onFix:((RunLocationFix)->Void)?
+    var onStatus:((String)->Void)?
+    private(set) var isActive=false
+    func start(){isActive=true;onStatus?("가짜 위치 측정 중")}
+    func stop(){isActive=false;onStatus?("일시정지 중")}
+    func emit(_ fix:RunLocationFix){onFix?(fix)}
+}
+
 private struct QueuedRunUploadFixture: Equatable, Sendable {
     let ownerID: String
     let payload: RunUploadPayload
@@ -96,6 +105,17 @@ private actor RunStoreUploadSenderFake: RunUploading {
         return delivery
     }
     func uploadedPayloads() -> [RunUploadPayload] { uploaded }
+}
+
+private actor RunStoreUploadSequenceFake:RunUploading {
+    private var deliveries:[RunUploadDelivery]
+    private var sent:[(RunUploadPayload,RunUploadSession)]=[]
+    init(deliveries:[RunUploadDelivery]){self.deliveries=deliveries}
+    func upload(_ payload:RunUploadPayload,session:RunUploadSession) async throws -> RunUploadDelivery {
+        sent.append((payload,session))
+        return deliveries.isEmpty ? .accepted:deliveries.removeFirst()
+    }
+    func requests()->[(RunUploadPayload,RunUploadSession)]{sent}
 }
 
 private actor RunStoreUploadDrainerFake: RunUploadDraining {
@@ -1495,6 +1515,97 @@ final class ThemeTests:XCTestCase {
         XCTAssertNil(reloaded.records.first?.pointReward)
         reloaded.delete(record.id)
         XCTAssertFalse(RunStore(defaults:defaults).records.contains{$0.id==record.id})
+    }
+    @MainActor func testGPSPauseOfflineRetryKeepsOneImmutableServerRequest() async throws {
+        let suite="MovTests."+UUID().uuidString
+        let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let owner="123"
+        let sender=RunStoreUploadSequenceFake(deliveries:[.retryLater(code:"TRANSPORT"),.accepted])
+        let outbox=try RunUploadOutbox(
+            persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
+            sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:owner,accessToken:"fake-token")),
+            uploader:sender
+        )
+        let location=RunLocationCaptureFake()
+        let ownedFile=directory.appendingPathComponent("owned-records.json")
+        let store=RunStore(
+            defaults:defaults,
+            uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:owner),
+            uploadQueue:outbox,
+            uploadDrainer:outbox,
+            ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:ownedFile),
+            locationCapture:location
+        )
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        XCTAssertTrue(location.isActive)
+        location.emit(RunLocationFix(recordedAt:startedAt,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(60),latitude:37.56750,longitude:126.97800,accuracyMeters:4))
+        store.pause(at:startedAt.addingTimeInterval(70))
+        XCTAssertFalse(location.isActive)
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(100),latitude:37.56850,longitude:126.97800,accuracyMeters:4))
+        store.resume(at:startedAt.addingTimeInterval(130))
+        XCTAssertTrue(location.isActive)
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(90),latitude:37.56825,longitude:126.97800,accuracyMeters:4))
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(131),latitude:37.56850,longitude:126.97800,accuracyMeters:4))
+        let finishedValue=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(240))
+        let finished=try XCTUnwrap(finishedValue)
+        let payload=try XCTUnwrap(finished.uploadPayload)
+        XCTAssertEqual(finished.serverJudgement,.pending)
+        XCTAssertFalse(finished.isValid,"A local GPS trace stays provisional until the server adjudicates it")
+        XCTAssertEqual(finished.routePoints?.count,3,"Samples received during a pause are ignored")
+        XCTAssertEqual(payload.points.count,3)
+        XCTAssertEqual(payload.movingSeconds,180)
+        XCTAssertEqual(payload.endedAt,startedAt.addingTimeInterval(240))
+        XCTAssertEqual(payload.pauses,[RunUploadPause(startedAt:startedAt.addingTimeInterval(70),endedAt:startedAt.addingTimeInterval(130))])
+        XCTAssertGreaterThan(payload.distanceMeters,200)
+        XCTAssertEqual(finished.provisionalSplits.count,1)
+        XCTAssertEqual(store.totalDistance,0,"Provisional distance is not added to server-valid statistics")
+        let queuedOnce=try await outbox.snapshot()
+        XCTAssertEqual(queuedOnce.count,1)
+        try await outbox.enqueueRunUpload(payload,ownerID:owner)
+        let queuedAfterDuplicate=try await outbox.snapshot()
+        XCTAssertEqual(queuedAfterDuplicate.count,1,"An identical retry with the same clientRunId is de-duplicated")
+
+        let firstDrain=await store.drainPendingRunUploads()
+        XCTAssertEqual(firstDrain,.retryableFailure(clientRunID:payload.clientRunID,code:"TRANSPORT",uploadedCount:0,deletedCount:0,permanentFailureCount:0))
+        XCTAssertTrue(store.uploadMessage?.contains("네트워크 전송이 실패") == true)
+        let afterOffline=RunStore(defaults:defaults,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:ownedFile))
+        XCTAssertEqual(afterOffline.records.first?.routePoints?.count,3,"The track remains in the device's canonical local record while offline")
+        let preservedOutbox=try await outbox.snapshot()
+        XCTAssertEqual(preservedOutbox.first?.envelope.payload,payload)
+
+        let retry=await store.drainPendingRunUploads()
+        XCTAssertEqual(retry,.completed(uploadedCount:1,deletedCount:0))
+        let sent=await sender.requests().map(\.0)
+        XCTAssertEqual(sent,[payload,payload],"Replay after a lost network response uses the exact same body and clientRunId")
+        XCTAssertEqual(store.records.first?.serverJudgement,.pending,"POST acceptance alone does not overwrite local data with a server verdict")
+    }
+
+    @MainActor func testRunAutomaticallyCapsWallDurationAtSixHoursIncludingPause() async throws {
+        let suite="MovTests."+UUID().uuidString
+        let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let location=RunLocationCaptureFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"123"),ownedRecordsPersistence:RunStoreOwnedRecordsFake(),locationCapture:location)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        location.emit(RunLocationFix(recordedAt:startedAt,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        store.pause(at:startedAt.addingTimeInterval(3_600))
+
+        let beforeCap=await store.finishIfPastSixHourLimit(at:startedAt.addingTimeInterval(21_599))
+        XCTAssertNil(beforeCap)
+        let afterCap=await store.finishIfPastSixHourLimit(at:startedAt.addingTimeInterval(25_200))
+        let finished=try XCTUnwrap(afterCap)
+        XCTAssertNil(store.session)
+        XCTAssertFalse(location.isActive)
+        XCTAssertEqual(finished.uploadPayload?.endedAt,startedAt.addingTimeInterval(21_600))
+        XCTAssertEqual(finished.uploadPayload?.movingSeconds,3_600)
+        XCTAssertEqual(finished.uploadPayload?.pauses,[RunUploadPause(startedAt:startedAt.addingTimeInterval(3_600),endedAt:startedAt.addingTimeInterval(21_600))])
+        XCTAssertEqual(finished.seconds,3_600)
     }
     @MainActor func testZeroDistanceInvalidAndDiscardDoesNotSave() {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
