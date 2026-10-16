@@ -4904,14 +4904,14 @@ extension LaunchTests {
     func visible(_ label:String)->Bool {app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).allElementsBoundByIndex.contains{$0.isHittable}}
     func replaceInput(_ field:XCUIElement,_ text:String){
         XCTAssertTrue(field.waitForExistence(timeout:5));field.tap()
+        let keyboard=app.keyboards.firstMatch
         let strongPasswordSuggestion=app.buttons["GenerateStrongPasswordButton"]
-        if strongPasswordSuggestion.waitForExistence(timeout:0.5){
+        if !keyboard.waitForExistence(timeout:1),strongPasswordSuggestion.waitForExistence(timeout:0.5){
             let dismissStrongPasswordSuggestion=app.buttons["xmark"]
-            XCTAssertTrue(dismissStrongPasswordSuggestion.waitForExistence(timeout:2),app.debugDescription)
-            dismissStrongPasswordSuggestion.tap()
+            if dismissStrongPasswordSuggestion.waitForExistence(timeout:2){dismissStrongPasswordSuggestion.tap()}
         }
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5),app.debugDescription)
-        let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)
+        // Reuse the suite's tap-and-type helper; iOS may not expose the keyboard while its password suggestion is shown.
+        replace(text,into:field)
     }
     func testPointsShopAndHeaderRoutes(){
         userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")
