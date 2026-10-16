@@ -112,6 +112,7 @@ protocol RunUploadSessionProviding: Sendable {
 
 enum RunUploadDelivery: Equatable, Sendable {
     case accepted
+    case acceptedSummary(BackendRunSummary)
     case alreadyDeleted
     case terminal(code: String)
     case retryLater(code: String)
@@ -167,7 +168,13 @@ struct RunUploadClient: RunUploading, Sendable {
 
         switch response.statusCode {
         case 200, 201:
-            return .accepted
+            guard let summary = try? BackendRunSummary.decodeServerSummary(response.data),
+                  summary.matches(payload) else {
+                // The server may have committed this id; replay the exact immutable request
+                // to recover its authoritative summary rather than treating the ACK as final.
+                return .retryLater(code: "INVALID_ACK")
+            }
+            return .acceptedSummary(summary)
         case 410:
             let code = Self.problemCode(in: response.data)
             return code == "RUN_DELETED" ? .alreadyDeleted : .terminal(code: code ?? "HTTP_410")

@@ -10,6 +10,7 @@ struct RunUploadEnvelope: Codable, Equatable, Sendable {
 struct RunUploadOutboxEntry: Codable, Equatable, Sendable {
     enum State: Codable, Equatable, Sendable {
         case pending
+        case serverAcknowledged(BackendRunSummary)
         case terminal(code: String)
     }
 
@@ -49,6 +50,13 @@ protocol RunUploadOwnerScopedClearing: Sendable {
 /// identity provider and checked against the uploader session before any request is sent.
 protocol RunUploadDraining: Sendable {
     func drain(ownerID: String) async throws -> RunUploadDrainReport
+    func pendingAcceptedRunSummaries(ownerID: String) async throws -> [BackendRunSummary]
+    func acknowledgeAcceptedRunSummaries(ownerID: String, clientRunIDs: [UUID]) async throws
+}
+
+extension RunUploadDraining {
+    func pendingAcceptedRunSummaries(ownerID: String) async throws -> [BackendRunSummary] { [] }
+    func acknowledgeAcceptedRunSummaries(ownerID: String, clientRunIDs: [UUID]) async throws {}
 }
 
 struct RunUploadOutboxMutation<Result> {
@@ -177,6 +185,21 @@ struct RunUploadDrainReport: Equatable, Sendable {
     let deletedCount: Int
     let terminalCount: Int
     let stopReason: RunUploadDrainStopReason
+    let acceptedSummaries: [BackendRunSummary]
+
+    init(
+        uploadedCount: Int,
+        deletedCount: Int,
+        terminalCount: Int,
+        stopReason: RunUploadDrainStopReason,
+        acceptedSummaries: [BackendRunSummary] = []
+    ) {
+        self.uploadedCount = uploadedCount
+        self.deletedCount = deletedCount
+        self.terminalCount = terminalCount
+        self.stopReason = stopReason
+        self.acceptedSummaries = acceptedSummaries
+    }
 }
 
 enum RunUploadOutboxFailure: Error, Equatable, Sendable {
@@ -225,6 +248,33 @@ actor RunUploadOutbox {
     }
 
     func snapshot() throws -> [RunUploadOutboxEntry] { try persistence.load() }
+
+    func pendingAcceptedRunSummaries(ownerID: String) async throws -> [BackendRunSummary] {
+        guard Self.isValidOwnerID(ownerID) else { throw RunUploadOutboxFailure.invalidOwnerID }
+        return try persistence.load().compactMap { entry in
+            guard entry.envelope.ownerID == ownerID,
+                  case .serverAcknowledged(let summary) = entry.state,
+                  summary.clientRunID == entry.envelope.payload.clientRunID,
+                  summary.matches(entry.envelope.payload) else { return nil }
+            return summary
+        }
+    }
+
+    func acknowledgeAcceptedRunSummaries(ownerID: String, clientRunIDs: [UUID]) async throws {
+        guard Self.isValidOwnerID(ownerID) else { throw RunUploadOutboxFailure.invalidOwnerID }
+        let acceptedIDs = Set(clientRunIDs)
+        guard !acceptedIDs.isEmpty else { return }
+        try persistence.transact { current in
+            let next = current.filter { entry in
+                guard entry.envelope.ownerID == ownerID,
+                      acceptedIDs.contains(entry.envelope.payload.clientRunID),
+                      case .serverAcknowledged(let summary) = entry.state,
+                      summary.clientRunID == entry.envelope.payload.clientRunID else { return true }
+                return false
+            }
+            return RunUploadOutboxMutation(entries: next, result: ())
+        }
+    }
 
     /// Manual only: this actor has no timer, background task, or automatic retry trigger.
     func drain() async throws -> RunUploadDrainReport {
@@ -280,6 +330,13 @@ actor RunUploadOutbox {
         }
 
         let initialEntries = try persistence.load()
+        var acceptedSummaries = initialEntries.compactMap { entry -> BackendRunSummary? in
+            guard entry.envelope.ownerID == initialSession.ownerID,
+                  case .serverAcknowledged(let summary) = entry.state,
+                  summary.clientRunID == entry.envelope.payload.clientRunID,
+                  summary.matches(entry.envelope.payload) else { return nil }
+            return summary
+        }
         terminalCount = initialEntries.reduce(into: 0) { count, entry in
             guard entry.envelope.ownerID == initialSession.ownerID else { return }
             if case .terminal = entry.state { count += 1 }
@@ -291,12 +348,12 @@ actor RunUploadOutbox {
         if eligibleKeys.isEmpty {
             let hasPendingForOtherOwner = initialEntries.contains { $0.state == .pending }
             let stop: RunUploadDrainStopReason = hasPendingForOtherOwner ? .ownerMismatch : .finished
-            return Self.report(uploaded: 0, deleted: 0, terminal: terminalCount, stop: stop)
+            return Self.report(uploaded: 0, deleted: 0, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: stop)
         }
 
         for (ownerID, clientRunID) in eligibleKeys {
             if Task.isCancelled {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             }
             let latestEntries = try persistence.load()
             guard let entry = latestEntries.first(where: {
@@ -307,54 +364,70 @@ actor RunUploadOutbox {
             do {
                 session = try await sessionProvider.currentSession()
             } catch is CancellationError {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             } catch {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .sessionUnavailable)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .sessionUnavailable)
             }
             if Task.isCancelled {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             }
             guard let session, Self.isValidSession(session) else {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .sessionUnavailable)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .sessionUnavailable)
             }
             guard session.ownerID == ownerID else {
                 let stop: RunUploadDrainStopReason = uploadedCount + deletedCount + terminalCount == 0 ? .ownerMismatch : .accountChanged
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: stop)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: stop)
             }
 
             let delivery: RunUploadDelivery
             do {
                 delivery = try await uploader.upload(entry.envelope.payload, session: session)
             } catch is CancellationError {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             } catch {
                 return Self.report(
                     uploaded: uploadedCount,
                     deleted: deletedCount,
                     terminal: terminalCount,
+                    acceptedSummaries: acceptedSummaries,
                     stop: .retryLater(clientRunID: clientRunID, code: "TRANSPORT")
                 )
             }
 
             if Task.isCancelled {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             }
 
             let sessionAfterDelivery: RunUploadSession?
             do {
                 sessionAfterDelivery = try await sessionProvider.currentSession()
             } catch is CancellationError {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .cancelled)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .cancelled)
             } catch {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .accountChanged)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .accountChanged)
             }
             guard let sessionAfterDelivery, Self.isValidSession(sessionAfterDelivery), sessionAfterDelivery.ownerID == ownerID else {
-                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .accountChanged)
+                return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .accountChanged)
             }
 
             switch delivery {
             case .accepted:
                 try remove(ownerID: ownerID, clientRunID: clientRunID)
+                uploadedCount += 1
+            case .acceptedSummary(let summary):
+                guard summary.matches(entry.envelope.payload) else {
+                    return Self.report(
+                        uploaded: uploadedCount,
+                        deleted: deletedCount,
+                        terminal: terminalCount,
+                        acceptedSummaries: acceptedSummaries,
+                        stop: .retryLater(clientRunID: clientRunID, code: "INVALID_ACK")
+                    )
+                }
+                try markServerAcknowledged(ownerID: ownerID, payload: entry.envelope.payload, summary: summary)
+                if !acceptedSummaries.contains(where: { $0.clientRunID == summary.clientRunID }) {
+                    acceptedSummaries.append(summary)
+                }
                 uploadedCount += 1
             case .alreadyDeleted:
                 try remove(ownerID: ownerID, clientRunID: clientRunID)
@@ -367,12 +440,36 @@ actor RunUploadOutbox {
                     uploaded: uploadedCount,
                     deleted: deletedCount,
                     terminal: terminalCount,
+                    acceptedSummaries: acceptedSummaries,
                     stop: .retryLater(clientRunID: clientRunID, code: code)
                 )
             }
         }
 
-        return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, stop: .finished)
+        return Self.report(uploaded: uploadedCount, deleted: deletedCount, terminal: terminalCount, acceptedSummaries: acceptedSummaries, stop: .finished)
+    }
+
+    private func markServerAcknowledged(ownerID: String, payload: RunUploadPayload, summary: BackendRunSummary) throws {
+        try persistence.transact { current in
+            guard let index = current.firstIndex(where: {
+                $0.envelope.ownerID == ownerID && $0.envelope.payload.clientRunID == payload.clientRunID
+            }) else {
+                return RunUploadOutboxMutation(entries: current, result: ())
+            }
+            guard current[index].envelope.payload == payload else {
+                throw RunUploadOutboxFailure.duplicateClientRunIDConflict
+            }
+            if case .serverAcknowledged(let existing) = current[index].state {
+                guard existing == summary else { throw RunUploadOutboxFailure.duplicateClientRunIDConflict }
+                return RunUploadOutboxMutation(entries: current, result: ())
+            }
+            guard current[index].state == .pending else {
+                return RunUploadOutboxMutation(entries: current, result: ())
+            }
+            var next = current
+            next[index] = RunUploadOutboxEntry(envelope: current[index].envelope, state: .serverAcknowledged(summary))
+            return RunUploadOutboxMutation(entries: next, result: ())
+        }
     }
 
     private func remove(ownerID: String, clientRunID: UUID) throws {
@@ -409,9 +506,10 @@ actor RunUploadOutbox {
         uploaded: Int = 0,
         deleted: Int = 0,
         terminal: Int = 0,
+        acceptedSummaries: [BackendRunSummary] = [],
         stop: RunUploadDrainStopReason
     ) -> RunUploadDrainReport {
-        RunUploadDrainReport(uploadedCount: uploaded, deletedCount: deleted, terminalCount: terminal, stopReason: stop)
+        RunUploadDrainReport(uploadedCount: uploaded, deletedCount: deleted, terminalCount: terminal, stopReason: stop, acceptedSummaries: acceptedSummaries)
     }
 }
 

@@ -211,27 +211,41 @@ struct WMetric:View {
     var reservePauseSpace=false
     var clockOverride:Double?=nil
     var metricPace:String {
-        guard record.kilometers>0 else{return saved ? record.pace:"—"}
+        guard record.displayedKilometers>0 else{return saved ? record.pace:"—"}
         return record.pace.count==4 ? "0"+record.pace:record.pace
     }
     var metricDistance:Text {
-        record.kilometers>0 || saved
-            ? Text(record.kilometers,format:.number.precision(.fractionLength(2)))
+        record.displayedKilometers>0 || saved
+            ? Text(record.displayedKilometers,format:.number.precision(.fractionLength(2)))
             : Text("—")
+    }
+    private var distanceLabel:String {
+        switch record.serverJudgement {
+        case .pending: "기기 측정 거리"
+        case .invalid: "서버 판정 원본 거리"
+        case .valid, nil: "유효 거리"
+        }
+    }
+    private var timeLabel:String {
+        switch record.serverJudgement {
+        case .pending: "기기 측정 시간"
+        case .invalid: "기록 상태"
+        case .valid, nil: saved ? "유효 러닝 시간":"러닝 시간"
+        }
     }
     var body:some View {
         VStack(alignment:.leading,spacing:0){
-            metricLabel("유효 거리")
+            metricLabel(distanceLabel)
             (metricDistance.font(W.font(52,.bold)).kerning(-2.34)+Text(" km").font(W.font(22,.semibold)).kerning(-0.44))
                 .monospacedDigit().frame(height:57.2,alignment:.leading).padding(.top,5).padding(.bottom,22).accessibilityIdentifier("runDistanceMetric")
             HStack(alignment:.top,spacing:20){
                 VStack(alignment:.leading,spacing:0){
-                    metricLabel(saved && !record.isValid ? "기록 상태":saved ? "유효 러닝 시간":"러닝 시간")
-                    Text(saved && !record.isValid ? "비유효 러닝":RunRecord.clock(clockOverride ?? record.seconds)).font(W.font(saved && !record.isValid ? 18:28,.semibold)).kerning(-0.98).monospacedDigit().frame(height:39.2,alignment:.leading)
+                    metricLabel(timeLabel)
+                    Text(saved && !record.isValid && record.serverJudgement != .pending ? "비유효 러닝":RunRecord.clock(clockOverride ?? record.displayedSeconds)).font(W.font(saved && !record.isValid && record.serverJudgement != .pending ? 18:28,.semibold)).kerning(-0.98).monospacedDigit().frame(height:39.2,alignment:.leading)
                     if paused || reservePauseSpace{Text(paused ? "일시정지":" ").font(W.font(12)).foregroundStyle(W.muted).frame(height:19).padding(.top,3)}
                 }.frame(maxWidth:.infinity,alignment:.leading)
                 VStack(alignment:.leading,spacing:0){
-                    metricLabel("평균 페이스")
+                    metricLabel(record.serverJudgement == .pending ? "기기 측정 페이스":record.serverJudgement == .invalid ? "기록 상태":"평균 페이스")
                     (Text(metricPace).font(W.font(28,.semibold)).kerning(-0.98)+Text(" /km").font(W.font(14,.medium)).kerning(-0.14)).monospacedDigit().frame(height:39.2,alignment:.leading).accessibilityIdentifier("runPaceMetric")
                     if paused || reservePauseSpace{Color.clear.frame(height:22)}
                 }.padding(.leading,20).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.leading){Color.wire(0xE1E1E1,0xE1E1E1).frame(width:1)}
@@ -242,6 +256,7 @@ struct WMetric:View {
 }
 struct WMap:View {
     var route=false
+    var routePoints:[RunUploadPoint]=[]
     var controls=false
     var centerControl=true
     var failed=false
@@ -260,12 +275,12 @@ struct WMap:View {
     private var isCentered:Bool{abs(panOffset.width)<1 && abs(panOffset.height)<1}
     private var displayedPanOffset:CGSize{CGSize(width:panOffset.width+panDrag.width,height:panOffset.height+panDrag.height)}
     var body:some View {
-        ZStack(alignment:.topLeading){if failed && !mapRecovered{W.soft.overlay{VStack(spacing:14){WText(text:"지도를 불러오지 못했어요");Button("다시 시도"){mapRecovered=true}.font(W.font(13));WText(text:"GPS 수치와 기록 제어는 유지돼요",small:true)}.padding(20)}}else{if let backgroundTap{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface").gesture(DragGesture(minimumDistance:0).updating($panDrag){v,state,_ in
+        ZStack(alignment:.topLeading){if failed && !mapRecovered{W.soft.overlay{VStack(spacing:14){WText(text:"지도를 불러오지 못했어요");Button("다시 시도"){mapRecovered=true}.font(W.font(13));WText(text:"GPS 수치와 기록 제어는 유지돼요",small:true)}.padding(20)}}else{if let backgroundTap{SampleMap(route:route,routePoints:routePoints,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface").gesture(DragGesture(minimumDistance:0).updating($panDrag){v,state,_ in
                     if hypot(v.translation.width,v.translation.height)>=8{state=v.translation}
                 }.onEnded{v in
                     if hypot(v.translation.width,v.translation.height)<8{backgroundTap()}
                     else{panOffset=CGSize(width:panOffset.width+v.translation.width,height:panOffset.height+v.translation.height)}
-                })}else{SampleMap(route:route,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface")}}
+                })}else{SampleMap(route:route,routePoints:routePoints,focusUser:focusUser,userCenterY:userCenterY,panOffset:displayedPanOffset).accessibilityIdentifier(focusUser ? "runningMap":"mapSurface")}}
             if !controls && WReviewMode.tools{GeometryReader{g in if g.size.height>100{VStack(alignment:.leading){Text("가상 코스").font(W.font(11)).padding(.vertical,6).padding(.horizontal,9).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:5)).overlay(RoundedRectangle(cornerRadius:5).stroke(W.line));Spacer();Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.vertical,4).padding(.horizontal,6).background(W.paper.opacity(0.8),in:RoundedRectangle(cornerRadius:3))}.foregroundStyle(W.muted).padding(.horizontal,18).padding(.vertical,16)}}}
             if controls {VStack(alignment:.leading,spacing:8){Button{info.toggle()}label:{WGPSSignal(searching:gpsSearching,weak:gpsWeak,waiting:gpsWaiting)}.accessibilityLabel("위치 상태 안내");if WReviewMode.tools && (!failed || mapRecovered){Text("실제 장소가 아닌 도식 지도").font(W.font(9)).padding(.horizontal,6).padding(.vertical,4).background(W.paper).padding(.leading,6)};if info{WNotice(text:"위치와 신호 상태를 확인해 주세요.").frame(maxWidth:280)}}.padding(.horizontal,12).padding(.top,controlsTopInset+10)}
         }.clipped().overlay(alignment:.bottomTrailing){if controls && centerControl{Button{withAnimation(.easeOut(duration:0.22)){panOffset = .zero}}label:{AssetIcon(name:"location",size:24).frame(width:44,height:44).background(W.paper,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(W.line))}.accessibilityLabel("지도 중심").accessibilityIdentifier("mapRecenter").accessibilityValue(isCentered ? "중심":"이동됨").padding(16).padding(.bottom,centerControlBottomInset)}}
@@ -460,6 +475,7 @@ struct WireframeRemoteReadDependencies {
     let passwordResetService: (any PasswordResetServing)?
     let authSessionStore: (any AuthSessionStoring)?
     let authSessionClient: AuthSessionClient?
+    let runUploadAPIClient: (any APIResponseSending)?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
     let memberWithdrawalService: (any MemberWithdrawalServing)?
@@ -477,6 +493,7 @@ struct WireframeRemoteReadDependencies {
         passwordResetService: (any PasswordResetServing)? = nil,
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
+        runUploadAPIClient: (any APIResponseSending)? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
         accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil,
         memberWithdrawalService: (any MemberWithdrawalServing)? = nil
@@ -493,6 +510,7 @@ struct WireframeRemoteReadDependencies {
         self.passwordResetService = passwordResetService
         self.authSessionStore = authSessionStore
         self.authSessionClient = authSessionClient
+        self.runUploadAPIClient = runUploadAPIClient
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
         self.memberWithdrawalService = memberWithdrawalService
@@ -517,6 +535,84 @@ enum WireframeRunRecordsRefreshState: Equatable {
     case refreshing
     case failed(RunRecordsFailure)
 }
+
+actor WireframeRunUploadSessionProvider: RunUploadSessionProviding {
+    private let sessionStore:any AuthSessionStoring
+    private let authClient:AuthSessionClient
+
+    init(sessionStore:any AuthSessionStoring,authClient:AuthSessionClient){
+        self.sessionStore=sessionStore
+        self.authClient=authClient
+    }
+
+    func currentSession() async throws -> RunUploadSession? {
+        guard let before=try sessionStore.loadSnapshot(),AuthSessionSnapshot.isCanonicalMemberID(before.memberID),
+              let token=try await authClient.accessToken(),
+              let after=try sessionStore.loadSnapshot(),after.memberID==before.memberID else{return nil}
+        return RunUploadSession(ownerID:after.memberID,accessToken:token)
+    }
+}
+
+#if DEBUG
+@MainActor final class WireframeRunLocationFixture:RunLocationCapturing {
+    var onFix:((RunLocationFix)->Void)?
+    var onStatus:((String)->Void)?
+    func start(){
+        let now=Date()
+        onStatus?("가짜 위치 측정 중")
+        onFix?(RunLocationFix(recordedAt:now,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        onFix?(RunLocationFix(recordedAt:now.addingTimeInterval(0.1),latitude:37.56662,longitude:126.97800,accuracyMeters:4))
+    }
+    func stop(){onStatus?("일시정지 중")}
+}
+
+@MainActor final class WireframeRunUploadIdentityFixture:RunUploadMemberIdentityProviding {
+    func currentAuthenticatedMemberID()->String?{"123"}
+}
+
+@MainActor final class WireframeOwnedRunRecordsFixture:RunStoreOwnedRecordsPersisting {
+    private var records:[RunRecord]=[]
+    func loadSnapshot() throws -> RunStoreOwnedRecordsSnapshot { .canonical(records) }
+    func saveCanonical(_ records:[RunRecord]) throws { self.records=records }
+}
+
+actor WireframeRunUploadNetworkFixture:RunUploadEnqueueing,RunUploadDraining {
+    private var pending:[(ownerID:String,payload:RunUploadPayload)]=[]
+    private var drainAttempts=0
+    func enqueueRunUpload(_ payload:RunUploadPayload,ownerID:String) async throws {
+        if let existing=pending.first(where:{$0.ownerID==ownerID && $0.payload.clientRunID==payload.clientRunID}) {
+            guard existing.payload==payload else{throw RunUploadOutboxFailure.duplicateClientRunIDConflict}
+            return
+        }
+        pending.append((ownerID,payload))
+    }
+    func drain(ownerID:String) async throws -> RunUploadDrainReport {
+        guard let index=pending.firstIndex(where:{$0.ownerID==ownerID}) else{return RunUploadDrainReport(uploadedCount:0,deletedCount:0,terminalCount:0,stopReason:.finished)}
+        drainAttempts+=1
+        if drainAttempts==1 {
+            return RunUploadDrainReport(uploadedCount:0,deletedCount:0,terminalCount:0,stopReason:.retryLater(clientRunID:pending[index].payload.clientRunID,code:"TRANSPORT"))
+        }
+        let summary=Self.acceptedSummary(for:pending[index].payload)
+        pending.remove(at:index)
+        return RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished,acceptedSummaries:[summary])
+    }
+    private static func acceptedSummary(for payload:RunUploadPayload)->BackendRunSummary {
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.calendar=Calendar(identifier:.gregorian);formatter.timeZone=TimeZone(identifier:"Asia/Seoul");formatter.dateFormat="yyyy-MM-dd"
+        let date=formatter.string(from:payload.startedAt)
+        let distance=Int64(max(0,payload.distanceMeters))
+        let seconds=Int64(max(0,payload.movingSeconds))
+        let elapsed=Int64(max(payload.movingSeconds,Int(payload.endedAt.timeIntervalSince(payload.startedAt))))
+        return BackendRunSummary(
+            id:"fixture-\(payload.clientRunID.uuidString)",clientRunID:payload.clientRunID,version:1,
+            startedAt:payload.startedAt,endedAt:payload.endedAt,runDate:date,elapsedSeconds:elapsed,
+            movingSeconds:seconds,distanceMeters:distance,verdict:"VALID",verdictReason:nil,
+            validDistanceMeters:distance,validSeconds:seconds,
+            paceSecondsPerKm:distance>0 ? Int64(Double(seconds)*1_000/Double(distance)):nil,
+            title:payload.title,memo:payload.memo,createdAt:payload.endedAt,updatedAt:payload.endedAt,pointReward:nil
+        )
+    }
+}
+#endif
 
 enum SessionLogoutState: Equatable {
     case idle
@@ -3619,6 +3715,7 @@ struct RootView:View {
             passwordResetService:passwordResetFixture ?? authComposition.apiClient.map { PasswordResetClient(apiClient: $0) },
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
+            runUploadAPIClient:authComposition.apiClient,
             accountLinkFlow:accountLinkFlow,
             memberWithdrawalService:memberWithdrawalService
         )
@@ -3918,6 +4015,7 @@ struct WireframeRoot:View {
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
+    @State var runUploadNetworkMonitor=RunUploadNetworkMonitor()
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
     #if DEBUG
@@ -3977,7 +4075,50 @@ struct WireframeRoot:View {
         let defaults=defaultsSelection.defaults
         let resetFixture=args.contains("-wire-reset") && !Self.didPrepareFixture
         if resetFixture{Self.didPrepareFixture=true;if let suite=defaultsSelection.suiteName{defaults.removePersistentDomain(forName:suite)}}
-        let model=RunStore(defaults:defaults,uploadIdentityProvider:runUploadIdentityProvider,uploadQueue:runUploadQueue,uploadDrainer:runUploadDrainer)
+        var resolvedIdentityProvider=runUploadIdentityProvider
+        var resolvedUploadQueue=runUploadQueue
+        var resolvedUploadDrainer=runUploadDrainer
+        if let remoteReadDependencies,
+           let sessionStore=remoteReadDependencies.authSessionStore,
+           let authClient=remoteReadDependencies.authSessionClient,
+           let apiClient=remoteReadDependencies.runUploadAPIClient {
+            if resolvedIdentityProvider == nil { resolvedIdentityProvider=AuthSessionRunUploadMemberIdentityProvider(sessionStore:sessionStore) }
+            if resolvedUploadQueue == nil && resolvedUploadDrainer == nil {
+                let directory=URL(fileURLWithPath:NSHomeDirectory(),isDirectory:true).appendingPathComponent("Library/Application Support/MovToRun",isDirectory:true)
+                let persistence=FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("run-upload-outbox.json"))
+                let sessions=WireframeRunUploadSessionProvider(sessionStore:sessionStore,authClient:authClient)
+                if let outbox=try? RunUploadOutbox(persistence:persistence,sessionProvider:sessions,uploader:RunUploadClient(apiClient:apiClient)) {
+                    resolvedUploadQueue=outbox
+                    resolvedUploadDrainer=outbox
+                }
+            }
+        }
+        #if DEBUG
+        if args.contains("-wire-run-upload-fixture") {
+            let fixture=WireframeRunUploadNetworkFixture()
+            resolvedIdentityProvider=WireframeRunUploadIdentityFixture()
+            resolvedUploadQueue=fixture
+            resolvedUploadDrainer=fixture
+        }
+        #endif
+        let locationCapture:(any RunLocationCapturing)?
+        #if DEBUG
+        if args.contains("-wire-run-location-fixture") {
+            locationCapture=WireframeRunLocationFixture()
+        } else if args.contains("-wire-fixture") || args.contains("-wire-user-flow") {
+            locationCapture=nil
+        } else {
+            locationCapture=CoreLocationRunCapture()
+        }
+        #else
+        locationCapture=CoreLocationRunCapture()
+        #endif
+        #if DEBUG
+        let fixtureOwnedRecords: (any RunStoreOwnedRecordsPersisting)? = args.contains("-wire-fixture") ? WireframeOwnedRunRecordsFixture() : nil
+        #else
+        let fixtureOwnedRecords:(any RunStoreOwnedRecordsPersisting)? = nil
+        #endif
+        let model=RunStore(defaults:defaults,uploadIdentityProvider:resolvedIdentityProvider,uploadQueue:resolvedUploadQueue,uploadDrainer:resolvedUploadDrainer,ownedRecordsPersistence:fixtureOwnedRecords,locationCapture:locationCapture)
         let pointModel=WPointsStore(defaults:defaults,insufficientFixture:args.contains("-wire-points-insufficient"),emptyFixture:args.contains("-wire-points-empty"))
         if resetFixture{
             model.goal=RunGoal();model.weekly=WeeklyGoal();model.session=nil;model.storageMessage=nil
@@ -4127,8 +4268,23 @@ struct WireframeRoot:View {
                 )
             }
             .task {
+                runUploadNetworkMonitor.onReconnect={Task{@MainActor in _=await store.retryPendingRunUploads()}}
+                runUploadNetworkMonitor.start()
                 await configureRootForLaunch()
                 await store.recoverPendingRunUploads()
+                if runUploadNetworkMonitor.isOnline {_=await store.drainPendingRunUploads()}
+            }
+            .task(id:store.session?.startedAt) {
+                guard let startedAt=store.session?.startedAt else{return}
+                while !Task.isCancelled,store.session?.startedAt==startedAt {
+                    if let record=await store.finishIfPastSixHourLimit(at:Date()) {
+                        ui.selected=record.id
+                        ui.screen="S01"
+                        _=await store.drainPendingRunUploads()
+                        return
+                    }
+                    try? await Task.sleep(for:.seconds(1))
+                }
             }
     }
     var rootStyledLayers:some View {
@@ -4281,7 +4437,16 @@ struct WireframeRoot:View {
     }
     func handleScenePhaseChange(_ phase:ScenePhase){
         if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false}
-        if phase == .background && store.session?.paused == false{store.pause();ui.screen="R04"}
+        if phase == .active {
+            Task { @MainActor in
+                if let record=await store.finishIfPastSixHourLimit(at:Date()) {
+                    ui.selected=record.id
+                    ui.screen="S01"
+                }
+                await store.recoverPendingRunUploads()
+                if runUploadNetworkMonitor.isOnline {_=await store.drainPendingRunUploads()}
+            }
+        }
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
         store.cancelPendingRunUploadDrain()
