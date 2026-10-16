@@ -1,6 +1,6 @@
 import Foundation
 
-enum CommunityPostBoardKey: String, Codable, Sendable {
+enum CommunityPostBoardKey: String, Codable, Equatable, Sendable {
     case free
     case anonymous
     case runningVerification = "running_verification"
@@ -113,6 +113,10 @@ struct CommunityMediaClient: Sendable {
         self.tokenProvider = tokenProvider
     }
 
+    func scoped(to tokenProvider: any AccessTokenProviding) -> CommunityMediaClient {
+        CommunityMediaClient(apiClient: apiClient, tokenProvider: tokenProvider)
+    }
+
     /// Post creation has no idempotency key in the current API contract. A transport
     /// failure is surfaced as an unknown outcome and must not be blindly replayed.
     func createPost(board: CommunityPostBoardKey, title: String, content: String,
@@ -149,6 +153,12 @@ struct CommunityMediaClient: Sendable {
         }
         do {
             let response = try await sendAuthorized(path: path, method: "POST", body: body)
+            // A 5xx response can be produced after the server committed the post but
+            // failed while serializing or returning the response. The create routes
+            // have no idempotency key, so replaying such a request could duplicate it.
+            if (500..<600).contains(response.statusCode) {
+                throw CommunityMediaFailure.postCreationResultUnknown
+            }
             guard response.statusCode == 201 else { throw Self.mapResponseFailure(response) }
             do { return try Self.decodePost(response.data) }
             catch { throw CommunityMediaFailure.postCreationResultUnknown }

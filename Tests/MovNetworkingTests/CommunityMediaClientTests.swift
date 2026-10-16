@@ -53,6 +53,24 @@ final class CommunityMediaClientTests: XCTestCase {
         XCTAssertEqual(requests.count,1)
     }
 
+    func testCreatePostAnyFiveHundredResponseIsUnknownAndNonRetryable() async {
+        for statusCode in [500, 503, 599] {
+            let api=RecordingCommunityAPI(steps:[
+                .init(path:"community/boards/free/posts",method:"POST",response:.init(statusCode:statusCode,data:Data()))
+            ])
+            let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
+            do {
+                _=try await client.createPost(board:.free,title:"Morning run",content:"A short update")
+                XCTFail("HTTP \(statusCode) after a non-idempotent POST is ambiguous")
+            } catch let failure as CommunityMediaFailure {
+                XCTAssertEqual(failure,.postCreationResultUnknown)
+                XCTAssertFalse(failure.canManuallyRetry)
+            } catch { XCTFail("unexpected error: \(error)") }
+            let requests=await api.recordedRequests()
+            XCTAssertEqual(requests.count,1)
+        }
+    }
+
     func testAttachmentVersionConflictReadsCurrentStateBeforeRetry() async throws {
         let conflict=try JSONSerialization.data(withJSONObject:["code":"VERSION_CONFLICT"])
         let api=RecordingCommunityAPI(steps:[

@@ -229,6 +229,11 @@ struct MediaUploadClient: Sendable {
         self.now = now
     }
 
+    func scoped(to tokenProvider: any AccessTokenProviding) -> MediaUploadClient {
+        MediaUploadClient(apiClient: apiClient, tokenProvider: tokenProvider,
+                          signedURLSender: signedURLSender, now: now)
+    }
+
     /// Requests a fresh batch after an expired signed URL or expired 24-hour batch. The
     /// number of automatic restarts is deliberately bounded to one.
     func upload(_ files: [MediaUploadFile], purpose: MediaUploadPurpose) async throws -> MediaReadyBatch {

@@ -478,6 +478,7 @@ struct WireframeRemoteReadDependencies {
     let runUploadAPIClient: (any APIResponseSending)?
     let mediaUploadClient: MediaUploadClient?
     let communityMediaClient: CommunityMediaClient?
+    let communityPostOperationStore: (any CommunityPostOperationPersisting)?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
     let memberWithdrawalService: (any MemberWithdrawalServing)?
@@ -498,6 +499,7 @@ struct WireframeRemoteReadDependencies {
         runUploadAPIClient: (any APIResponseSending)? = nil,
         mediaUploadClient: MediaUploadClient? = nil,
         communityMediaClient: CommunityMediaClient? = nil,
+        communityPostOperationStore: (any CommunityPostOperationPersisting)? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
         accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil,
         memberWithdrawalService: (any MemberWithdrawalServing)? = nil
@@ -517,6 +519,7 @@ struct WireframeRemoteReadDependencies {
         self.runUploadAPIClient = runUploadAPIClient
         self.mediaUploadClient = mediaUploadClient
         self.communityMediaClient = communityMediaClient
+        self.communityPostOperationStore = communityPostOperationStore
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
         self.memberWithdrawalService = memberWithdrawalService
@@ -3180,7 +3183,9 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityRemoteDraftPostID:String?
     var communityRemoteDraftAttachmentVersion:Int64?
     var communityRemoteDraftAssetIDs:[String:String]=[:]
+    var communityRemoteDraftOperationID:UUID?
     var communityRemoteDraftCreateResultUnknown=false
+    var communityRemoteRecoveryBlocked=false
     var communityRemotePublishBusy=false
     var communityRemotePublishNeedsRetry=false
     var communityRemotePublishStatus=""
@@ -4039,6 +4044,7 @@ struct WireframeRoot:View {
     @State var remoteReads:WireframeRemoteReadBridge
     let mediaUploadClient: MediaUploadClient?
     let communityMediaClient: CommunityMediaClient?
+    let communityPostOperationStore: any CommunityPostOperationPersisting
     @State var runUploadNetworkMonitor=RunUploadNetworkMonitor()
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
@@ -4068,6 +4074,7 @@ struct WireframeRoot:View {
     @State var memberProfilePhotoUploadedDraft:Data?
     @State var memberProfilePhotoUploading=false
     @State var memberProfilePhotoUploadTask:Task<Void,Never>?
+    @State var communityRemotePublishTask:Task<Void,Never>?
     init(
         remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
         runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
@@ -4077,6 +4084,7 @@ struct WireframeRoot:View {
         let args=ProcessInfo.processInfo.arguments
         self.mediaUploadClient=remoteReadDependencies?.mediaUploadClient
         self.communityMediaClient=remoteReadDependencies?.communityMediaClient
+        self.communityPostOperationStore=remoteReadDependencies?.communityPostOperationStore ?? FileCommunityPostOperationStore()
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         #if DEBUG
@@ -4479,6 +4487,7 @@ struct WireframeRoot:View {
         }
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
+        cancelCommunityRemotePublishForAccountScopeChange()
         store.cancelPendingRunUploadDrain()
         cancelMemberProfilePhotoUpload()
         memberProfilePhotoUploadedDraft=nil
@@ -4693,11 +4702,12 @@ struct WireframeRoot:View {
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
     }
     func resetCommunityComposerDraft(){
+        communityRemotePublishTask?.cancel();communityRemotePublishTask=nil
         ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString
         ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
         ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:]
-        ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemotePublishBusy=false
+        ui.communityRemoteDraftOperationID=nil;ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemoteRecoveryBlocked=false;ui.communityRemotePublishBusy=false
         ui.communityRemotePublishNeedsRetry=false;ui.communityRemotePublishStatus=""
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true
     }
