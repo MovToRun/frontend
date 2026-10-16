@@ -249,7 +249,7 @@ import UIKit
         }
     }
     func testReview55HomeGoalSelectorAndPersistentSummaries() {
-        let suite="mov.wireframe.test.review55-home"
+        let suite=makeFixtureStoreSuite("mov.wireframe.test.review55-home")
         func launchExample(_ example:String,appearance:String="light",compact:Bool=false) {
             app.terminate()
             app.launchArguments=["-wire-screen","H00","-wire-fixture","-wire-test-store-suite",suite,
@@ -4662,7 +4662,7 @@ extension LaunchTests {
 
     func testReview52StatisticsEmptyAndOverGoalMatchSourcePresentation() {
         for (screen,expectedDistance) in [("H08","0.00 km"),("H09","23.00 km")] {
-            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite","mov.wireframe.test.h08-h09","-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
+            app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-wire-capture-viewport","-wire-review-size","-wire-reduced","-appearance","light"]
             app.launch()
             XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
 
@@ -4933,7 +4933,7 @@ extension LaunchTests {
     }
 
     func testOtpResendAndExpiryFixtureTransitions() {
-        app.launchArguments=["-wire-screen","A19","-wire-fixture","-wire-otp-resend-ready","-wire-test-store-suite","mov.auth.otp.resend","-wire-reset","-appearance","light"]
+        app.launchArguments=["-wire-screen","A19","-wire-fixture","-wire-otp-resend-ready","-wire-test-store-suite",UUID().uuidString,"-wire-reset","-appearance","light"]
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:15))
         let resend=app.buttons["requestNewEmailCode"]
@@ -4947,7 +4947,7 @@ extension LaunchTests {
         app.buttons["fillDemoEmailCode"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5))
 
-        app.launchArguments=["-wire-screen","A21","-wire-fixture","-wire-test-store-suite","mov.auth.otp.expired","-wire-reset","-appearance","light"]
+        app.launchArguments=["-wire-screen","A21","-wire-fixture","-wire-test-store-suite",UUID().uuidString,"-wire-reset","-appearance","light"]
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-A21"].waitForExistence(timeout:15))
         XCTAssertFalse(app.textFields["emailOtpInput"].isEnabled)
@@ -5200,7 +5200,7 @@ extension LaunchTests {
         capture("Shop-dark-accent-category")
     }
     func testPointHistoryEarnedAndSpentIconsKeepContrastInDarkAppearance(){
-        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-test-store-suite","mov.wireframe.test.points-dark-b02","-wire-reset","-appearance","dark"]
+        app.launchArguments=["-wire-screen","B02","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-reset","-appearance","dark"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:10))
         let earned=app.descendants(matching:.any)["point-entry-row-earned"].firstMatch,spent=app.descendants(matching:.any)["point-entry-row-spent"].firstMatch
         XCTAssertTrue(earned.waitForExistence(timeout:5),app.debugDescription);XCTAssertTrue(spent.waitForExistence(timeout:5),app.debugDescription)

@@ -39,6 +39,54 @@ final class CommunityPostOperationStoreTests: XCTestCase {
         XCTAssertEqual(restored.phase, .creatingPost)
     }
 
+    func testLeaseAndCreateTransitionAreSharedAcrossIndependentStoreInstances() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = FileCommunityPostOperationStore(rootURL: root)
+        let second = FileCommunityPostOperationStore(rootURL: root)
+        let record = makeRecord(phase: .draftReady, postID: nil, attachmentVersion: nil, attachments: [])
+        try first.save(record, attachmentData: [:])
+
+        let firstLease = try first.acquireExecutionLease(memberID: memberID, operationID: record.operationID)
+        XCTAssertThrowsError(try second.acquireExecutionLease(memberID: memberID, operationID: record.operationID)) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationInProgress)
+        }
+        XCTAssertThrowsError(try second.save(record, attachmentData: [:])) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationInProgress)
+        }
+
+        try first.releaseExecutionLease(firstLease)
+        let secondLease = try second.acquireExecutionLease(memberID: memberID, operationID: record.operationID)
+        XCTAssertThrowsError(try first.releaseExecutionLease(firstLease)) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .executionLeaseInvalid)
+        }
+        try second.transitionToCreatingPost(record, lease: secondLease)
+        XCTAssertEqual(try second.load(memberID: memberID)?.phase, .creatingPost)
+        XCTAssertThrowsError(try second.transitionToCreatingPost(record, lease: secondLease)) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .recoveryRequired)
+        }
+        try second.releaseExecutionLease(secondLease)
+    }
+
+    func testCompletedOperationTombstoneRejectsStaleCreateRetry() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        var record = makeRecord(phase: .postCreated, postID: "42", attachmentVersion: 1, attachments: [])
+        try store.save(record, attachmentData: [:])
+
+        try store.markCompleted(record)
+
+        XCTAssertNil(try store.load(memberID: memberID))
+        XCTAssertThrowsError(try store.acquireExecutionLease(memberID: memberID, operationID: record.operationID)) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationAlreadyCompleted)
+        }
+        record = CommunityPostOperationRecord(operationID: UUID(), memberID: memberID, boardKey: .free,
+                                              title: "New run", content: "New update", runID: nil,
+                                              phase: .draftReady, postID: nil, attachmentVersion: nil, attachments: [])
+        XCTAssertNoThrow(try store.save(record, attachmentData: [:]))
+    }
+
     private func makeAttachment(assetID: String?) -> CommunityPostOperationAttachment {
         CommunityPostOperationAttachment(id: attachmentID, contentType: "image/jpeg",
                                          byteCount: Int64(jpeg.count), assetID: assetID)
@@ -54,6 +102,28 @@ final class CommunityPostOperationStoreTests: XCTestCase {
 
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("community-operation-\(UUID())", isDirectory: true)
+    }
+}
+
+final class CommunityPostDraftAccountBindingTests: XCTestCase {
+    func testPreviewDraftFromOldMemberCannotPublishUnderNewMember() {
+        let binding = CommunityPostDraftAccountBinding(memberID: "123", accountScopeID: "old-scope")
+
+        XCTAssertFalse(binding.permitsPublish(memberID: "456", accountScopeID: "new-scope"))
+    }
+
+    func testBindingRejectsSameMemberAfterAccountScopeRotation() {
+        let binding = CommunityPostDraftAccountBinding(memberID: "123", accountScopeID: "first-login")
+
+        XCTAssertFalse(binding.permitsPublish(memberID: "123", accountScopeID: "second-login"))
+    }
+
+    func testBindingAllowsOnlyCapturedMemberAndScope() {
+        let binding = CommunityPostDraftAccountBinding(memberID: "123", accountScopeID: "scope")
+
+        XCTAssertTrue(binding.permitsPublish(memberID: "123", accountScopeID: "scope"))
+        XCTAssertFalse(CommunityPostDraftAccountBinding(memberID: nil, accountScopeID: "scope")
+            .permitsPublish(memberID: "123", accountScopeID: "scope"))
     }
 }
 
@@ -94,6 +164,51 @@ final class CommunityPostPublishingServiceTests: XCTestCase {
         XCTAssertEqual(recovered.phase, .postCreated)
         XCTAssertEqual(recovered.postID, "42")
         XCTAssertNil(try operationStore.load(memberID: "456"))
+    }
+
+    func testTwoSceneServicesShareLeaseAndOnlyOneCanSendCreatePost() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-scenes-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstStore = FileCommunityPostOperationStore(rootURL: root)
+        let secondStore = FileCommunityPostOperationStore(rootURL: root)
+        let record = makeRecord(memberID: memberID, phase: .draftReady, postID: nil, attachments: [])
+        try firstStore.save(record, attachmentData: [:])
+
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "community/posts/42/attachments", method: "PUT",
+                  response: .init(statusCode: 200, data: attachmentSet(version: 1, assetID: nil)))
+        ], gateFirstRequest: true)
+        let sessionStore = MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID))
+        let firstService = makeService(api: api, store: firstStore, sessionStore: sessionStore)
+        let secondService = makeService(api: api, store: secondStore, sessionStore: sessionStore)
+        let firstTask = Task {
+            try await firstService.publish(record: record, attachmentData: [:], isScopeCurrent: { true })
+        }
+
+        await api.waitForFirstRequest()
+        do {
+            _ = try await secondService.publish(record: record, attachmentData: [:], isScopeCurrent: { true })
+            XCTFail("the second scene must not start a parallel create request")
+        } catch let failure as CommunityPostOperationStoreError {
+            XCTAssertEqual(failure, .operationInProgress)
+        } catch { XCTFail("unexpected error: \(error)") }
+        let whileBlocked = await api.recordedRequests()
+        XCTAssertEqual(whileBlocked.count, 1)
+        XCTAssertEqual(whileBlocked.first?.method, "POST")
+
+        await api.resumeFirst(with: .init(statusCode: 201, data: post(id: "42", version: 0)))
+        let result = try await firstTask.value
+        XCTAssertEqual(result.snapshot.postID, "42")
+        try firstService.removeCompletedOperation(result.operation)
+
+        do {
+            _ = try await secondService.publish(record: record, attachmentData: [:], isScopeCurrent: { true })
+            XCTFail("a stale operation from another scene must not resurrect the completed create")
+        } catch let failure as CommunityPostOperationStoreError {
+            XCTAssertEqual(failure, .operationAlreadyCompleted)
+        } catch { XCTFail("unexpected error: \(error)") }
+        let finalRequests = await api.recordedRequests()
+        XCTAssertEqual(finalRequests.map(\.method), ["POST", "PUT"])
     }
 
     func testKnownPostIDAndAttachmentsResumeWithoutCreatingAnotherPostAfterRestart() async throws {
@@ -346,11 +461,21 @@ private final class FailingCommunityOperationStore: CommunityPostOperationPersis
     func attachmentData(memberID: String, operationID: UUID, attachmentID: String) throws -> Data {
         try base.attachmentData(memberID: memberID, operationID: operationID, attachmentID: attachmentID)
     }
-    func save(_ record: CommunityPostOperationRecord, attachmentData: [String: Data]) throws {
+    func save(_ record: CommunityPostOperationRecord, attachmentData: [String: Data], lease: CommunityPostOperationLease?) throws {
         lock.lock(); saveCount += 1; let shouldFail = saveCount == failOnSave; lock.unlock()
         if shouldFail { throw CommunityPostOperationStoreError.storageUnavailable }
-        try base.save(record, attachmentData: attachmentData)
+        try base.save(record, attachmentData: attachmentData, lease: lease)
     }
+    func acquireExecutionLease(memberID: String, operationID: UUID) throws -> CommunityPostOperationLease {
+        try base.acquireExecutionLease(memberID: memberID, operationID: operationID)
+    }
+    func releaseExecutionLease(_ lease: CommunityPostOperationLease) throws { try base.releaseExecutionLease(lease) }
+    func transitionToCreatingPost(_ record: CommunityPostOperationRecord, lease: CommunityPostOperationLease) throws {
+        lock.lock(); saveCount += 1; let shouldFail = saveCount == failOnSave; lock.unlock()
+        if shouldFail { throw CommunityPostOperationStoreError.storageUnavailable }
+        try base.transitionToCreatingPost(record, lease: lease)
+    }
+    func markCompleted(_ record: CommunityPostOperationRecord) throws { try base.markCompleted(record) }
     func remove(memberID: String, operationID: UUID) throws { try base.remove(memberID: memberID, operationID: operationID) }
 }
 

@@ -3150,6 +3150,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityMediaImportCoordinator=WCommunityMediaImportCoordinator()
     var communityMediaImporting=false
     var communityDraftSessionID=UUID().uuidString
+    var communityDraftAccountBinding:CommunityPostDraftAccountBinding?
     var communityVideoPlayback=WCommunityVideoPlaybackController()
     var communityImageViewerIndex=0
     var communityImageViewerIsDraft=false
@@ -4704,6 +4705,7 @@ struct WireframeRoot:View {
     func resetCommunityComposerDraft(){
         communityRemotePublishTask?.cancel();communityRemotePublishTask=nil
         ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString
+        ui.communityDraftAccountBinding=nil
         ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
         ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:]

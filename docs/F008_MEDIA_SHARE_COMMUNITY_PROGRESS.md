@@ -17,7 +17,14 @@
 - Each member has a durable pending-operation journal under Application Support, including draft text, attachment bytes, upload asset IDs, create phase, and any known post ID/version. The journal is written before the non-idempotent create POST. A restart with a known post ID resumes update/attachment verification without another create; an ambiguous create remains blocked to avoid duplicates.
 - Any HTTP 5xx from a post-create request is treated as result-unknown and is not manually retryable. The existing API has no create idempotency key or reliable lookup contract, so the client preserves the operation instead of replaying it.
 - Video upload stays fail-closed with the backend's documented 503/provider limitation.
-- Xcode explicit project references include the networking clients and the durable operation store. `Mov/Info.plist`, bundle identifiers, and test-host settings were not changed.
+- Xcode explicit project references include the networking clients and the durable operation store. `Mov/Info.plist` and product bundle ID `com.movtorun.mov` remain unchanged; unit/UI test runners now use the separate `MovUITestHost` app (`local.mov.prototype.MovUITestHost`).
+
+## PR #89 follow-up hardening
+
+- A C09 share-preview draft captures its authenticated member and remote account-scope ID when the composer starts. A scope change now resets community composer state from any screen, including preview, and publish checks the captured binding against both the active member and live auth snapshot before sending.
+- Separate `WindowGroup` stores/services now share a process-wide, root-and-member keyed execution lease. Lease generations prevent stale scene cleanup from releasing a newer operation. The lease remains held through upload/create/attachment verification, and a durable compare-and-set writes `creatingPost` immediately before the non-idempotent create request.
+- Successful operation cleanup writes a compact completion tombstone before deleting draft text and attachment bytes. A stale scene cannot recreate the same completed operation ID; a new operation ID can proceed normally.
+- Unit and UI tests now depend on `MovUITestHost` instead of `Mov.app`. Its bundle ID is separate, while the product remains `com.movtorun.mov`. Fixed UI-test UserDefaults suites and fixture Keychain service names were changed to per-run UUID scopes. A fail-closed pre-test script checks the host/runner identities and suite/service patterns before an Xcode TestAction starts.
 
 ## Backend decisions still needed
 
@@ -29,14 +36,13 @@
 
 ## Verification
 
-- `swift test` under the Xcode toolchain, with a SwiftPM scratch/cache directory in `/tmp`: **185 tests passed, 0 failures**. Regressions cover account switch/cancel/late create response, 5xx as unknown, restart recovery without duplicate POST, initial journal save failure, and failure to persist a returned post ID.
-- The signing-disabled, install-free Release build **passed** on a temporary `/tmp` checkout copy with its asset-catalog resource phase excluded only in that copy. A normal project build reached `actool` and stopped with `No available simulator runtimes for platform iphonesimulator`; the host lacks the runtime required by the asset catalog compiler, so full asset packaging remains unverified. No `.app` was installed or launched.
-- No simulator device was started, installed, created, copied, reset, or deleted. Build/test outputs and caches stayed under `/tmp`; the original `/Users/seunghwan/Documents/Mov` checkout and product data were not edited.
-- Static review of the planned UI-test safety gate found it is not yet sufficient: the test runner bundle identifiers are distinct from the product identifier, but the host app remains `com.movtorun.mov`, and existing UI cases still use fixed/non-UUID UserDefaults suites. Although fixture-policy code validates UUID scopes for selected auth fixtures, UI tests were not run. Before focused UI work, provide a separate test-host identity and isolate both UserDefaults and Keychain state with per-run UUIDs or in-memory fakes.
-- No simulator device was started, installed, created, copied, reset, or deleted. Build/test outputs and caches stayed under `/tmp`; the original `/Users/seunghwan/Documents/Mov` checkout and product data were not edited.
+- `swift test` under Xcode 26.3, with all SwiftPM scratch/module caches in `/tmp`: **191 tests passed, 0 failures**. Regressions cover draft member/scope binding, account switch/cancel/late create response, independent-store lease exclusion and generation safety, one create POST across two services, completed-operation replay rejection, 5xx as unknown, restart recovery, and journal persistence failures.
+- Install-free, signing-disabled iOS-device-SDK Release builds of both the product app and separate `MovUITestHost` **passed** with derived data under `/tmp`. This also compiled the app asset catalog for the device SDK; neither app was installed or launched.
+- `plutil -lint` accepted `Mov.xcodeproj/project.pbxproj` and `Mov/Info.plist`; the shared Xcode scheme parsed as XML. The product Info.plist has no diff, and its resolved product bundle ID remains `com.movtorun.mov`.
+- The UI-test isolation script is installed as a TestAction preflight but was intentionally not run in this turn. No UI/host test, simulator launch, app install, or simulator-device mutation was performed. The preflight and suite/service isolation remain for independent review before focused UI work.
+- No real API, S3, OAuth provider, account, credential, infrastructure, or deployment was used. The original `/Users/seunghwan/Documents/Mov` checkout and product data were not edited.
 
 ## Follow-up list
 
-- Preserve PR87's known error-classification issue: a failed nonblocking notification `GET` can still be surfaced as an ambiguous POST result. It is not part of this change and must not be re-described as an actual POST result-unknown event.
-- Fix the PR87 classification issue: a failed nonblocking notification `GET` can still be surfaced as an ambiguous POST result. Keep it described as a separate follow-up; it is not a POST result-unknown event.
-- Re-run full asset-catalog packaging on a host with an already available iOS Simulator runtime, then perform the separately planned isolated UI review only after its test-host and UUID-suite isolation checks pass.
+- Preserve PR87's separate error-classification follow-up: a failed nonblocking notification `GET` must not be surfaced as an ambiguous POST result; it does not establish that the post-create `POST` result is unknown.
+- Independently review the isolated host and UUID suite/service preflight before focused UI review.

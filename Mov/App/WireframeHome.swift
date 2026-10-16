@@ -2235,7 +2235,11 @@ extension WireframeRoot {
         ui.communityDraftBoard=board ?? "러닝 인증"
         ui.communityDraftCrewID=nil
         ui.communityError=""
-        if let memberID=currentCommunityAuthenticatedMemberID() {
+        let draftMemberID=currentCommunityAuthenticatedMemberID()
+        ui.communityDraftAccountBinding=CommunityPostDraftAccountBinding(
+            memberID:draftMemberID,accountScopeID:ui.remoteAccountScopeID
+        )
+        if let memberID=draftMemberID {
             do {
                 if let record=try communityPostOperationStore.load(memberID:memberID) {
                     var restored:[WCommunityAttachment]=[]
@@ -2260,6 +2264,9 @@ extension WireframeRoot {
                     ui.communityRemoteDraftAssetIDs=Dictionary(uniqueKeysWithValues:record.attachments.compactMap { item in
                         item.assetID.map { (item.id,$0) }
                     })
+                    ui.communityDraftAccountBinding=CommunityPostDraftAccountBinding(
+                        memberID:record.memberID,accountScopeID:ui.remoteAccountScopeID
+                    )
                     ui.communityRemoteDraftCreateResultUnknown=record.hasAmbiguousCreate
                     ui.communityRemoteRecoveryBlocked=false
                     ui.communityRemotePublishNeedsRetry = !record.hasAmbiguousCreate
@@ -2297,14 +2304,15 @@ extension WireframeRoot {
     }
 
     func cancelCommunityRemotePublishForAccountScopeChange(){
-        guard ui.screen=="C05" || ui.communityRemotePublishBusy || communityRemotePublishTask != nil else{return}
+        let oldScreen=ui.screen
         communityRemotePublishTask?.cancel();communityRemotePublishTask=nil
         resetCommunityComposerDraft()
-        if ui.screen=="C05"{go("C01")}
+        communityComposerOriginal=nil
+        if ["C05","C09","C13"].contains(oldScreen){go("C01")}
     }
     func beginCommunityCrewCompose(_ crew:WCommunityCrew,board:WCommunityCrewBoard){
         guard communityCrewIsMember(crew),board.status == .active,board.kind != .notice || communityCrewCanManage(crew) else{return}
-        ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftPostID=nil;ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:];ui.communityRemoteDraftOperationID=nil;ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemoteRecoveryBlocked=false;ui.communityRemotePublishNeedsRetry=false;ui.communityRemotePublishStatus="";ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")
+        ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityDraftAccountBinding=nil;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[];ui.communitySelectedCrewID=crew.id;ui.communityCrewBoardID=board.id;ui.communityDraftPostID=nil;ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:];ui.communityRemoteDraftOperationID=nil;ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemoteRecoveryBlocked=false;ui.communityRemotePublishNeedsRetry=false;ui.communityRemotePublishStatus="";ui.communityDraftCrewID=crew.id;ui.communityDraftBoard=board.title;ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";communityComposerOriginal=communityComposerSnapshot(for:"C05");go("C05")
     }
     func beginCommunityPostEdit(_ post:WCommunityPost){
         guard ui.screen=="C04",communityCanReadPost(post),WCommunityPostManagementPolicy.canEdit(post,viewerID:ui.communityViewerMemberID) else{return}
@@ -2312,6 +2320,9 @@ extension WireframeRoot {
         if let crewID=post.crewID,let crew=communityCrew(crewID){ui.communitySelectedCrewID=crewID;ui.communityCrewBoardID=post.crewBoardID ?? crew.boards.first(where:{$0.title==post.board})?.id ?? ""}
         ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString;ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=post.attachments
         if let metadata=ui.communityRemotePosts[post.id] {
+            ui.communityDraftAccountBinding=CommunityPostDraftAccountBinding(
+                memberID:currentCommunityAuthenticatedMemberID(),accountScopeID:ui.remoteAccountScopeID
+            )
             ui.communityRemoteDraftOperationID=nil
             ui.communityRemoteRecoveryBlocked=false
             ui.communityRemoteDraftPostID=post.id
@@ -2319,6 +2330,7 @@ extension WireframeRoot {
             ui.communityRemoteDraftAssetIDs=metadata.assetIDByAttachmentID
             ui.communityRemoteDraftCreateResultUnknown=false
         } else {
+            ui.communityDraftAccountBinding=nil
             ui.communityRemoteDraftOperationID=nil
             ui.communityRemoteRecoveryBlocked=false
             ui.communityRemoteDraftPostID=nil
@@ -2509,6 +2521,11 @@ extension WireframeRoot {
             ui.communityError="로그인 상태를 확인한 뒤 다시 시도해 주세요."
             return
         }
+        guard let draftBinding=ui.communityDraftAccountBinding,
+              draftBinding.permitsPublish(memberID:memberID,accountScopeID:ui.remoteAccountScopeID) else {
+            ui.communityError="이 초안은 다른 로그인 상태에서 시작했어요. 새 계정으로 게시하려면 초안을 다시 작성해 주세요."
+            return
+        }
         let sessionID=ui.communityDraftSessionID
         let accountScopeID=ui.remoteAccountScopeID
         let attachments=ui.communityDraftAttachments
@@ -2581,7 +2598,10 @@ extension WireframeRoot {
             await MainActor.run {
                 guard !Task.isCancelled,state.remoteAccountScopeID==accountScopeID,
                       state.communityDraftSessionID==sessionID else{return false}
-                do {return try authSessionStore.loadSnapshot()?.memberID==memberID}
+                do {
+                    let currentMemberID=try authSessionStore.loadSnapshot()?.memberID
+                    return draftBinding.permitsPublish(memberID:currentMemberID,accountScopeID:state.remoteAccountScopeID)
+                }
                 catch {return false}
             }
         }
