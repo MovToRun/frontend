@@ -93,6 +93,12 @@ struct APIClientResponse: Sendable {
     let statusCode: Int
     let data: Data
     let requestID: String?
+
+    init(statusCode:Int,data:Data,requestID:String?=nil){
+        self.statusCode=statusCode
+        self.data=data
+        self.requestID=requestID
+    }
 }
 
 protocol APIResponseSending: Sendable {

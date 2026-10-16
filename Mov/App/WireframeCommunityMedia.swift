@@ -384,7 +384,7 @@ struct WImportedCommunityVideo:Transferable {
                 guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
                 let item=try store.saveDraft(imported.convertedData)
                 staged.append(.photo(item))
-            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=error.localizedDescription};return}
+            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=WPhotoPickerFailureMessage.userFacing(error)};return}
         }
         guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
         let currentBytes=attachments.reduce(0){$0+$1.byteCount},addingBytes=staged.reduce(0){$0+$1.byteCount}
@@ -408,7 +408,7 @@ struct WImportedCommunityVideo:Transferable {
                 guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{store.discardDraft([.video(converted)]);return}
                 guard !WCommunityVideoPolicy.isDuplicate(converted,in:attachments+staged) else{store.discardDraft([.video(converted)]);throw WCommunityVideoError.duplicate}
                 staged.append(.video(converted))
-            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=error.localizedDescription};return}
+            } catch {if !Task.isCancelled,coordinator.accepts(token){self.error=WPhotoPickerFailureMessage.userFacing(error)};return}
         }
         guard !Task.isCancelled,coordinator.accepts(token),sessionID==draftSessionID else{return}
         let currentBytes=attachments.reduce(0){$0+$1.byteCount},addingBytes=staged.reduce(0){$0+$1.byteCount}

@@ -476,6 +476,8 @@ struct WireframeRemoteReadDependencies {
     let authSessionStore: (any AuthSessionStoring)?
     let authSessionClient: AuthSessionClient?
     let runUploadAPIClient: (any APIResponseSending)?
+    let mediaUploadClient: MediaUploadClient?
+    let communityMediaClient: CommunityMediaClient?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
     let memberWithdrawalService: (any MemberWithdrawalServing)?
@@ -494,6 +496,8 @@ struct WireframeRemoteReadDependencies {
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
         runUploadAPIClient: (any APIResponseSending)? = nil,
+        mediaUploadClient: MediaUploadClient? = nil,
+        communityMediaClient: CommunityMediaClient? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
         accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil,
         memberWithdrawalService: (any MemberWithdrawalServing)? = nil
@@ -511,6 +515,8 @@ struct WireframeRemoteReadDependencies {
         self.authSessionStore = authSessionStore
         self.authSessionClient = authSessionClient
         self.runUploadAPIClient = runUploadAPIClient
+        self.mediaUploadClient = mediaUploadClient
+        self.communityMediaClient = communityMediaClient
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
         self.memberWithdrawalService = memberWithdrawalService
@@ -3170,6 +3176,14 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityDraftBoard="러닝 인증"
     var communityDraftCrewID:String?
     var communityDraftPostID:String?
+    var communityRemotePosts:[String:WCommunityRemotePostMetadata]=[:]
+    var communityRemoteDraftPostID:String?
+    var communityRemoteDraftAttachmentVersion:Int64?
+    var communityRemoteDraftAssetIDs:[String:String]=[:]
+    var communityRemoteDraftCreateResultUnknown=false
+    var communityRemotePublishBusy=false
+    var communityRemotePublishNeedsRetry=false
+    var communityRemotePublishStatus=""
     var communityDraftTitle=""
     var communityDraftBody=""
     var communityComment=""
@@ -3716,6 +3730,14 @@ struct RootView:View {
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
             runUploadAPIClient:authComposition.apiClient,
+            mediaUploadClient: {
+                guard let apiClient = authComposition.apiClient, let authClient = authComposition.client else { return nil }
+                return MediaUploadClient(apiClient: apiClient, tokenProvider: authClient)
+            }(),
+            communityMediaClient: {
+                guard let apiClient = authComposition.apiClient, let authClient = authComposition.client else { return nil }
+                return CommunityMediaClient(apiClient: apiClient, tokenProvider: authClient)
+            }(),
             accountLinkFlow:accountLinkFlow,
             memberWithdrawalService:memberWithdrawalService
         )
@@ -4015,6 +4037,8 @@ struct WireframeRoot:View {
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
+    let mediaUploadClient: MediaUploadClient?
+    let communityMediaClient: CommunityMediaClient?
     @State var runUploadNetworkMonitor=RunUploadNetworkMonitor()
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
@@ -4040,6 +4064,10 @@ struct WireframeRoot:View {
     @State var weeklyTimeDraftInvalid=false
     @State var memberProfileDraftBaseline:MemberProfile?
     @State var memberProfileDraftScopeID:String?
+    @State var memberProfilePhotoDraftBaseline:Data?
+    @State var memberProfilePhotoUploadedDraft:Data?
+    @State var memberProfilePhotoUploading=false
+    @State var memberProfilePhotoUploadTask:Task<Void,Never>?
     init(
         remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
         runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
@@ -4047,6 +4075,8 @@ struct WireframeRoot:View {
         runUploadDrainer: (any RunUploadDraining)? = nil
     ){
         let args=ProcessInfo.processInfo.arguments
+        self.mediaUploadClient=remoteReadDependencies?.mediaUploadClient
+        self.communityMediaClient=remoteReadDependencies?.communityMediaClient
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         #if DEBUG
@@ -4450,6 +4480,9 @@ struct WireframeRoot:View {
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
         store.cancelPendingRunUploadDrain()
+        cancelMemberProfilePhotoUpload()
+        memberProfilePhotoUploadedDraft=nil
+        memberProfilePhotoDraftBaseline=nil
         remoteReads.accountDidChange(to:scopeID)
         memberProfileDraftBaseline=nil
         memberProfileDraftScopeID=scopeID
@@ -4587,6 +4620,7 @@ struct WireframeRoot:View {
               prepareSocialLoginNavigation(to:route) else{return}
         if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()}
         if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()}
+        if ui.screen=="M02",route != ui.screen{cancelMemberProfilePhotoUpload()}
         if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
         if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}}
         if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()}
@@ -4623,6 +4657,7 @@ struct WireframeRoot:View {
         guard prepareSocialLoginNavigation(to:destination) else{return}
         if source=="L07"{remoteReads.cancelRunRecordDeletion()}
         if ["H04","H10"].contains(source){remoteReads.cancelWeeklyGoalMutation()}
+        if source=="M02"{cancelMemberProfilePhotoUpload()}
         if ["M02","T02"].contains(source){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
         withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
     }
@@ -4652,6 +4687,7 @@ struct WireframeRoot:View {
         return communityComposerOriginal != communityComposerSnapshot(for:ui.screen)
     }
     func requestCommunityComposerExit(destination:String){
+        guard !ui.communityRemotePublishBusy else{ui.communityError="게시글과 사진을 저장하고 있어요. 완료될 때까지 기다려 주세요.";return}
         guard ["C05","C13"].contains(ui.screen) else{completeCommunityComposerExit(destination);return}
         guard communityComposerHasChanges() else{resetCommunityComposerDraft();communityComposerOriginal=nil;completeCommunityComposerExit(destination);return}
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
@@ -4660,6 +4696,9 @@ struct WireframeRoot:View {
         ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString
         ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
+        ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:]
+        ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemotePublishBusy=false
+        ui.communityRemotePublishNeedsRetry=false;ui.communityRemotePublishStatus=""
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true
     }
     func discardCommunityComposerAndExit(){
@@ -4918,7 +4957,7 @@ struct WireframeRoot:View {
         case "L05":splits
         case "L06":recordEdit
         case "Q01":ShareImageEditor(record:current,workspace:shareWorkspace,back:{back()},openOutput:{go("Q02")})
-        case "Q02":ShareOutputView(record:current,workspace:shareWorkspace,back:{back()},gallery:{go("Q03")})
+        case "Q02":ShareOutputView(record:current,workspace:shareWorkspace,back:{back()},gallery:{go("Q03")},attachToCommunity:{beginCommunityComposeWithShareImage($0)})
         case "Q03":ShareGallery(record:current,workspace:shareWorkspace,back:{back()},create:{go("Q01")},open:{id in shareWorkspace.selectedOutputID=id;go("Q02")})
         case "S01","S02","S03","S04","S05":completion
         case "T01":settings
