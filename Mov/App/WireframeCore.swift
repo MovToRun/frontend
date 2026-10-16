@@ -462,6 +462,7 @@ struct WireframeRemoteReadDependencies {
     let authSessionClient: AuthSessionClient?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
+    let memberWithdrawalService: (any MemberWithdrawalServing)?
 
     init(
         memberProfileLoader: MemberProfileLoader? = nil,
@@ -477,7 +478,8 @@ struct WireframeRemoteReadDependencies {
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
-        accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil
+        accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil,
+        memberWithdrawalService: (any MemberWithdrawalServing)? = nil
     ) {
         self.memberProfileLoader = memberProfileLoader
         self.memberProfileUpdater = memberProfileUpdater
@@ -493,6 +495,7 @@ struct WireframeRemoteReadDependencies {
         self.authSessionClient = authSessionClient
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
+        self.memberWithdrawalService = memberWithdrawalService
     }
 }
 
@@ -541,6 +544,18 @@ enum WireframeAccountLinkState: Equatable {
     case completed
     case cancelled
     case failed(AccountLinkFailure)
+}
+
+enum WireframeMemberWithdrawalState: Equatable {
+    case idle
+    case loadingConfirmation
+    case ready
+    case submitting
+    case cleaningLocalData(MemberWithdrawalReceipt)
+    case failed(MemberWithdrawalFailure)
+    case outcomeUnknown(MemberWithdrawalFailure)
+    case accepted(MemberWithdrawalReceipt)
+    case cleanupFailed(MemberWithdrawalReceipt)
 }
 
 #if DEBUG
@@ -622,7 +637,9 @@ extension WireframeAccountLinkState {
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     private let sessionLogoutRequester: (any SessionLogoutRequesting)?
     private let authSessionStore: (any AuthSessionStoring)?
+    private let authSessionClient: AuthSessionClient?
     private let accountLinkFlow: (any AccountLinkFlowServing)?
+    private let memberWithdrawalService: (any MemberWithdrawalServing)?
     private let accountLinkProviderAuthorizationConfigured: Bool
     private(set) var accountLinkUnavailableFailure: AccountLinkFailure?
     @ObservationIgnored private var generation: UInt64 = 0
@@ -639,6 +656,7 @@ extension WireframeAccountLinkState {
     @ObservationIgnored private var sessionLogoutTask: Task<Void, Never>?
     @ObservationIgnored private var accountLinkOperationID: UUID?
     @ObservationIgnored private var accountLinkOperationTask: Task<Void, Error>?
+    @ObservationIgnored private var memberWithdrawalOperationID: UUID?
     @ObservationIgnored private var accountLinkMethodsRefreshOperationID: UUID?
     @ObservationIgnored private var unconfirmedAccountLinkMutation: AccountLinkMutation?
     @ObservationIgnored private var memberProfileWriteOperationID: UUID?
@@ -674,6 +692,10 @@ extension WireframeAccountLinkState {
     private(set) var accountLinkMethods: AccountLinkMethods?
     private(set) var accountLinkState: WireframeAccountLinkState = .idle
     private(set) var accountLinkCompletedMutation: AccountLinkMutation?
+    private(set) var memberWithdrawalState: WireframeMemberWithdrawalState = .idle
+    private(set) var memberWithdrawalNotice: MemberWithdrawalConfirmationNotice?
+    private(set) var memberWithdrawalReceipt: MemberWithdrawalReceipt?
+    private(set) var memberWithdrawalMemberID: String?
 #if DEBUG
     private let accountLinkTestTraceEnabled = ProcessInfo.processInfo.arguments.contains("-wire-account-link-action-trace")
     private(set) var accountLinkTestTrace = ""
@@ -697,6 +719,8 @@ extension WireframeAccountLinkState {
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
         sessionLogoutRequester = dependencies?.sessionLogoutRequester
         authSessionStore = dependencies?.authSessionStore
+        authSessionClient = dependencies?.authSessionClient
+        memberWithdrawalService = dependencies?.memberWithdrawalService
         if let injectedFlow = dependencies?.accountLinkFlow {
             accountLinkFlow = injectedFlow
             accountLinkProviderAuthorizationConfigured = true
@@ -792,6 +816,31 @@ extension WireframeAccountLinkState {
         if case .submittingUnlink = accountLinkState { return true }
         if case .confirmingUnlinkStatus = accountLinkState { return true }
         return false
+    }
+    var hasMemberWithdrawalDependency: Bool { memberWithdrawalService != nil && authSessionClient != nil }
+    var isMemberWithdrawalSubmitting: Bool {
+        if case .submitting = memberWithdrawalState { return true }
+        return false
+    }
+    var isMemberWithdrawalMutationInFlight: Bool {
+        switch memberWithdrawalState {
+        case .submitting, .cleaningLocalData, .cleanupFailed: true
+        default: false
+        }
+    }
+    var isMemberWithdrawalCleanupFailed: Bool {
+        if case .cleanupFailed = memberWithdrawalState { return true }
+        return false
+    }
+    var isMemberWithdrawalAccepted: Bool {
+        if case .accepted = memberWithdrawalState { return true }
+        return false
+    }
+    var memberWithdrawalFailure: MemberWithdrawalFailure? {
+        switch memberWithdrawalState {
+        case .failed(let failure), .outcomeUnknown(let failure): failure
+        default: nil
+        }
     }
     var isAccountLinkBusy: Bool {
         switch accountLinkState {
@@ -1304,6 +1353,117 @@ extension WireframeAccountLinkState {
         return true
     }
 
+    func loadMemberWithdrawalConfirmation(accountScopeID: String, screen: String) async {
+        guard let service = memberWithdrawalService,
+              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T11",
+              !isMemberWithdrawalSubmitting else { return }
+        let operationID = UUID()
+        let requestGeneration = generation
+        memberWithdrawalOperationID = operationID
+        memberWithdrawalState = .loadingConfirmation
+        do {
+            let notice = try await service.confirmationNotice()
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return }
+            memberWithdrawalNotice = notice
+            memberWithdrawalState = .ready
+        } catch let failure as MemberWithdrawalFailure {
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return }
+            memberWithdrawalState = failure.outcomeUnknown ? .outcomeUnknown(failure) : .failed(failure)
+        } catch {
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return }
+            memberWithdrawalState = .failed(.invalidResponse)
+        }
+        if memberWithdrawalOperationID == operationID { memberWithdrawalOperationID = nil }
+    }
+
+    func submitMemberWithdrawal(accountScopeID: String, screen: String) async -> MemberWithdrawalReceipt? {
+        guard let service = memberWithdrawalService, let accountLinkFlow,
+              hasMemberWithdrawalDependency,
+              self.accountScopeID == accountScopeID, activeScreen == screen, screen == "T16",
+              memberWithdrawalNotice != nil, !isMemberWithdrawalSubmitting else { return nil }
+        let operationID = UUID()
+        let requestGeneration = generation
+        memberWithdrawalOperationID = operationID
+        memberWithdrawalReceipt = nil
+        memberWithdrawalState = .submitting
+        do {
+            guard let authSessionStore else { throw MemberWithdrawalFailure.accessTokenUnavailable }
+            let snapshot: AuthSessionSnapshot?
+            do { snapshot = try authSessionStore.loadSnapshot() }
+            catch { throw MemberWithdrawalFailure.accessTokenUnavailable }
+            guard let snapshot else { throw MemberWithdrawalFailure.accessTokenUnavailable }
+            memberWithdrawalMemberID = snapshot.memberID
+            let proof = try await accountLinkFlow.consumeReauthenticationProof(for: .withdrawal)
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return nil }
+            let receipt = try await service.requestWithdrawal(reauthProof: proof, confirmed: true)
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return nil }
+            memberWithdrawalReceipt = receipt
+            memberWithdrawalState = .accepted(receipt)
+            memberWithdrawalOperationID = nil
+            return receipt
+        } catch let failure as MemberWithdrawalFailure {
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return nil }
+            memberWithdrawalState = failure.outcomeUnknown ? .outcomeUnknown(failure) : .failed(failure)
+        } catch let failure as AccountLinkFailure {
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return nil }
+            memberWithdrawalState = .failed(failure == .cancelled ? .cancelled : .reauthenticationRequired)
+        } catch {
+            guard memberWithdrawalOperationID == operationID,
+                  self.accountScopeID == accountScopeID,
+                  generation == requestGeneration, activeScreen == screen else { return nil }
+            memberWithdrawalState = .failed(.invalidResponse)
+        }
+        if memberWithdrawalOperationID == operationID { memberWithdrawalOperationID = nil }
+        return nil
+    }
+
+    @discardableResult
+    func cancelMemberWithdrawalFlow() -> Bool {
+        guard !isMemberWithdrawalSubmitting else { return false }
+        memberWithdrawalOperationID = nil
+        memberWithdrawalNotice = nil
+        memberWithdrawalReceipt = nil
+        memberWithdrawalMemberID = nil
+        memberWithdrawalState = .idle
+        let cancelled = cancelAccountLinkFlow()
+        if !cancelled { Task { await accountLinkFlow?.cancel() } }
+        return true
+    }
+
+    func markMemberWithdrawalCleanupFailed(_ receipt: MemberWithdrawalReceipt) {
+        guard memberWithdrawalReceipt == receipt else { return }
+        memberWithdrawalState = .cleanupFailed(receipt)
+    }
+
+    func beginMemberWithdrawalCleanup(_ receipt: MemberWithdrawalReceipt) {
+        guard memberWithdrawalReceipt == receipt else { return }
+        memberWithdrawalState = .cleaningLocalData(receipt)
+    }
+
+    func completeMemberWithdrawalCleanup(_ receipt: MemberWithdrawalReceipt) {
+        guard memberWithdrawalReceipt == receipt else { return }
+        memberWithdrawalState = .accepted(receipt)
+    }
+
+    func retryMemberWithdrawalCleanup() {
+        guard let receipt = memberWithdrawalReceipt else { return }
+        memberWithdrawalState = .accepted(receipt)
+    }
+
     func requestSessionLogout(accountScopeID: String, screen: String) {
         guard let requester = sessionLogoutRequester,
               self.accountScopeID == accountScopeID,
@@ -1394,6 +1554,20 @@ extension WireframeAccountLinkState {
     func accountDidChange(to nextScopeID: String) {
         guard accountScopeID != nextScopeID else { return }
         guard !isAccountLinkMutationInFlight else { return }
+        let preserveAcceptedWithdrawal: Bool = {
+            if case .accepted = memberWithdrawalState { return true }
+            return false
+        }()
+        let withdrawalWasSubmitting = isMemberWithdrawalSubmitting
+        memberWithdrawalOperationID = nil
+        if !preserveAcceptedWithdrawal {
+            memberWithdrawalNotice = nil
+            memberWithdrawalReceipt = nil
+            memberWithdrawalMemberID = nil
+            memberWithdrawalState = withdrawalWasSubmitting
+                ? .outcomeUnknown(.transport(.cancelled, outcomeUnknown: true))
+                : .idle
+        }
         cancelRunRecordsRefresh(markNeedsRefresh: false)
         cancelSessionLogout()
         cancelAccountLinkFlow()
@@ -1488,12 +1662,21 @@ extension WireframeAccountLinkState {
 
         let preserveUnlinkFailure = previousScreen == "T15" && nextScreen == "T08"
             && { if case .failed = accountLinkState { return true }; return false }()
-        if (previousScreen == "T15" || previousScreen == "T06"),
+        let preservingWithdrawalProof = previousScreen == "T15" && nextScreen == "T11"
+        if (previousScreen == "T15" || previousScreen == "T06"), !preservingWithdrawalProof,
            nextScreen != "T15", nextScreen != "T06", accountLinkState != .completed, !preserveUnlinkFailure {
             cancelAccountLinkFlow()
         }
-        if nextScreen == "T05" {
-            await refreshAccountLinkMethods(expectedScreen:"T05")
+        let leavingWithdrawalFlow = ["T11", "T16"].contains(previousScreen ?? "")
+            && !["T11", "T16", "T15", "T12"].contains(nextScreen ?? "")
+        if leavingWithdrawalFlow && !isMemberWithdrawalAccepted {
+            _ = cancelMemberWithdrawalFlow()
+        }
+        if nextScreen == "T05" || nextScreen == "T15" {
+            await refreshAccountLinkMethods(expectedScreen:nextScreen)
+        }
+        if nextScreen == "T11", hasMemberWithdrawalDependency {
+            await loadMemberWithdrawalConfirmation(accountScopeID: accountScopeID, screen: "T11")
         }
 
         guard let feature else {
@@ -3112,6 +3295,15 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
         reauthProofPurpose = purpose
     }
 
+    func consumeReauthenticationProof(for purpose: AccountLinkPurpose) async throws -> String {
+        guard reauthProofPurpose == purpose, let proof = reauthProof else {
+            throw AccountLinkFailure.reauthenticationRequired
+        }
+        reauthProof = nil
+        reauthProofPurpose = nil
+        return proof
+    }
+
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
         guard reauthProof != nil, reauthProofPurpose == .link else { throw AccountLinkFailure.reauthenticationRequired }
         guard !providers.contains(provider) else { throw AccountLinkFailure.alreadyLinked }
@@ -3211,6 +3403,64 @@ actor WireframeAccountLinkFixture: AccountLinkFlowServing {
     }
 }
 
+#if DEBUG
+/// In-memory withdrawal transport for isolated UUID-backed UI fixtures only.
+private actor WireframeMemberWithdrawalFixture: MemberWithdrawalServing {
+    private var failOnce: Bool
+    private var expireProofOnce: Bool
+    private var loseResponseOnce: Bool
+    private var delayOnce: Bool
+    private var requestCount = 0
+
+    init(arguments: [String]) {
+        failOnce = arguments.contains("-wire-member-withdrawal-fail-once")
+        expireProofOnce = arguments.contains("-wire-member-withdrawal-expired-proof-once")
+        loseResponseOnce = arguments.contains("-wire-member-withdrawal-response-lost-once")
+        delayOnce = arguments.contains("-wire-member-withdrawal-delay-once")
+    }
+
+    func confirmationNotice() async throws -> MemberWithdrawalConfirmationNotice {
+        MemberWithdrawalConfirmationNotice(
+            message: "탈퇴 범위와 처리 항목을 확인해 주세요.",
+            recentReauthenticationValiditySeconds: 300
+        )
+    }
+
+    func requestWithdrawal(reauthProof: String, confirmed: Bool) async throws -> MemberWithdrawalReceipt {
+        guard confirmed else { throw MemberWithdrawalFailure.confirmationRequired }
+        guard reauthProof.utf8.count == 43 else { throw MemberWithdrawalFailure.reauthenticationRequired }
+        requestCount += 1
+
+        if delayOnce {
+            delayOnce = false
+            do { try await Task.sleep(for: .seconds(3)) }
+            catch { throw MemberWithdrawalFailure.transport(.cancelled, outcomeUnknown: true) }
+        }
+        if expireProofOnce {
+            expireProofOnce = false
+            throw MemberWithdrawalFailure.unauthenticated
+        }
+        if failOnce {
+            failOnce = false
+            throw MemberWithdrawalFailure.serviceUnavailable
+        }
+        if loseResponseOnce {
+            loseResponseOnce = false
+            // Model a committed request whose 202 response was lost. No receipt is exposed.
+            throw MemberWithdrawalFailure.transport(.networkConnectionLost, outcomeUnknown: true)
+        }
+
+        return MemberWithdrawalReceipt(
+            requestId: "debug-withdrawal-\(requestCount)",
+            status: "WITHDRAWN",
+            gpsStatus: .completed,
+            profilePhotoStatus: .pending,
+            communityAttachmentsStatus: .retryableFailure
+        )
+    }
+}
+#endif
+
 struct RootView:View {
     @Environment(\.dynamicTypeSize) var systemSize
     let remoteReadDependencies: WireframeRemoteReadDependencies?
@@ -3265,11 +3515,16 @@ struct RootView:View {
             ) : nil
         let passwordResetSessionStore: (any AuthSessionStoring)? = WReviewMode.tools && args.contains("-wire-password-reset-session-store-fixture")
             ? WireframePasswordResetSessionFixtureStore(failReplacementOnce:args.contains("-wire-password-reset-session-store-fail-once")) : nil
-        let accountLinkFixture: (any AccountLinkFlowServing)? = WReviewMode.tools && args.contains("-wire-account-link-fixture")
+        // User-flow auth fixtures disable the broader review mode. Permit this mock only
+        // when both the defaults suite and Keychain service are UUID-isolated.
+        let uuidScopedAuthFixture = AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: args)
+            && AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: args) != nil
+        let accountLinkFixture: (any AccountLinkFlowServing)? = (WReviewMode.tools || uuidScopedAuthFixture)
+            && (args.contains("-wire-account-link-fixture") || args.contains("-wire-member-withdrawal-fixture"))
             ? WireframeAccountLinkFixture(
                 initiallyLinkedGoogle:args.contains("-wire-account-link-google-already-linked"),
                 onlyGoogleLinked:args.contains("-wire-account-unlink-last-method"),
-                localPassword:args.contains("-wire-account-link-local-password"),
+                localPassword:args.contains("-wire-account-link-local-password") || args.contains("-wire-member-withdrawal-fixture"),
                 failCompletionOnce:args.contains("-wire-account-link-fail-once"),
                 failUnlinkWithMethodRequiredOnce:args.contains("-wire-account-unlink-last-method-race"),
                 failUnlinkOnce:args.contains("-wire-account-unlink-fail-once"),
@@ -3286,6 +3541,15 @@ struct RootView:View {
                 expireLinkChallengeOnce:args.contains("-wire-account-link-expired-challenge-once"),
                 expireUnlinkProofOnce:args.contains("-wire-account-unlink-expired-proof-once")
             ) : nil
+#if DEBUG
+        let memberWithdrawalFixture: (any MemberWithdrawalServing)? = (WReviewMode.tools || uuidScopedAuthFixture)
+            && args.contains("-wire-member-withdrawal-fixture")
+            && AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: args)
+            && AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: args) != nil
+            ? WireframeMemberWithdrawalFixture(arguments: args) : nil
+#else
+        let memberWithdrawalFixture: (any MemberWithdrawalServing)? = nil
+#endif
         let profileFixture = WReviewMode.tools && args.contains("-wire-member-profile-fixture")
             ? WireframeMemberProfileFixture(
                 failReadOnce:args.contains("-wire-member-profile-read-fail-once"),
@@ -3313,6 +3577,36 @@ struct RootView:View {
             failsConflictRefreshOnce:args.contains("-wire-weekly-goal-conflict-refresh-fail-once")
         ):nil
         let progressLoader = progressClient.map { RunningProgressLoader(client:$0) }
+        let accountLinkFlow: (any AccountLinkFlowServing)?
+        if let accountLinkFixture {
+            accountLinkFlow = accountLinkFixture
+        } else if WReviewMode.tools {
+            accountLinkFlow = nil
+        } else {
+            if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+                accountLinkFlow = AccountLinkFlowFactory.make(apiClient: apiClient, tokenProvider: authClient)
+            } else {
+                accountLinkFlow = nil
+            }
+        }
+        let memberWithdrawalService: (any MemberWithdrawalServing)?
+#if DEBUG
+        if let memberWithdrawalFixture {
+            memberWithdrawalService = memberWithdrawalFixture
+        } else if WReviewMode.tools {
+            memberWithdrawalService = nil
+        } else if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+            memberWithdrawalService = MemberWithdrawalClient(apiClient: apiClient, tokenProvider: authClient)
+        } else {
+            memberWithdrawalService = nil
+        }
+#else
+        if let apiClient = authComposition.apiClient, let authClient = authComposition.client {
+            memberWithdrawalService = MemberWithdrawalClient(apiClient: apiClient, tokenProvider: authClient)
+        } else {
+            memberWithdrawalService = nil
+        }
+#endif
         return WireframeRemoteReadDependencies(
             memberProfileLoader:profileLoader,
             memberProfileUpdater:profileFixture,
@@ -3325,7 +3619,8 @@ struct RootView:View {
             passwordResetService:passwordResetFixture ?? authComposition.apiClient.map { PasswordResetClient(apiClient: $0) },
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
-            accountLinkFlow:accountLinkFixture
+            accountLinkFlow:accountLinkFlow,
+            memberWithdrawalService:memberWithdrawalService
         )
     }
 
@@ -4112,7 +4407,7 @@ struct WireframeRoot:View {
         return true
     }
     func go(_ id:String){
-        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         let route=id=="B01" ? "POINTS":id
         guard prepareSocialLoginNavigation(to:route) else{return}
         if route=="C08" && ui.communityCardOriginAnonymous{return}
@@ -4123,7 +4418,8 @@ struct WireframeRoot:View {
         performNavigation(route)
     }
     func performNavigation(_ route:String){
-        guard !remoteReads.isAccountLinkMutationInFlight,prepareSocialLoginNavigation(to:route) else{return}
+        guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight,
+              prepareSocialLoginNavigation(to:route) else{return}
         if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()}
         if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()}
         if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
@@ -4135,7 +4431,7 @@ struct WireframeRoot:View {
         withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}
     }
     func back(){
-        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return}
         if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return}
         if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return}
@@ -4143,8 +4439,21 @@ struct WireframeRoot:View {
         performBack()
     }
     func performBack(){
-        guard !remoteReads.isAccountLinkMutationInFlight else{return}
+        guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         let source=ui.screen
+        if source=="T11" {
+            _=remoteReads.cancelMemberWithdrawalFlow()
+            ui.deleteConsent=false
+            withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
+            return
+        }
+        if source=="T15",ui.pending=="T11" {
+            if ui.pendingBack=="T16" { _=remoteReads.cancelAccountLinkFlow() }
+            else { _=remoteReads.cancelMemberWithdrawalFlow() }
+            ui.deleteConsent=false
+            ui.cancelReauthentication()
+            return
+        }
         let destination=ui.path.last ?? "H00"
         guard prepareSocialLoginNavigation(to:destination) else{return}
         if source=="L07"{remoteReads.cancelRunRecordDeletion()}
@@ -4153,7 +4462,8 @@ struct WireframeRoot:View {
         withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
     }
     func selectRootTab(_ route:String){
-        guard !remoteReads.isAccountLinkMutationInFlight,prepareSocialLoginNavigation(to:route) else{return}
+        guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight,
+              prepareSocialLoginNavigation(to:route) else{return}
         if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return}
         if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"tab:\(route)");return}
         if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"tab:\(route)");return}

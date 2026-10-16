@@ -40,6 +40,11 @@ protocol RunUploadEnqueueing: Sendable {
     func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws
 }
 
+/// Withdrawal removes only queued payloads assigned to the withdrawn member.
+protocol RunUploadOwnerScopedClearing: Sendable {
+    func clearRunUploads(ownerID: String) async throws
+}
+
 /// App-triggered upload boundary. The expected owner is captured from the authenticated
 /// identity provider and checked against the uploader session before any request is sent.
 protocol RunUploadDraining: Sendable {
@@ -410,9 +415,17 @@ actor RunUploadOutbox {
     }
 }
 
-extension RunUploadOutbox: RunUploadEnqueueing {
+extension RunUploadOutbox: RunUploadEnqueueing, RunUploadOwnerScopedClearing {
     func enqueueRunUpload(_ payload: RunUploadPayload, ownerID: String) async throws {
         _ = try enqueue(payload, ownerID: ownerID)
+    }
+
+    func clearRunUploads(ownerID: String) async throws {
+        guard Self.isValidOwnerID(ownerID) else { throw RunUploadOutboxFailure.invalidOwnerID }
+        try persistence.transact { current in
+            let next = current.filter { $0.envelope.ownerID != ownerID }
+            return RunUploadOutboxMutation(entries: next, result: ())
+        }
     }
 }
 

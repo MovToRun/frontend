@@ -5506,3 +5506,422 @@ extension ThemeTests {
         XCTAssertEqual(bridge.memberProfileState, .loaded(MemberProfile(nickname: "NewAccount")), "A late profile response cannot restore data from account A")
     }
 }
+
+private struct WithdrawalTokenProviderFake: AccessTokenProviding {
+    let token: String?
+    func accessToken() async throws -> String? { token }
+}
+
+private actor WithdrawalAccountLinkServiceFake: AccountLinkServing {
+    private var proofCounter = 0
+    private var holdNextPasswordReauthentication=false
+    private var heldPasswordProof:CheckedContinuation<AccountLinkReauthProof,Error>?
+    private var passwordReauthenticationWaiter:CheckedContinuation<Void,Never>?
+    func methods() async throws -> AccountLinkMethods {
+        AccountLinkMethods(localPassword:true,socialProviders:[.kakao])
+    }
+    func reauthenticateWithPassword(_ password:String,purpose:AccountLinkPurpose) async throws -> AccountLinkReauthProof {
+        proofCounter += 1
+        let char=String(UnicodeScalar(96+(proofCounter%26)+1)!)
+        let proof=AccountLinkReauthProof(reauthProof:String(repeating:char,count:43),expiresInSeconds:300)
+        guard holdNextPasswordReauthentication else { return proof }
+        holdNextPasswordReauthentication=false
+        return try await withCheckedThrowingContinuation { continuation in
+            heldPasswordProof=continuation
+            passwordReauthenticationWaiter?.resume()
+            passwordReauthenticationWaiter=nil
+        }
+    }
+    func holdNextPasswordProof(){holdNextPasswordReauthentication=true}
+    func waitForPasswordProof() async {
+        guard heldPasswordProof == nil else { return }
+        await withCheckedContinuation { passwordReauthenticationWaiter=$0 }
+    }
+    func resumePasswordProof(){
+        guard let heldPasswordProof else{return}
+        self.heldPasswordProof=nil
+        heldPasswordProof.resume(returning:AccountLinkReauthProof(reauthProof:String(repeating:"x",count:43),expiresInSeconds:300))
+    }
+    func issueReauthChallenge(provider:AccountLinkProvider,purpose:AccountLinkPurpose) async throws -> AccountLinkChallenge {
+        AccountLinkChallenge(state:"fixture-state",nonce:"fixture-nonce",expiresInSeconds:300)
+    }
+    func verifyReauthentication(provider:AccountLinkProvider,challenge:AccountLinkChallenge,credential:String,purpose:AccountLinkPurpose) async throws -> AccountLinkReauthProof {
+        try await reauthenticateWithPassword(credential,purpose:purpose)
+    }
+    func issueLinkChallenge(provider:AccountLinkProvider) async throws -> AccountLinkChallenge {
+        AccountLinkChallenge(state:"fixture-link-state",nonce:"fixture-link-nonce",expiresInSeconds:300)
+    }
+    func completeLink(provider:AccountLinkProvider,challenge:AccountLinkChallenge,credential:String,reauthProof:String,consent:Bool) async throws {}
+    func unlink(provider:AccountLinkProvider,reauthProof:String,consent:Bool) async throws {}
+}
+
+private struct WithdrawalCredentialProviderFake: AccountLinkCredentialProviding {
+    func credential(for provider:AccountLinkProvider,purpose:AccountLinkCredentialPurpose,challenge:AccountLinkChallenge) async throws -> String? { "fixture-credential" }
+}
+
+private actor WithdrawalFlowFake: AccountLinkFlowServing {
+    private var currentProof: String?
+    private var currentPurpose: AccountLinkPurpose?
+    func methods() async throws -> AccountLinkMethods { AccountLinkMethods(localPassword:true,socialProviders:[.kakao]) }
+    func reauthenticateWithPassword(_ password:String,purpose:AccountLinkPurpose) async throws {
+        currentProof=UUID().uuidString.replacingOccurrences(of:"-",with:"")+String(repeating:"z",count:11)
+        currentPurpose=purpose
+    }
+    func reauthenticate(using provider:AccountLinkProvider,purpose:AccountLinkPurpose) async throws {
+        try await reauthenticateWithPassword("fixture",purpose:purpose)
+    }
+    func consumeReauthenticationProof(for purpose:AccountLinkPurpose) async throws -> String {
+        guard let proof=currentProof,currentPurpose==purpose else { throw AccountLinkFailure.reauthenticationRequired }
+        currentProof=nil;currentPurpose=nil
+        return proof
+    }
+    func hasProof()->Bool { currentProof != nil }
+    func link(provider:AccountLinkProvider,onMutationRequestWillSubmit:@escaping @Sendable () async -> Bool) async throws { throw AccountLinkFailure.invalidRequest }
+    func unlink(provider:AccountLinkProvider,onMutationRequestWillSubmit:@escaping @Sendable () async -> Bool) async throws { throw AccountLinkFailure.invalidRequest }
+    func cancel() async { currentProof=nil;currentPurpose=nil }
+}
+
+private actor WithdrawalServiceFake: MemberWithdrawalServing {
+    enum Outcome: Sendable { case receipt(MemberWithdrawalReceipt), failure(MemberWithdrawalFailure), hold }
+    struct Post: Equatable, Sendable { let proof:String; let confirmed:Bool }
+    private let outcome: Outcome
+    private var posts:[Post]=[]
+    private var held:CheckedContinuation<MemberWithdrawalReceipt,Error>?
+    private var postWaiters:[(Int,CheckedContinuation<Void,Never>)]=[]
+    private let notice:MemberWithdrawalConfirmationNotice
+
+    init(outcome:Outcome = .receipt(ThemeTestsWithdrawalFixtures.receipt),notice:MemberWithdrawalConfirmationNotice = ThemeTestsWithdrawalFixtures.notice) {
+        self.outcome=outcome;self.notice=notice
+    }
+    func confirmationNotice() async throws -> MemberWithdrawalConfirmationNotice { notice }
+    func requestWithdrawal(reauthProof:String,confirmed:Bool) async throws -> MemberWithdrawalReceipt {
+        posts.append(Post(proof:reauthProof,confirmed:confirmed))
+        let satisfied=postWaiters.filter{$0.0<=posts.count}
+        postWaiters.removeAll{$0.0<=posts.count}
+        satisfied.forEach{$0.1.resume()}
+        switch outcome {
+        case .receipt(let receipt): return receipt
+        case .failure(let failure): throw failure
+        case .hold: return try await withCheckedThrowingContinuation{held=$0}
+        }
+    }
+    func waitForPosts(_ count:Int) async {
+        guard posts.count<count else{return}
+        await withCheckedContinuation{postWaiters.append((count,$0))}
+    }
+    func completeHeld(with receipt:MemberWithdrawalReceipt) {
+        guard let held else{return};self.held=nil;held.resume(returning:receipt)
+    }
+    func capturedPosts()->[Post]{posts}
+}
+
+private enum ThemeTestsWithdrawalFixtures {
+    static let notice=MemberWithdrawalConfirmationNotice(message:"탈퇴 요청과 처리 항목을 확인해 주세요.",recentReauthenticationValiditySeconds:300)
+    static let receipt=MemberWithdrawalReceipt(requestId:"fixture-withdrawal-request",status:"WITHDRAWN",gpsStatus:.completed,profilePhotoStatus:.pending,communityAttachmentsStatus:.retryableFailure)
+    static func response(status:Int,json:[String:Any],requestID:String?="fixture-request")->APIClientResponse {
+        APIClientResponse(statusCode:status,data:(try? JSONSerialization.data(withJSONObject:json)) ?? Data(),requestID:requestID)
+    }
+}
+
+private actor WithdrawalQueueFake: RunUploadEnqueueing, RunUploadOwnerScopedClearing {
+    private(set) var clearedOwners:[String]=[]
+    func enqueueRunUpload(_ payload:RunUploadPayload,ownerID:String) async throws {}
+    func clearRunUploads(ownerID:String) async throws { clearedOwners.append(ownerID) }
+    func cleared()->[String]{clearedOwners}
+}
+
+extension ThemeTests {
+    func testMemberWithdrawalClientUsesFiveMinuteNoticeAndConfirmedPurposeProofContract() async throws {
+        let confirmation=ThemeTestsWithdrawalFixtures.response(status:200,json:["message":ThemeTestsWithdrawalFixtures.notice.message,"recentReauthenticationValiditySeconds":300])
+        let receipt=ThemeTestsWithdrawalFixtures.response(status:202,json:["requestId":"fixture-withdrawal-request","status":"WITHDRAWN","gpsStatus":"COMPLETED","profilePhotoStatus":"PENDING","communityAttachmentsStatus":"RETRYABLE_FAILURE"])
+        let transport=AuthSessionFixtureTransport([.response(confirmation),.response(receipt)])
+        let client=MemberWithdrawalClient(apiClient:transport,tokenProvider:WithdrawalTokenProviderFake(token:"fixture-access-token"))
+        let notice=try await client.confirmationNotice()
+        XCTAssertEqual(notice.recentReauthenticationValiditySeconds,300)
+        let proof=String(repeating:"p",count:43)
+        let accepted=try await client.requestWithdrawal(reauthProof:proof,confirmed:true)
+        XCTAssertEqual(accepted.status,"WITHDRAWN")
+        XCTAssertFalse(accepted.allReportedDeletionComplete,"Pending media work must not be described as fully deleted")
+        let requests=await transport.requests()
+        XCTAssertEqual(requests.count,2,"The client sends one confirmation read and one withdrawal POST")
+        XCTAssertEqual(requests[0].path,"members/me/withdrawal/confirmation")
+        XCTAssertEqual(requests[0].method,"GET")
+        XCTAssertEqual(requests[0].headers["Authorization"],"Bearer fixture-access-token")
+        XCTAssertEqual(requests[0].headers["Cache-Control"],"no-store")
+        XCTAssertEqual(requests[1].path,"members/me/withdrawal")
+        XCTAssertEqual(requests[1].method,"POST")
+        XCTAssertEqual(requests[1].headers["Authorization"],"Bearer fixture-access-token")
+        let body=try XCTUnwrap(requests[1].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})
+        XCTAssertEqual(body["reauthProof"] as? String,proof)
+        XCTAssertEqual(body["confirmed"] as? Bool,true)
+        do {
+            _=try await client.requestWithdrawal(reauthProof:proof,confirmed:false)
+            XCTFail("The client must reject an unconfirmed request before sending")
+        } catch let failure as MemberWithdrawalFailure {
+            XCTAssertEqual(failure,.confirmationRequired)
+        }
+        let requestsAfterRejectedConfirmation=await transport.requests()
+        XCTAssertEqual(requestsAfterRejectedConfirmation.count,2)
+    }
+
+    func testWithdrawalProofCannotCrossPurposeAndIsConsumedOnce() async throws {
+        let service=WithdrawalAccountLinkServiceFake()
+        let flow=AccountLinkFlowCoordinator(service:service,credentials:WithdrawalCredentialProviderFake())
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.link)
+        do {
+            _=try await flow.consumeReauthenticationProof(for:.withdrawal)
+            XCTFail("LINK proof cannot be used for WITHDRAWAL")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure,.reauthenticationRequired)
+        }
+        _=try await flow.consumeReauthenticationProof(for:.link)
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal)
+        let withdrawalProof=try await flow.consumeReauthenticationProof(for:.withdrawal)
+        XCTAssertEqual(withdrawalProof.count,43)
+        do {
+            _=try await flow.consumeReauthenticationProof(for:.withdrawal)
+            XCTFail("A purpose-bound proof is one-time")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure,.reauthenticationRequired)
+        }
+    }
+
+    func testCancellationDuringReauthenticationCannotRestoreLateWithdrawalProof() async throws {
+        let service=WithdrawalAccountLinkServiceFake()
+        await service.holdNextPasswordProof()
+        let flow=AccountLinkFlowCoordinator(service:service,credentials:WithdrawalCredentialProviderFake())
+        let reauthentication=Task { try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal) }
+        await service.waitForPasswordProof()
+        await flow.cancel()
+        await service.resumePasswordProof()
+        do {
+            try await reauthentication.value
+            XCTFail("A canceled reauthentication must not install its late proof")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure,.cancelled)
+        }
+        do {
+            _=try await flow.consumeReauthenticationProof(for:.withdrawal)
+            XCTFail("A late proof after cancellation must remain unusable")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure,.reauthenticationRequired)
+        }
+    }
+
+    func testWithdrawalTransportLossAndExpiredSessionStayUnconfirmedWithoutRetry() async throws {
+        let store=AuthSessionFixtureStore(snapshot:try AuthSessionFixtures.session(memberID:"41"))
+        let timedOut=AuthSessionFixtureTransport([.failure(.transport(.timedOut))])
+        let client=MemberWithdrawalClient(apiClient:timedOut,tokenProvider:WithdrawalTokenProviderFake(token:"fixture-access-token"))
+        do {
+            _=try await client.requestWithdrawal(reauthProof:String(repeating:"q",count:43),confirmed:true)
+            XCTFail("A lost response cannot be accepted as success")
+        } catch let failure as MemberWithdrawalFailure {
+            XCTAssertTrue(failure.outcomeUnknown)
+        }
+        let timedOutRequests=await timedOut.requests()
+        XCTAssertEqual(timedOutRequests.count,1,"No automatic retry after a possibly sent POST")
+        XCTAssertNotNil(try store.loadSnapshot(),"The client has no authority to clear the local session")
+
+        let unauthorized=AuthSessionFixtureTransport([.response(APIClientResponse(statusCode:401,data:Data(),requestID:"expired-session"))])
+        let authClient=AuthSessionClient(apiClient:unauthorized,sessionStore:store)
+        let expiredClient=MemberWithdrawalClient(apiClient:unauthorized,tokenProvider:authClient)
+        do {
+            _=try await expiredClient.requestWithdrawal(reauthProof:String(repeating:"r",count:43),confirmed:true)
+            XCTFail("Expired session must not be treated as withdrawal")
+        } catch let failure as MemberWithdrawalFailure {
+            XCTAssertEqual(failure,.unauthenticated)
+        }
+        let unauthorizedRequests=await unauthorized.requests()
+        XCTAssertEqual(unauthorizedRequests.count,1)
+        XCTAssertNotNil(try store.loadSnapshot())
+    }
+
+    func testExpiredWithdrawalProofRequiresFreshAuthenticationAndKeepsSession() async throws {
+        let session = try AuthSessionFixtures.session(memberID: "41")
+        let store = AuthSessionFixtureStore(snapshot: session)
+        let unauthorized = AuthSessionFixtureTransport([
+            .response(APIClientResponse(statusCode: 401, data: Data(), requestID: "expired-withdrawal-proof"))
+        ])
+        let client = MemberWithdrawalClient(apiClient: unauthorized, tokenProvider: WithdrawalTokenProviderFake(token: "fixture-access-token"))
+
+        do {
+            _ = try await client.requestWithdrawal(reauthProof: String(repeating: "e", count: 43), confirmed: true)
+            XCTFail("The backend's 401 for an expired one-time proof is not a withdrawal receipt")
+        } catch let failure as MemberWithdrawalFailure {
+            XCTAssertEqual(failure, .unauthenticated)
+        }
+
+        let rejectedProofRequests = await unauthorized.requests()
+        XCTAssertEqual(rejectedProofRequests.count, 1, "An expired proof does not trigger a POST retry")
+        XCTAssertEqual(try store.loadSnapshot(), session, "A proof rejection cannot clear the local session")
+    }
+
+    @MainActor func testWithdrawalBridgeBlocksDuplicateSubmitAndIgnoresLateResponseAfterAccountSwitch() async throws {
+        let store=AuthSessionFixtureStore(snapshot:try AuthSessionFixtures.session(memberID:"41"))
+        let authClient=AuthSessionClient(apiClient:AuthSessionFixtureTransport([]),sessionStore:store)
+        let service=WithdrawalServiceFake(outcome:.hold)
+        let flow=WithdrawalFlowFake()
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            authSessionStore:store,
+            authSessionClient:authClient,
+            accountLinkFlow:flow,
+            memberWithdrawalService:service
+        ))
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T11")
+        XCTAssertEqual(bridge.memberWithdrawalState,.ready)
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal)
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T16")
+        let pending=Task { @MainActor in await bridge.submitMemberWithdrawal(accountScopeID:"scope-a",screen:"T16") }
+        await service.waitForPosts(1)
+        let duplicate=await bridge.submitMemberWithdrawal(accountScopeID:"scope-a",screen:"T16")
+        XCTAssertNil(duplicate)
+        let submittedPosts=await service.capturedPosts()
+        XCTAssertEqual(submittedPosts.count,1,"A second tap cannot submit a concurrent POST")
+
+        await bridge.activate(feature:nil,accountScopeID:"scope-b",screen:"T16")
+        await service.completeHeld(with:ThemeTestsWithdrawalFixtures.receipt)
+        let lateResponse=await pending.value
+        XCTAssertNil(lateResponse,"Late response from account A must not be applied to account B")
+        XCTAssertNotNil(try store.loadSnapshot(),"A late response cannot clear the active local session")
+        if case .outcomeUnknown(_)=bridge.memberWithdrawalState {} else { XCTFail("Account change during a sent request must remain outcome-unknown") }
+    }
+
+    func testConfirmedWithdrawalSessionClearIsMemberScoped() async throws {
+        let accountA=try AuthSessionFixtures.session(memberID:"41")
+        let store=AuthSessionFixtureStore(snapshot:accountA)
+        let client=AuthSessionClient(apiClient:AuthSessionFixtureTransport([]),sessionStore:store)
+        do {
+            try await client.clearAfterConfirmedWithdrawal(expectedMemberID:"99")
+            XCTFail("A stale confirmation cannot clear another account")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure,.sessionChanged)
+        }
+        XCTAssertEqual(try store.loadSnapshot(),accountA)
+        try await client.clearAfterConfirmedWithdrawal(expectedMemberID:"41")
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    @MainActor func testWithdrawalLocalCleanupPreservesOtherAndOwnerlessRecords() async throws {
+        let suite="MovTests."+UUID().uuidString
+        let defaults=UserDefaults(suiteName:suite)!
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let memberA=RunRecord(date:Date(timeIntervalSince1970:100),title:"member A",seconds:120,kilometers:1,uploadOwnerID:"41",clientRunID:UUID())
+        let memberB=RunRecord(date:Date(timeIntervalSince1970:200),title:"member B",seconds:180,kilometers:2,uploadOwnerID:"99",clientRunID:UUID())
+        let ownerless=RunRecord(date:Date(timeIntervalSince1970:300),title:"ownerless",seconds:90,kilometers:0.5)
+        let persistence=RunStoreOwnedRecordsFake(snapshot:.canonical([memberA,memberB]))
+        let queue=WithdrawalQueueFake()
+        let store=RunStore(defaults:defaults,uploadQueue:queue,ownedRecordsPersistence:persistence)
+        store.records.append(ownerless)
+        XCTAssertTrue(store.persist())
+
+        let didClear=await store.clearOwnedRecords(for:"41")
+        XCTAssertTrue(didClear)
+        XCTAssertEqual(Set(store.records.map(\.id)),Set([memberB.id,ownerless.id]))
+        XCTAssertEqual(persistence.canonicalRecords.map(\.id),[memberB.id])
+        let clearedOwners=await queue.cleared()
+        XCTAssertEqual(clearedOwners,["41"])
+    }
+
+    @MainActor func testWithdrawalCleanupStorageFailureKeepsSessionAndRetryDoesNotResubmit() async throws {
+        let suite = "MovTests." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let memberRun = RunRecord(date: Date(timeIntervalSince1970: 100), title: "member A", seconds: 120, kilometers: 1, uploadOwnerID: "41", clientRunID: UUID())
+        let persistence = RunStoreOwnedRecordsFake(snapshot: .canonical([memberRun]), failNextSave: true)
+        let runStore = RunStore(defaults: defaults, ownedRecordsPersistence: persistence)
+        let sessionSnapshot = try AuthSessionFixtures.session(memberID: "41")
+        let sessionStore = AuthSessionFixtureStore(snapshot: sessionSnapshot)
+        let authClient = AuthSessionClient(apiClient: AuthSessionFixtureTransport([]), sessionStore: sessionStore)
+        let receipt = ThemeTestsWithdrawalFixtures.receipt
+
+        let firstAttempt = await MemberWithdrawalLocalCleanup.clearAfterConfirmedReceipt(
+            receipt, memberID: "41", runStore: runStore, sessionStore: sessionStore, authSessionClient: authClient
+        )
+        XCTAssertFalse(firstAttempt, "A local persistence failure cannot report cleanup success")
+        XCTAssertEqual(try sessionStore.loadSnapshot(), sessionSnapshot, "The session remains until local cleanup succeeds")
+        XCTAssertTrue(runStore.records.contains(where: { $0.id == memberRun.id }))
+
+        let retry = await MemberWithdrawalLocalCleanup.clearAfterConfirmedReceipt(
+            receipt, memberID: "41", runStore: runStore, sessionStore: sessionStore, authSessionClient: authClient
+        )
+        XCTAssertTrue(retry, "Retrying local cleanup reuses the confirmed receipt without another withdrawal request")
+        XCTAssertNil(try sessionStore.loadSnapshot())
+        XCTAssertFalse(runStore.records.contains(where: { $0.id == memberRun.id }))
+    }
+
+    @MainActor func testWithdrawalCancellationAndBackDiscardUnusedProofWithoutPosting() async throws {
+        let store=AuthSessionFixtureStore(snapshot:try AuthSessionFixtures.session(memberID:"41"))
+        let authClient=AuthSessionClient(apiClient:AuthSessionFixtureTransport([]),sessionStore:store)
+        let service=WithdrawalServiceFake()
+        let flow=WithdrawalFlowFake()
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            authSessionStore:store,authSessionClient:authClient,accountLinkFlow:flow,memberWithdrawalService:service
+        ))
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T11")
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal)
+        XCTAssertTrue(bridge.cancelMemberWithdrawalFlow())
+        for _ in 0..<100 {
+            if !(await flow.hasProof()) { break }
+            try? await Task.sleep(for:.milliseconds(2))
+        }
+        let proofAfterCancel=await flow.hasProof()
+        XCTAssertFalse(proofAfterCancel)
+        do {
+            _=try await flow.consumeReauthenticationProof(for:.withdrawal)
+            XCTFail("Cancellation discards the unsubmitted proof")
+        } catch let failure as AccountLinkFailure {
+            XCTAssertEqual(failure,.reauthenticationRequired)
+        }
+
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T11")
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal)
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T04")
+        for _ in 0..<100 {
+            if !(await flow.hasProof()) { break }
+            try? await Task.sleep(for:.milliseconds(2))
+        }
+        let proofAfterBack=await flow.hasProof()
+        XCTAssertFalse(proofAfterBack,"Navigating back out of withdrawal clears unused proof")
+        let postsAfterCancel=await service.capturedPosts()
+        XCTAssertTrue(postsAfterCancel.isEmpty)
+        XCTAssertNotNil(try store.loadSnapshot())
+    }
+
+    @MainActor func testConfirmedWithdrawalClearsOnlyThatMembersLocalRunsAndSession() async throws {
+        let suite="MovTests."+UUID().uuidString
+        let defaults=UserDefaults(suiteName:suite)!
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let memberA=RunRecord(date:Date(timeIntervalSince1970:100),title:"member A",seconds:120,kilometers:1,uploadOwnerID:"41",clientRunID:UUID())
+        let memberB=RunRecord(date:Date(timeIntervalSince1970:200),title:"member B",seconds:180,kilometers:2,uploadOwnerID:"99",clientRunID:UUID())
+        let ownerless=RunRecord(date:Date(timeIntervalSince1970:300),title:"ownerless",seconds:90,kilometers:0.5)
+        let persistence=RunStoreOwnedRecordsFake(snapshot:.canonical([memberA,memberB]))
+        let queue=WithdrawalQueueFake()
+        let runStore=RunStore(defaults:defaults,uploadQueue:queue,ownedRecordsPersistence:persistence)
+        runStore.records.append(ownerless)
+        XCTAssertTrue(runStore.persist())
+
+        let sessionStore=AuthSessionFixtureStore(snapshot:try AuthSessionFixtures.session(memberID:"41"))
+        let authClient=AuthSessionClient(apiClient:AuthSessionFixtureTransport([]),sessionStore:sessionStore)
+        let service=WithdrawalServiceFake()
+        let flow=WithdrawalFlowFake()
+        let bridge=WireframeRemoteReadBridge(dependencies:WireframeRemoteReadDependencies(
+            authSessionStore:sessionStore,authSessionClient:authClient,accountLinkFlow:flow,memberWithdrawalService:service
+        ))
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T11")
+        try await flow.reauthenticateWithPassword("fixture-password",purpose:.withdrawal)
+        await bridge.activate(feature:nil,accountScopeID:"scope-a",screen:"T16")
+        let acceptedReceipt=await bridge.submitMemberWithdrawal(accountScopeID:"scope-a",screen:"T16")
+        let receipt=try XCTUnwrap(acceptedReceipt)
+        XCTAssertEqual(receipt.status,"WITHDRAWN")
+        XCTAssertEqual(bridge.memberWithdrawalMemberID,"41")
+
+        let didClear=await runStore.clearOwnedRecords(for:"41")
+        XCTAssertTrue(didClear)
+        try await authClient.clearAfterConfirmedWithdrawal(expectedMemberID:"41")
+        XCTAssertNil(try sessionStore.loadSnapshot())
+        XCTAssertEqual(Set(runStore.records.map(\.id)),Set([memberB.id,ownerless.id]))
+        XCTAssertEqual(persistence.canonicalRecords.map(\.id),[memberB.id])
+        let clearedOwners=await queue.cleared()
+        XCTAssertEqual(clearedOwners,["41"])
+    }
+}
