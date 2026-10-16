@@ -188,6 +188,87 @@ final class MediaUploadClientTests: XCTestCase {
         XCTAssertEqual(request.headers["Cache-Control"], "no-store")
     }
 
+    func testProfilePhotoUploadAndReadStayBoundToCapturedSession() async throws {
+        let member = "101"
+        let sessionStore = MutableProfileSessionStore(try AuthSessionSnapshot(
+            accessToken: "access-101", refreshToken: "refresh-101", memberID: member
+        ))
+        let generation = MutableProfileSessionGeneration()
+        let batch = "B74F045C-0EC2-4EB0-9C68-621C9F4D4E51"
+        let asset = "1DC6B74F-7C47-424B-B0B5-934165AEFE16"
+        let api = RecordingMediaAPI(steps: [
+            .init(path: "media/upload-batches", method: "POST", response: .init(statusCode: 201, data: Self.ticket(
+                batchID: batch, assetIDs: [asset], contentTypes: ["image/jpeg"], byteCounts: [Self.jpeg.count],
+                expiresAt: "2030-01-01T00:00:00Z"
+            ))),
+            .init(path: "media/upload-batches/\(batch.lowercased())/complete", method: "POST",
+                  response: .init(statusCode: 200, data: Self.readyBatch(batchID: batch, assetID: asset,
+                                                                         purpose: "PROFILE_PHOTO", contentType: "image/jpeg",
+                                                                         bytes: Self.jpeg.count))),
+            .init(path: "members/me/profile-photo", method: "GET", response: .init(statusCode: 200, data: Self.jpeg))
+        ])
+        let media = MediaUploadClient(apiClient: api, tokenProvider: StaticTokenProvider("wrong-unscoped-token"),
+                                      signedURLSender: RecordingSignedURLSender(responses: [.init(statusCode: 204, data: Data())]),
+                                      now: { Date(timeIntervalSince1970: 1_893_455_999) })
+        let service = ProfilePhotoUploadService(mediaClient: media, sessionStore: sessionStore)
+        let binding = ProfilePhotoUploadSessionBinding(memberID: member, generationID: "generation-1")
+
+        let photo = try await service.uploadAndFetchPhoto(Self.jpeg, binding: binding) { captured in
+            captured == binding && generation.isCurrent(captured.generationID)
+        }
+
+        XCTAssertEqual(photo, Self.jpeg)
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.map(\.path), [
+            "media/upload-batches",
+            "media/upload-batches/\(batch.lowercased())/complete",
+            "members/me/profile-photo"
+        ])
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Authorization"] == "Bearer access-101" })
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
+    }
+
+    func testProfilePhotoSessionSwitchDuringSignedUploadBlocksCompletionAndReadback() async throws {
+        let sessionStore = MutableProfileSessionStore(try AuthSessionSnapshot(
+            accessToken: "access-101", refreshToken: "refresh-101", memberID: "101"
+        ))
+        let generation = MutableProfileSessionGeneration()
+        let batch = "B74F045C-0EC2-4EB0-9C68-621C9F4D4E51"
+        let asset = "1DC6B74F-7C47-424B-B0B5-934165AEFE16"
+        let api = RecordingMediaAPI(steps: [
+            .init(path: "media/upload-batches", method: "POST", response: .init(statusCode: 201, data: Self.ticket(
+                batchID: batch, assetIDs: [asset], contentTypes: ["image/jpeg"], byteCounts: [Self.jpeg.count],
+                expiresAt: "2030-01-01T00:00:00Z"
+            )))
+        ])
+        let signed = RecordingSignedURLSender(responses: [.init(statusCode: 204, data: Data())]) {
+            try? sessionStore.replaceAtomically(with: AuthSessionSnapshot(
+                accessToken: "access-202", refreshToken: "refresh-202", memberID: "202"
+            ))
+            generation.replace("generation-2")
+        }
+        let media = MediaUploadClient(apiClient: api, tokenProvider: StaticTokenProvider("wrong-unscoped-token"),
+                                      signedURLSender: signed,
+                                      now: { Date(timeIntervalSince1970: 1_893_455_999) })
+        let service = ProfilePhotoUploadService(mediaClient: media, sessionStore: sessionStore)
+        let binding = ProfilePhotoUploadSessionBinding(memberID: "101", generationID: "generation-1")
+
+        do {
+            _ = try await service.uploadAndFetchPhoto(Self.jpeg, binding: binding) { captured in
+                captured == binding && generation.isCurrent(captured.generationID)
+            }
+            XCTFail("a changed session must not complete or read the original member's photo")
+        } catch let failure as ProfilePhotoUploadFailure {
+            XCTAssertEqual(failure, .accountSessionChanged)
+        }
+
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.map(\.path), ["media/upload-batches"])
+        XCTAssertEqual(requests.first?.headers["Authorization"], "Bearer access-101")
+        let signedRequests = await signed.recordedRequests()
+        XCTAssertEqual(signedRequests.count, 1)
+    }
+
     private static let jpeg = Data([0xFF, 0xD8, 0xFF, 0x00, 0x01])
     private static let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00])
 
@@ -262,14 +343,57 @@ private actor RecordingSignedURLSender: MediaSignedURLSending {
     }
     private var responses: [APIClientResponse]
     private var requests: [Request] = []
+    private let afterPut: (@Sendable () async -> Void)?
 
-    init(responses: [APIClientResponse]) { self.responses = responses }
+    init(responses: [APIClientResponse], afterPut: (@Sendable () async -> Void)? = nil) {
+        self.responses = responses
+        self.afterPut = afterPut
+    }
 
     func put(data: Data, to url: URL, headers: [String: String]) async throws -> APIClientResponse {
         requests.append(Request(data: data, url: url, headers: headers))
         guard !responses.isEmpty else { throw APIClientError.unexpectedResponse }
-        return responses.removeFirst()
+        let response = responses.removeFirst()
+        await afterPut?()
+        return response
     }
 
     func recordedRequests() -> [Request] { requests }
+}
+
+private final class MutableProfileSessionStore: AuthSessionStoring, @unchecked Sendable {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
+    private let lock = NSLock()
+    private var snapshot: AuthSessionSnapshot?
+
+    init(_ snapshot: AuthSessionSnapshot?) { self.snapshot = snapshot }
+
+    func loadSnapshot() throws -> AuthSessionSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return snapshot
+    }
+
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        self.snapshot = snapshot
+    }
+}
+
+private final class MutableProfileSessionGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = "generation-1"
+
+    func isCurrent(_ expected: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value == expected
+    }
+
+    func replace(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.value = value
+    }
 }

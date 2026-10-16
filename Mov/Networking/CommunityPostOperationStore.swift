@@ -19,6 +19,48 @@ struct CommunityPostDraftAccountBinding: Equatable, Sendable {
     }
 }
 
+struct CommunityPostPublishDraftRevision: Equatable, Sendable {
+    let operationID: UUID
+    let memberID: String
+    let accountScopeID: String
+    let draftSessionID: String
+    let boardKey: CommunityPostBoardKey
+    let title: String
+    let content: String
+    let attachmentIDs: [String]
+
+    init(record: CommunityPostOperationRecord, accountScopeID: String, draftSessionID: String) {
+        operationID = record.operationID
+        memberID = record.memberID
+        self.accountScopeID = accountScopeID
+        self.draftSessionID = draftSessionID
+        boardKey = record.boardKey
+        title = record.title
+        content = record.content
+        attachmentIDs = record.attachments.map(\.id)
+    }
+
+    func matchesCurrentDraft(
+        operationID currentOperationID: UUID?,
+        memberID currentMemberID: String?,
+        accountScopeID currentAccountScopeID: String,
+        draftSessionID currentDraftSessionID: String,
+        boardKey currentBoardKey: CommunityPostBoardKey,
+        title currentTitle: String,
+        content currentContent: String,
+        attachmentIDs currentAttachmentIDs: [String]
+    ) -> Bool {
+        operationID == currentOperationID
+            && memberID == currentMemberID
+            && accountScopeID == currentAccountScopeID
+            && draftSessionID == currentDraftSessionID
+            && boardKey == currentBoardKey
+            && title == currentTitle
+            && content == currentContent
+            && attachmentIDs == currentAttachmentIDs
+    }
+}
+
 struct CommunityPostOperationLease: Equatable, Sendable {
     let rootPath: String
     let memberID: String

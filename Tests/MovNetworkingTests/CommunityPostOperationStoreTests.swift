@@ -39,6 +39,30 @@ final class CommunityPostOperationStoreTests: XCTestCase {
         XCTAssertEqual(restored.phase, .creatingPost)
     }
 
+    func testPublishCompletionMatchesCapturedDraftRevisionBeforeClearingComposer() throws {
+        let record = makeRecord(phase: .draftReady, postID: nil, attachmentVersion: nil,
+                                attachments: [makeAttachment(assetID: nil)])
+        let revision = CommunityPostPublishDraftRevision(
+            record: record, accountScopeID: "scope-1", draftSessionID: "draft-1"
+        )
+
+        XCTAssertTrue(revision.matchesCurrentDraft(
+            operationID: record.operationID, memberID: memberID, accountScopeID: "scope-1",
+            draftSessionID: "draft-1", boardKey: record.boardKey, title: record.title,
+            content: record.content, attachmentIDs: [attachmentID]
+        ))
+        XCTAssertFalse(revision.matchesCurrentDraft(
+            operationID: record.operationID, memberID: memberID, accountScopeID: "scope-1",
+            draftSessionID: "draft-1", boardKey: record.boardKey, title: "edited while publishing",
+            content: record.content, attachmentIDs: [attachmentID]
+        ), "A late success must preserve newer user edits")
+        XCTAssertFalse(revision.matchesCurrentDraft(
+            operationID: record.operationID, memberID: memberID, accountScopeID: "scope-2",
+            draftSessionID: "draft-1", boardKey: record.boardKey, title: record.title,
+            content: record.content, attachmentIDs: [attachmentID]
+        ), "A late success must not clear a draft after the account scope changes")
+    }
+
     func testLeaseAndCreateTransitionAreSharedAcrossIndependentStoreInstances() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

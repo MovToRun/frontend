@@ -229,9 +229,43 @@ struct MediaUploadClient: Sendable {
         self.now = now
     }
 
-    func scoped(to tokenProvider: any AccessTokenProviding) -> MediaUploadClient {
-        MediaUploadClient(apiClient: apiClient, tokenProvider: tokenProvider,
-                          signedURLSender: signedURLSender, now: now)
+    func scoped(
+        to tokenProvider: any AccessTokenProviding,
+        apiClient scopedAPIClient: (any APIResponseSending)? = nil,
+        signedURLSender scopedSignedURLSender: (any MediaSignedURLSending)? = nil
+    ) -> MediaUploadClient {
+        MediaUploadClient(apiClient: scopedAPIClient ?? apiClient, tokenProvider: tokenProvider,
+                          signedURLSender: scopedSignedURLSender ?? signedURLSender, now: now)
+    }
+
+    func scopedForProfilePhoto(
+        sessionStore: any AuthSessionStoring,
+        binding: ProfilePhotoUploadSessionBinding,
+        isBindingCurrent: @escaping ProfilePhotoUploadBindingValidator
+    ) -> MediaUploadClient {
+        let tokens = ProfilePhotoSessionTokenProvider(
+            sessionStore: sessionStore,
+            memberID: binding.memberID,
+            binding: binding,
+            isBindingCurrent: isBindingCurrent
+        )
+        return scoped(
+            to: tokens,
+            apiClient: ProfilePhotoSessionAPIResponseSender(
+                base: apiClient,
+                sessionStore: sessionStore,
+                memberID: binding.memberID,
+                binding: binding,
+                isBindingCurrent: isBindingCurrent
+            ),
+            signedURLSender: ProfilePhotoSessionSignedURLSender(
+                base: signedURLSender,
+                sessionStore: sessionStore,
+                memberID: binding.memberID,
+                binding: binding,
+                isBindingCurrent: isBindingCurrent
+            )
+        )
     }
 
     /// Requests a fresh batch after an expired signed URL or expired 24-hour batch. The
@@ -499,6 +533,144 @@ struct MediaUploadClient: Sendable {
     private struct UploadTicket {
         let batchID: String
         let items: [TicketItem]
+    }
+}
+
+struct ProfilePhotoUploadSessionBinding: Equatable, Sendable {
+    let memberID: String
+    let generationID: String
+}
+
+typealias ProfilePhotoUploadBindingValidator = @Sendable (ProfilePhotoUploadSessionBinding) async -> Bool
+
+enum ProfilePhotoUploadFailure: Error, Equatable, Sendable {
+    case accountSessionChanged
+}
+
+/// Keeps profile-photo upload and readback on the same account/session generation.
+/// The HTTP and signed-URL wrappers check the binding around each transport await,
+/// while this service checks it again before exposing the confirmed bytes.
+struct ProfilePhotoUploadService: Sendable {
+    private let mediaClient: MediaUploadClient
+    private let sessionStore: any AuthSessionStoring
+
+    init(mediaClient: MediaUploadClient, sessionStore: any AuthSessionStoring) {
+        self.mediaClient = mediaClient
+        self.sessionStore = sessionStore
+    }
+
+    func uploadAndFetchPhoto(
+        _ data: Data,
+        binding: ProfilePhotoUploadSessionBinding,
+        isBindingCurrent: @escaping ProfilePhotoUploadBindingValidator
+    ) async throws -> Data {
+        let scopedClient = mediaClient.scopedForProfilePhoto(
+            sessionStore: sessionStore,
+            binding: binding,
+            isBindingCurrent: isBindingCurrent
+        )
+        do {
+            try await requireCurrent(binding, isBindingCurrent: isBindingCurrent)
+            let ready = try await scopedClient.upload(
+                [MediaUploadFile(contentType: "image/jpeg", data: data)],
+                purpose: .profilePhoto
+            )
+            try await requireCurrent(binding, isBindingCurrent: isBindingCurrent)
+            guard ready.items.count == 1 else { throw MediaUploadFailure.invalidResponse }
+            let photo = try await scopedClient.fetchOwnProfilePhoto()
+            try await requireCurrent(binding, isBindingCurrent: isBindingCurrent)
+            guard photo.starts(with: [0xFF, 0xD8, 0xFF]) else { throw MediaUploadFailure.invalidResponse }
+            return photo
+        } catch {
+            // A transport error from a request interrupted by an account switch is
+            // not useful to the new account's editor. Prefer the binding failure.
+            try await requireCurrent(binding, isBindingCurrent: isBindingCurrent)
+            throw error
+        }
+    }
+
+    private func requireCurrent(
+        _ binding: ProfilePhotoUploadSessionBinding,
+        isBindingCurrent: ProfilePhotoUploadBindingValidator
+    ) async throws {
+        guard !Task.isCancelled,
+              await isBindingCurrent(binding),
+              !Task.isCancelled,
+              let snapshot = try? sessionStore.loadSnapshot(),
+              snapshot.memberID == binding.memberID else {
+            throw ProfilePhotoUploadFailure.accountSessionChanged
+        }
+    }
+}
+
+private struct ProfilePhotoSessionTokenProvider: AccessTokenProviding {
+    let sessionStore: any AuthSessionStoring
+    let memberID: String
+    let binding: ProfilePhotoUploadSessionBinding
+    let isBindingCurrent: ProfilePhotoUploadBindingValidator
+
+    func accessToken() async throws -> String? {
+        guard !Task.isCancelled, await isBindingCurrent(binding), !Task.isCancelled,
+              let snapshot = try sessionStore.loadSnapshot(), snapshot.memberID == memberID else {
+            throw AuthSessionFailure.memberIdentityChanged
+        }
+        return snapshot.accessToken
+    }
+}
+
+private struct ProfilePhotoSessionAPIResponseSender: APIResponseSending {
+    let base: any APIResponseSending
+    let sessionStore: any AuthSessionStoring
+    let memberID: String
+    let binding: ProfilePhotoUploadSessionBinding
+    let isBindingCurrent: ProfilePhotoUploadBindingValidator
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String],
+                      queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        try await requireCurrent()
+        do {
+            let response = try await base.sendResponse(path: path, method: method, body: body,
+                                                       headers: headers, queryItems: queryItems)
+            try await requireCurrent()
+            return response
+        } catch {
+            try await requireCurrent()
+            throw error
+        }
+    }
+
+    private func requireCurrent() async throws {
+        guard !Task.isCancelled, await isBindingCurrent(binding), !Task.isCancelled,
+              let snapshot = try? sessionStore.loadSnapshot(), snapshot.memberID == memberID else {
+            throw ProfilePhotoUploadFailure.accountSessionChanged
+        }
+    }
+}
+
+private struct ProfilePhotoSessionSignedURLSender: MediaSignedURLSending {
+    let base: any MediaSignedURLSending
+    let sessionStore: any AuthSessionStoring
+    let memberID: String
+    let binding: ProfilePhotoUploadSessionBinding
+    let isBindingCurrent: ProfilePhotoUploadBindingValidator
+
+    func put(data: Data, to url: URL, headers: [String: String]) async throws -> APIClientResponse {
+        try await requireCurrent()
+        do {
+            let response = try await base.put(data: data, to: url, headers: headers)
+            try await requireCurrent()
+            return response
+        } catch {
+            try await requireCurrent()
+            throw error
+        }
+    }
+
+    private func requireCurrent() async throws {
+        guard !Task.isCancelled, await isBindingCurrent(binding), !Task.isCancelled,
+              let snapshot = try? sessionStore.loadSnapshot(), snapshot.memberID == memberID else {
+            throw ProfilePhotoUploadFailure.accountSessionChanged
+        }
     }
 }
 

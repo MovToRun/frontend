@@ -2392,7 +2392,7 @@ extension WireframeRoot {
                 GeometryReader { geo in
                     let width=geo.size.width*0.84
                     ScrollView(.horizontal,showsIndicators:false){HStack(alignment:.top,spacing:12){ForEach(Array(ui.communityDraftAttachments.enumerated()),id:\.element.id){index,item in
-                        VStack(spacing:8){Button{openCommunityDraftMedia(at:index)}label:{communityPhotoImage(WCommunityPhotoSource(attachment:item)).frame(width:width,height:width*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityDraftPhotoImage-\(item.id)");HStack(spacing:8){Button{moveCommunityDraftPhoto(from:index,by:-1)}label:{Image(systemName:"arrow.left").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==0 || ui.communityMediaImporting).accessibilityLabel("첨부를 앞으로 이동").accessibilityIdentifier("communityDraftPhotoMoveLeft-\(index)");Button{moveCommunityDraftPhoto(from:index,by:1)}label:{Image(systemName:"arrow.right").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(index==ui.communityDraftAttachments.count-1 || ui.communityMediaImporting).accessibilityLabel("첨부를 뒤로 이동").accessibilityIdentifier("communityDraftPhotoMoveRight-\(index)");Spacer();Button(role:.destructive){removeCommunityDraftPhoto(at:index)}label:{Label("삭제",systemImage:"trash").font(W.font(12,.medium)).frame(height:36).padding(.horizontal,10).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(ui.communityMediaImporting).accessibilityIdentifier("communityDraftPhotoRemove-\(index)")}.buttonStyle(.plain)}.frame(width:width)
+                        VStack(spacing:8){Button{openCommunityDraftMedia(at:index)}label:{communityPhotoImage(WCommunityPhotoSource(attachment:item)).frame(width:width,height:width*0.75).clipped().clipShape(RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityDraftPhotoImage-\(item.id)");HStack(spacing:8){Button{moveCommunityDraftPhoto(from:index,by:-1)}label:{Image(systemName:"arrow.left").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))} .disabled(index==0 || ui.communityMediaImporting || ui.communityRemotePublishBusy).accessibilityLabel("첨부를 앞으로 이동").accessibilityIdentifier("communityDraftPhotoMoveLeft-\(index)");Button{moveCommunityDraftPhoto(from:index,by:1)}label:{Image(systemName:"arrow.right").frame(width:38,height:36).background(W.soft,in:RoundedRectangle(cornerRadius:8))} .disabled(index==ui.communityDraftAttachments.count-1 || ui.communityMediaImporting || ui.communityRemotePublishBusy).accessibilityLabel("첨부를 뒤로 이동").accessibilityIdentifier("communityDraftPhotoMoveRight-\(index)");Spacer();Button(role:.destructive){removeCommunityDraftPhoto(at:index)}label:{Label("삭제",systemImage:"trash").font(W.font(12,.medium)).frame(height:36).padding(.horizontal,10).background(W.soft,in:RoundedRectangle(cornerRadius:8))}.disabled(ui.communityMediaImporting || ui.communityRemotePublishBusy).accessibilityIdentifier("communityDraftPhotoRemove-\(index)")}.buttonStyle(.plain)}.frame(width:width)
                     }}}
                 }.frame(height:(UIScreen.main.bounds.width-40)*0.84*0.75+46)
             }
@@ -2584,6 +2584,9 @@ extension WireframeRoot {
             ui.communityError="게시 작업과 사진을 이 기기에 안전하게 보관하지 못해 전송하지 않았어요. 저장 공간을 확인한 뒤 다시 시도해 주세요."
             return
         }
+        let draftRevision=CommunityPostPublishDraftRevision(
+            record:record,accountScopeID:accountScopeID,draftSessionID:sessionID
+        )
         ui.communityRemotePublishBusy=true
         ui.communityRemotePublishNeedsRetry=false
         ui.communityRemotePublishStatus="사진을 준비하고 있어요."
@@ -2629,6 +2632,37 @@ extension WireframeRoot {
                 let postID=result.snapshot.postID
                 let updated=result.snapshot
                 let assetIDsByAttachmentID=Dictionary(uniqueKeysWithValues:result.operation.attachments.compactMap{item in item.assetID.map{(item.id,$0)}})
+                let currentBoard:CommunityPostBoardKey?=switch ui.communityDraftBoard {
+                case "자유게시판":.free
+                case "익명게시판":.anonymous
+                case "러닝 인증":.runningVerification
+                default:nil
+                }
+                guard let currentBoard,
+                      draftRevision.matchesCurrentDraft(
+                        operationID:ui.communityRemoteDraftOperationID,
+                        memberID:currentCommunityAuthenticatedMemberID(),
+                        accountScopeID:ui.remoteAccountScopeID,
+                        draftSessionID:ui.communityDraftSessionID,
+                        boardKey:currentBoard,
+                        title:ui.communityDraftTitle.trimmingCharacters(in:.whitespacesAndNewlines),
+                        content:ui.communityDraftBody.trimmingCharacters(in:.whitespacesAndNewlines),
+                        attachmentIDs:ui.communityDraftAttachments.map(\.id)
+                      ) else {
+                    // The captured revision was published, but the visible composer
+                    // has newer edits. Keep both the edits and the recoverable post
+                    // journal so a later save updates this post without creating
+                    // another one.
+                    ui.communityRemoteDraftPostID=postID
+                    ui.communityRemoteDraftAttachmentVersion=updated.attachmentVersion
+                    ui.communityRemoteDraftAssetIDs=assetIDsByAttachmentID
+                    ui.communityRemotePublishBusy=false
+                    ui.communityRemotePublishNeedsRetry=false
+                    ui.communityRemotePublishStatus=""
+                    communityRemotePublishTask=nil
+                    ui.communityError="게시 시작 당시 내용은 저장됐고, 이후 수정한 초안은 그대로 남겼어요. 확인한 뒤 다시 저장해 주세요."
+                    return
+                }
                 ui.communityRemoteDraftPostID=postID
                 ui.communityRemoteDraftAttachmentVersion=updated.attachmentVersion
                 ui.communityRemoteDraftAssetIDs=assetIDsByAttachmentID
@@ -3278,12 +3312,12 @@ extension WireframeRoot {
 
     var communityCompose:some View {
         WPage(title:ui.communityDraftPostID == nil ? "글쓰기":"글 수정",back:back){
-            if let crewID=ui.communityDraftCrewID,let crew=communityCrew(crewID){Text(crew.name).font(W.font(15,.semibold)).accessibilityIdentifier("communityComposeCrewName");if ui.communityDraftPostID == nil{Text(ui.communityDraftBoard).font(W.font(12,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityComposeCrewBoard")}else{VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(communityComposerBoardOptions,id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBoard")}};WNotice(text:"크루 게시물은 해당 멤버에게만 보이고, 이 기기에 로컬 저장돼요.")}
-            else{VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(communityComposerBoardOptions.filter{$0 != "익명게시판" || (ui.communityDraftPostID != nil && ui.communityDraftBoard=="익명게시판")},id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBoard")}
+            if let crewID=ui.communityDraftCrewID,let crew=communityCrew(crewID){Text(crew.name).font(W.font(15,.semibold)).accessibilityIdentifier("communityComposeCrewName");if ui.communityDraftPostID == nil{Text(ui.communityDraftBoard).font(W.font(12,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityComposeCrewBoard")}else{VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(communityComposerBoardOptions,id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).disabled(ui.communityRemotePublishBusy).accessibilityIdentifier("communityComposeBoard")}};WNotice(text:"크루 게시물은 해당 멤버에게만 보이고, 이 기기에 로컬 저장돼요.")}
+            else{VStack(alignment:.leading,spacing:8){Text("게시판").font(W.font(14,.medium));Picker("게시판",selection:$ui.communityDraftBoard){ForEach(communityComposerBoardOptions.filter{$0 != "익명게시판" || (ui.communityDraftPostID != nil && ui.communityDraftBoard=="익명게시판")},id:\.self){Text($0).tag($0)}}.pickerStyle(.menu).frame(maxWidth:.infinity,alignment:.leading).padding(12).background(W.soft,in:RoundedRectangle(cornerRadius:10)).disabled(ui.communityRemotePublishBusy).accessibilityIdentifier("communityComposeBoard")}
             }
-            WField(label:"제목",text:$ui.communityDraftTitle,placeholder:"제목을 입력해 주세요",limit:60,accessibilityID:"communityComposeTitle")
-            VStack(alignment:.leading,spacing:8){Text(ui.communityDraftAttachments.isEmpty ? "내용":"내용 (선택)").font(W.font(14,.medium));TextEditor(text:$ui.communityDraftBody).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:178).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBody");Text("\(ui.communityDraftBody.count)/2000").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
-            communityComposePhotoStrip
+            WField(label:"제목",text:$ui.communityDraftTitle,placeholder:"제목을 입력해 주세요",limit:60,accessibilityID:"communityComposeTitle").disabled(ui.communityRemotePublishBusy)
+            VStack(alignment:.leading,spacing:8){Text(ui.communityDraftAttachments.isEmpty ? "내용":"내용 (선택)").font(W.font(14,.medium));TextEditor(text:$ui.communityDraftBody).font(W.font(14)).scrollContentBackground(.hidden).frame(minHeight:178).padding(8).background(W.soft,in:RoundedRectangle(cornerRadius:10)).accessibilityIdentifier("communityComposeBody").disabled(ui.communityRemotePublishBusy);Text("\(ui.communityDraftBody.count)/2000").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.trailing)}
+            communityComposePhotoStrip.disabled(ui.communityRemotePublishBusy)
             WText(text:ui.communityDraftCrewID != nil ? "크루 사진과 영상은 이 기기에 로컬로 저장돼요.":communityMediaClient == nil ? "사진과 영상 첨부는 이 기기에 로컬로 저장돼요. 서버 게시 기능은 연결되어 있지 않아요.":"공개 게시글 사진은 서버로 업로드할 수 있어요. 영상은 서버 검사가 준비되지 않아 업로드할 수 없어요.",small:true)
             if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}
         }actions:{
@@ -3294,7 +3328,7 @@ extension WireframeRoot {
         .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
         .onAppear{captureCommunityComposerBaseline(for:"C05")}
     }
-    var communityPreview:some View {WPage(title:"미리보기",back:back){Text(ui.communityDraftCrewID == nil ? "커뮤니티에 공개":"크루 멤버에게 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");if !(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).isEmpty{Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody")};if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{if !ui.communityDraftAttachments.isEmpty{communityPreviewPhotoRow()};WNotice(text:ui.communityDraftCrewID != nil ? "크루 게시물은 해당 크루 멤버만 볼 수 있고, 첨부는 이 기기에 로컬 저장돼요.":communityMediaClient == nil ? "사진과 영상은 이 기기에 로컬 저장돼요. 서버 전송이나 업로드는 연결하지 않았어요.":"사진은 업로드 후 게시글에 첨부되고, 게시글의 첨부 버전과 읽기를 확인해요.")};if ui.communityRemotePublishBusy{WNotice(text:ui.communityRemotePublishStatus)};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityRemotePublishBusy ? ui.communityRemotePublishStatus:ui.communityRemoteRecoveryBlocked ? "복구 필요":ui.communityRemoteDraftCreateResultUnknown ? "응답 확인 필요":ui.communityRemotePublishNeedsRetry ? "다시 시도":ui.communityCourseDraft ? "코스 공유하기":ui.communityDraftPostID == nil ? "게시하기":"수정 완료"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).disabled(ui.communityMediaImporting || ui.communityRemotePublishBusy || ui.communityRemoteDraftCreateResultUnknown || ui.communityRemoteRecoveryBlocked).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":ui.communityDraftPostID == nil ? "communityPublishButton":"communityEditPostSave");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityMediaImporting)}}
+    var communityPreview:some View {WPage(title:"미리보기",back:back){Text(ui.communityDraftCrewID == nil ? "커뮤니티에 공개":"크루 멤버에게 공개").font(W.font(12)).foregroundStyle(W.muted);Text(ui.communityCourseDraft ? "러닝 인증":ui.communityDraftBoard).font(W.font(12,.medium)).accessibilityIdentifier("communityPreviewBoard");Text(ui.communityCourseDraft ? ui.communityCourseTitle:ui.communityDraftTitle).font(W.font(23,.semibold)).lineSpacing(5).accessibilityIdentifier("communityPreviewTitle");if !(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).isEmpty{Text(ui.communityCourseDraft ? ui.communityCourseIntroduction:ui.communityDraftBody).font(W.font(14)).lineSpacing(7).accessibilityIdentifier("communityPreviewBody")};if ui.communityCourseDraft{WMap(route:true).frame(height:190).clipShape(RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("communityPreviewCourseMap");HStack{courseFact("거리","\(MovNumber.display(ui.communityCourseDistance)) km");courseFact("기록 시간",RunRecord.clock(ui.communityCourseSeconds))};WNotice(text:ui.communityCourseHideEnds ? "시작·끝 위치 숨김 · 기기 안 예시":"기기 안 예시 코스")}else{if !ui.communityDraftAttachments.isEmpty{communityPreviewPhotoRow()};WNotice(text:ui.communityDraftCrewID != nil ? "크루 게시물은 해당 크루 멤버만 볼 수 있고, 첨부는 이 기기에 로컬 저장돼요.":communityMediaClient == nil ? "사진과 영상은 이 기기에 로컬 저장돼요. 서버 전송이나 업로드는 연결하지 않았어요.":"사진은 업로드 후 게시글에 첨부되고, 게시글의 첨부 버전과 읽기를 확인해요.")};if ui.communityRemotePublishBusy{WNotice(text:ui.communityRemotePublishStatus)};if !ui.communityError.isEmpty{WNotice(text:ui.communityError,danger:true)}}actions:{Button(ui.communityRemotePublishBusy ? ui.communityRemotePublishStatus:ui.communityRemoteRecoveryBlocked ? "복구 필요":ui.communityRemoteDraftCreateResultUnknown ? "응답 확인 필요":ui.communityRemotePublishNeedsRetry ? "다시 시도":ui.communityCourseDraft ? "코스 공유하기":ui.communityDraftPostID == nil ? "게시하기":"수정 완료"){if ui.communityCourseDraft{publishCommunityCourse()}else{publishCommunityDraft()}}.buttonStyle(WButtonStyle()).disabled(ui.communityMediaImporting || ui.communityRemotePublishBusy || ui.communityRemoteDraftCreateResultUnknown || ui.communityRemoteRecoveryBlocked).accessibilityIdentifier(ui.communityCourseDraft ? "communityCoursePublish":ui.communityDraftPostID == nil ? "communityPublishButton":"communityEditPostSave");Button("다시 수정"){go(ui.communityCourseDraft ? "C13":"C05")}.buttonStyle(WButtonStyle(kind:1)).disabled(ui.communityMediaImporting || ui.communityRemotePublishBusy)}}
 }
 
 private struct WCommunityCrewHeader:View {

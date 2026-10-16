@@ -4479,6 +4479,84 @@ extension LaunchTests {
         capture("Q03-empty-after-delete")
     }
 
+    func testShareOutputPNGCanBeAttachedToCommunityDraft() {
+        let suite="mov.wireframe.test.share-attach-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","Q01","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-Q01"].waitForExistence(timeout:10))
+        app.buttons["shareCreateImage"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-Q02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.images["shareOutputPreview"].waitForExistence(timeout:5))
+        app.swipeUp()
+        let attach=app.buttons["shareAttachToCommunity"]
+        XCTAssertTrue(waitHittable(attach,timeout:5),app.debugDescription)
+        attach.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C05"].waitForExistence(timeout:8))
+        XCTAssertEqual(app.textFields["communityComposeTitle"].value as? String,"러닝 기록 공유")
+        XCTAssertEqual(app.staticTexts["communityComposePhotoCount"].label,"사진 1/10")
+        app.buttons["communityPreviewButton"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format:"identifier BEGINSWITH %@","communityPreviewPhoto-")).firstMatch.exists,
+                      "The generated PNG is stored as a draft attachment and appears in preview")
+    }
+
+    func testCommunityPublishBusyPreventsReturningToEditableComposer() {
+        let suite="mov.wireframe.test.publish-busy-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","C09","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-community-publish-busy-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:10))
+        let edit=app.buttons["다시 수정"]
+        XCTAssertTrue(edit.exists)
+        XCTAssertFalse(edit.isEnabled,"The composer cannot reopen while publish is in flight")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].exists,
+                      "The route guard prevents another back path from opening C05")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","완료될 때까지 기다려 주세요")).firstMatch.waitForExistence(timeout:5))
+    }
+
+    func testCommunityAmbiguousCreateRemainsBlockedInPreview() {
+        let suite="mov.wireframe.test.create-unknown-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","C09","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-community-create-unknown-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:10))
+        let publish=app.buttons["communityPublishButton"]
+        XCTAssertTrue(publish.waitForExistence(timeout:5))
+        XCTAssertFalse(publish.isEnabled,"The client must not replay a create request with an unknown result")
+        XCTAssertEqual(publish.label,"응답 확인 필요")
+    }
+
+    func testProfilePhotoUploadCanBeCancelledWithoutApplyingLateResult() {
+        let suite="mov.wireframe.test.profile-photo-cancel-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","M02","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-profile-photo-upload-cancel-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.otherElements["memberProfilePhotoUploadProgress"].waitForExistence(timeout:5))
+        app.buttons["memberProfileEditCancel"].tap()
+        XCTAssertFalse(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:3),
+                       "Cancel leaves the photo editor, which cancels its upload task")
+        XCTAssertFalse(app.otherElements["memberProfilePhotoUploadProgress"].exists)
+    }
+
+    func testProfilePhotoFailureIsVisibleAndLeavesEditorAvailable() {
+        let suite="mov.wireframe.test.profile-photo-failure-\(UUID().uuidString)"
+        defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        app.launchArguments=["-wire-screen","M02","-wire-fixture","-wire-test-store-suite",suite,
+            "-wire-reset","-wire-profile-photo-failure-fixture","-appearance","light"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.descendants(matching:.any)["memberProfileEditFailure"].waitForExistence(timeout:5),
+                      "An upload failure remains visible so the user can retry from the editor")
+        XCTAssertTrue(app.buttons["memberProfileEditSave"].isEnabled)
+    }
+
     func testShareEditorCancelAndDynamicType() {
         app.launchArguments=["-wire-screen","Q03","-wire-fixture","-wire-reset","-wire-compact-review","-wire-large","-appearance","light"]
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-Q03"].waitForExistence(timeout:10))

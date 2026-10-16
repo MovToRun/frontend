@@ -88,6 +88,7 @@ extension WireframeRoot {
         guard memberProfilePhotoUploading else{return}
         memberProfilePhotoUploadTask?.cancel()
         memberProfilePhotoUploadTask=nil
+        memberProfilePhotoUploadOperationID=nil
         memberProfilePhotoUploading=false
     }
 
@@ -148,31 +149,62 @@ extension WireframeRoot {
         }
         if let photo=ui.photo,photoChanged,photo != memberProfilePhotoUploadedDraft,let mediaUploadClient {
             guard !memberProfilePhotoUploading else{return}
+            guard let authSessionStore,
+                  let memberID=try? authSessionStore.loadSnapshot()?.memberID,
+                  AuthSessionSnapshot.isCanonicalMemberID(memberID) else {
+                ui.error="로그인 상태를 확인한 뒤 다시 시도해 주세요."
+                return
+            }
+            let accountScopeID=ui.remoteAccountScopeID
+            let binding=ProfilePhotoUploadSessionBinding(memberID:memberID,generationID:accountScopeID)
+            let state=ui
+            let reads=remoteReads
+            let isBindingCurrent:ProfilePhotoUploadBindingValidator = { expectedBinding in
+                await MainActor.run {
+                    guard expectedBinding==binding,
+                          !Task.isCancelled,
+                          state.remoteAccountScopeID==expectedBinding.generationID,
+                          state.screen=="M02",
+                          memberProfileDraftScopeID==expectedBinding.generationID,
+                          reads.accountScopeID==expectedBinding.generationID else{return false}
+                    do { return try authSessionStore.loadSnapshot()?.memberID==expectedBinding.memberID }
+                    catch { return false }
+                }
+            }
+            let operationID=UUID()
+            memberProfilePhotoUploadOperationID=operationID
             memberProfilePhotoUploading=true
             ui.error=""
-            memberProfilePhotoUploadTask=Task { @MainActor in
-                defer { memberProfilePhotoUploading=false;memberProfilePhotoUploadTask=nil }
+            memberProfilePhotoUploadTask=Task { @MainActor [photo, patch, baseline] in
+                defer {
+                    if memberProfilePhotoUploadOperationID==operationID {
+                        memberProfilePhotoUploading=false
+                        memberProfilePhotoUploadTask=nil
+                        memberProfilePhotoUploadOperationID=nil
+                    }
+                }
                 do {
-                    let ready=try await mediaUploadClient.upload(
-                        [MediaUploadFile(contentType:"image/jpeg",data:photo)],purpose:.profilePhoto
-                    )
-                    guard ready.items.count==1 else{throw MediaUploadFailure.invalidResponse}
-                    let confirmed=try await mediaUploadClient.fetchOwnProfilePhoto()
-                    guard confirmed.starts(with:[0xFF,0xD8,0xFF]) else{throw MediaUploadFailure.invalidResponse}
+                    let service=ProfilePhotoUploadService(mediaClient:mediaUploadClient,sessionStore:authSessionStore)
+                    let confirmed=try await service.uploadAndFetchPhoto(photo,binding:binding,isBindingCurrent:isBindingCurrent)
+                    guard await isBindingCurrent(binding),memberProfilePhotoUploadOperationID==operationID else{return}
                     memberProfilePhotoUploadedDraft=confirmed
                     ui.photo=confirmed
                     ui.profile.photo=confirmed
                     if patch.hasChanges {
-                        remoteReads.saveMemberProfile(patch,accountScopeID:ui.remoteAccountScopeID,screen:"M02")
+                        remoteReads.saveMemberProfile(patch,accountScopeID:accountScopeID,screen:"M02")
                     } else {
                         applyMemberProfilePublicFields(baseline)
                         ui.save();back()
                     }
+                } catch is ProfilePhotoUploadFailure {
+                    return
                 } catch let failure as MediaUploadFailure {
-                    guard !Task.isCancelled else{return}
+                    guard !Task.isCancelled,await isBindingCurrent(binding),
+                          memberProfilePhotoUploadOperationID==operationID else{return}
                     ui.error=failure.userMessage
                 } catch {
-                    guard !Task.isCancelled else{return}
+                    guard !Task.isCancelled,await isBindingCurrent(binding),
+                          memberProfilePhotoUploadOperationID==operationID else{return}
                     ui.error=MediaUploadFailure.invalidResponse.userMessage
                 }
             }
@@ -278,13 +310,13 @@ extension WireframeRoot {
             } else {
                 WAvatarEditor(data:$ui.photo).padding(.bottom,9).disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 WField(label:"닉네임",text:$ui.nickname,limit:12,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"memberProfileEditNickname").padding(.top,5)
-                    .disabled(remoteReads.isSavingMemberProfile)
+                    .disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 Text(remote ? "2–12자 · 한글·영문·숫자·밑줄 · 중복 여부 확인": "최대 20자 · 중복 여부는 확인하지 않아요")
                     .font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(height:17.6,alignment:.leading).padding(.top,-11)
                 WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"memberProfileEditIntroduction").padding(.top,4)
-                    .disabled(remoteReads.isSavingMemberProfile)
+                    .disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 (Text("활동 지역").font(W.font(13))+Text("  선택").font(W.font(10)).foregroundColor(W.muted))
-                WRegionPicker(selection:$ui.region).disabled(remoteReads.isSavingMemberProfile)
+                WRegionPicker(selection:$ui.region).disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 WText(text:"활동 지역은 선택하지 않아도 괜찮아요.",small:true)
                 if memberProfilePhotoUploading{HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"프로필 사진을 업로드하고 있어요.",small:true)}.accessibilityIdentifier("memberProfilePhotoUploadProgress")}
                 if !ui.error.isEmpty{WNotice(text:ui.error,danger:true).accessibilityIdentifier("memberProfileEditFailure")}
