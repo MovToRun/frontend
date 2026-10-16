@@ -6,12 +6,20 @@ extension WireframeRoot {
     func completeSocialSignup(_ attempt:SocialLoginAttempt){
         guard ui.screen=="A03",socialLoginPendingAttempt==attempt,let coordinator=socialLoginCoordinator else{return}
         guard !socialLoginBusy else{return}
+        let termsConsents: [SocialLoginConsent]
+        #if DEBUG
+        termsConsents = WReviewMode.tools
+            ? WireframeSocialLoginFixtureTerms.catalog.required
+            : WireframeSocialLoginTerms.catalog.required
+        #else
+        termsConsents = WireframeSocialLoginTerms.catalog.required
+        #endif
         let request=socialLoginPendingCompletion ?? SocialLoginCompletionRequest(
             socialSignupProof:attempt.proof.socialSignupProof,
             requestID:socialLoginNextCompletionRequestID ?? attempt.completionRequestID,
             deviceID:attempt.deviceID,
             nickname:WSignupNicknameValidation.normalized(ui.nickname),
-            termsConsents:WireframeSocialLoginFixtureTerms.catalog.required
+            termsConsents:termsConsents
         )
         socialLoginPendingCompletion=request
         socialLoginNextCompletionRequestID=nil

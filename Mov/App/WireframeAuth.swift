@@ -10,16 +10,13 @@ struct WireframeAuthSessionComposition {
     static func resolve(arguments: [String]) -> WireframeAuthSessionComposition {
         #if DEBUG
         if arguments.contains("-wire-auth-session-flow-fixture") {
-            guard arguments.contains("-wire-fixture"),
-                  let service = argument("-wire-auth-session-fixture-service", in: arguments),
-                  service.hasPrefix("com.movtorun.ui-fixture.auth-session."),
-                  UUID(uuidString: String(service.dropFirst("com.movtorun.ui-fixture.auth-session.".count))) != nil else {
+            guard let service = AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: arguments) else {
                 return .init(store: nil, client: nil, apiClient: nil)
             }
             let keychain = WireframeAuthSessionFixtureKeychainAccess(
                 failNextReplacement: arguments.contains("-wire-auth-session-fail-write-once")
             )
-            let store = KeychainAuthSessionStore(service: service, keychain: keychain)
+            let store = WireframeAuthSessionFixtureStore(service: service, keychain: keychain)
             let apiClient = WireframeAuthSessionFixtureTransport(arguments: arguments)
             return .init(store: store, client: AuthSessionClient(apiClient: apiClient, sessionStore: store), apiClient: apiClient)
         }
@@ -42,10 +39,6 @@ struct WireframeAuthSessionComposition {
         return .init(store: store, client: AuthSessionClient(apiClient: apiClient, sessionStore: store), apiClient: apiClient)
     }
 
-    private static func argument(_ name: String, in arguments: [String]) -> String? {
-        guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else { return nil }
-        return arguments[index + 1]
-    }
 }
 
 #if DEBUG
@@ -62,6 +55,33 @@ private final class WireframeAuthSessionMemoryStore: AuthSessionStoring, @unchec
     func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
         lock.lock(); defer { lock.unlock() }
         self.snapshot = snapshot
+    }
+}
+
+final class WireframeAuthSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
+    let serviceName: String
+    private let backing: KeychainAuthSessionStore
+
+    var mutationCoordinator: AuthSessionMutationCoordinator { backing.mutationCoordinator }
+
+    init(service: String, keychain: any AuthSessionKeychainAccess) {
+        serviceName = service
+        backing = KeychainAuthSessionStore(service: service, keychain: keychain)
+    }
+
+    func loadSnapshot() throws -> AuthSessionSnapshot? {
+        try backing.loadSnapshot()
+    }
+
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
+        try backing.replaceAtomically(with: snapshot)
+    }
+
+    func clearFixtureSession() throws {
+        guard AuthSessionFixtureLaunchPolicy.isFixtureServiceName(serviceName) else {
+            throw AuthSessionFailure.sessionChanged
+        }
+        try backing.replaceAtomically(with: nil)
     }
 }
 
@@ -238,6 +258,12 @@ extension WireframeRoot {
         }
         return snapshot
     }
+}
+
+/// The live catalog remains empty until the backend provides its required document IDs and versions.
+/// This prevents a UI fixture consent from being sent as an operational signup acceptance.
+enum WireframeSocialLoginTerms {
+    static let catalog = SocialLoginConsentCatalog(required: [])
 }
 
 #if DEBUG

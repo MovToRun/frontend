@@ -10,7 +10,7 @@ struct MovApp: App {
             }
         }
     }
-    @AppStorage("appearance") private var appearance = ThemePreference.system.rawValue
+    @AppStorage("appearance", store: WWireDefaults.resolve().defaults) private var appearance = ThemePreference.system.rawValue
     var body: some Scene {
         WindowGroup {
             RootView()

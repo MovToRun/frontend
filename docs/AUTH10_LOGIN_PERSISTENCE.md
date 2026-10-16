@@ -24,6 +24,8 @@ AUTH04 login, AUTH05–07 social completion, AUTH08–09 account changes, and AU
 
 The `-wire-auth-session-flow-fixture` path exists only in Debug UI tests and requires a UUID-scoped Keychain service with the `com.movtorun.ui-fixture.auth-session.` prefix. Its static JWT-shaped values come from a mock API transport. It never reads or writes the app's shared Keychain service, and teardown removes only that fixture item. Existing screen-review fixtures continue to use their labeled local navigation demo.
 
+Fixture cleanup is available only in Debug when the launch arguments resolve to a validated UUID fixture service and the root holds that dedicated fixture store. Release ignores the cleanup flag and uses the shared production store only through normal app flows. Appearance `@AppStorage` uses the explicit test suite for Debug fixture launches; ordinary launches continue using standard defaults.
+
 ## Verification
 
 `AuthSessionPersistenceTests` uses a mock Keychain backend with unique per-test services; tests never access existing app Keychain items. Coverage includes recreation of the store across a simulated relaunch, device-only/non-synchronizing storage policy, refresh response loss and exact retry, the server's remaining TTL on a replay, one network request for concurrent refresh callers, cancellation and stale/account-changed responses, atomic replacement failure retaining the pending old token pair, social-login persistence failure retaining the old snapshot, and refresh/logout cleanup behavior. The focused iPhone 17 Pro UI fixtures exercise login, launch refresh/retry, expired-session clearing, account-identity mismatch, Keychain write failure, and confirmed logout using UUID-scoped Keychain services.

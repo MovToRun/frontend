@@ -1,5 +1,47 @@
 import Foundation
 
+enum AuthSessionFixtureLaunchPolicy {
+    static let servicePrefix = "com.movtorun.ui-fixture.auth-session."
+
+    static func defaultsSuiteName(arguments: [String]) -> String? {
+        #if DEBUG
+        if let index = arguments.firstIndex(of: "-wire-test-store-suite"),
+           arguments.indices.contains(index + 1), !arguments[index + 1].isEmpty {
+            return arguments[index + 1]
+        }
+        if arguments.contains("-wire-fixture") { return "mov.wireframe.review" }
+        #endif
+        return nil
+    }
+
+    static func isFixtureServiceName(_ service: String) -> Bool {
+        guard service.hasPrefix(servicePrefix) else { return false }
+        return UUID(uuidString: String(service.dropFirst(servicePrefix.count))) != nil
+    }
+
+    static func fixtureServiceName(arguments: [String]) -> String? {
+        #if DEBUG
+        guard arguments.contains("-wire-fixture"),
+              arguments.contains("-wire-auth-session-flow-fixture"),
+              let index = arguments.firstIndex(of: "-wire-auth-session-fixture-service"),
+              arguments.indices.contains(index + 1) else { return nil }
+        let service = arguments[index + 1]
+        return isFixtureServiceName(service) ? service : nil
+        #else
+        nil
+        #endif
+    }
+
+    static func cleanupServiceName(arguments: [String]) -> String? {
+        #if DEBUG
+        guard arguments.contains("-wire-auth-session-fixture-cleanup") else { return nil }
+        return fixtureServiceName(arguments: arguments)
+        #else
+        nil
+        #endif
+    }
+}
+
 protocol SessionLogoutRequesting: Sendable {
     func logout() async throws
 }

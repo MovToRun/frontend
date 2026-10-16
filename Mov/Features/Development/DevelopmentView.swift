@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Temporary component check screen; not the product home screen.
 struct DevelopmentView: View {
-    @AppStorage("appearance") private var appearance = ThemePreference.system.rawValue
+    @AppStorage("appearance", store: WWireDefaults.resolve().defaults) private var appearance = ThemePreference.system.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @State private var didTap = false

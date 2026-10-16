@@ -26,11 +26,9 @@ struct WCommunityComposerSnapshot:Equatable {
 
 enum WWireDefaults {
     static func resolve(arguments:[String] = ProcessInfo.processInfo.arguments)->(defaults:UserDefaults,suiteName:String?) {
-        if let index=arguments.firstIndex(of:"-wire-test-store-suite"),arguments.indices.contains(index+1),!arguments[index+1].isEmpty {
-            let suite=arguments[index+1]
+        if let suite=AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments:arguments) {
             return (UserDefaults(suiteName:suite)!,suite)
         }
-        if arguments.contains("-wire-fixture") { return (UserDefaults(suiteName:"mov.wireframe.review")!,"mov.wireframe.review") }
         return (.standard,nil)
     }
 }
@@ -3627,6 +3625,9 @@ struct WireframeRoot:View {
     @State var remoteReads:WireframeRemoteReadBridge
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
+    #if DEBUG
+    @State var authSessionFixtureStore: WireframeAuthSessionFixtureStore?
+    #endif
     @State var authSessionClient: AuthSessionClient?
     @State var authLoginBusy = false
     @State var authLoginInvocationID: UUID?
@@ -3655,6 +3656,9 @@ struct WireframeRoot:View {
         let args=ProcessInfo.processInfo.arguments
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
+        #if DEBUG
+        _authSessionFixtureStore=State(initialValue:remoteReadDependencies?.authSessionStore as? WireframeAuthSessionFixtureStore)
+        #endif
         _authSessionClient=State(initialValue:remoteReadDependencies?.authSessionClient)
         #if DEBUG
         let socialLoginFixture: SocialLoginCoordinator? = {
@@ -3735,7 +3739,7 @@ struct WireframeRoot:View {
     @FocusState var authInput:String?
     @FocusState var communitySearchFocused:Bool
     @State var splash=true
-    @AppStorage("appearance") var appearance="system"
+    @AppStorage("appearance",store:WWireDefaults.resolve().defaults) var appearance="system"
     @Environment(\.accessibilityReduceMotion) var systemMotion
     var reduceMotion:Bool{systemMotion || ProcessInfo.processInfo.arguments.contains("-wire-reduced")}
     @Namespace var indicator
@@ -3905,13 +3909,17 @@ struct WireframeRoot:View {
     }
     func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
-                if args.contains("-wire-auth-session-fixture-cleanup") {
-                    do { try authSessionStore?.replaceAtomically(with: nil) }
+#if DEBUG
+                if let cleanupService = AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: args),
+                   let fixtureStore = authSessionFixtureStore,
+                   fixtureStore.serviceName == cleanupService {
+                    do { try fixtureStore.clearFixtureSession() }
                     catch { ui.error="테스트 세션을 정리하지 못했어요." }
                     ui.setLoggedIn(false);ui.save();ui.authFilled=false
                     splash=false;ui.screen="A01";ui.rootIndex=2
                     return
                 }
+#endif
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
                 if WReviewMode.tools && args.contains("-wire-community-not-member"){ui.communityJoinedCrewIDs.removeAll()}
                 if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-crew"),args.indices.contains(i+1){ui.communitySelectedCrewID=args[i+1]}
