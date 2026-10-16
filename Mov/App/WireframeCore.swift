@@ -3656,6 +3656,7 @@ struct WireframeRoot:View {
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         _authSessionClient=State(initialValue:remoteReadDependencies?.authSessionClient)
+        #if DEBUG
         let socialLoginFixture: SocialLoginCoordinator? = {
             guard WReviewMode.tools, args.contains("-wire-social-login-fixture") else{return nil}
             let service=WireframeSocialLoginServiceFixture(
@@ -3669,6 +3670,9 @@ struct WireframeRoot:View {
             let credentials=WireframeSocialLoginCredentialFixture(cancelled:args.contains("-wire-social-login-cancel"))
             return SocialLoginCoordinator(service:service,credentials:credentials,sessionStore:remoteReadDependencies?.authSessionStore)
         }()
+        #else
+        let socialLoginFixture: SocialLoginCoordinator? = nil
+        #endif
         _socialLoginCoordinator=State(initialValue:socialLoginFixture)
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults
@@ -4756,7 +4760,13 @@ private struct WScreenClip:Shape {
 
 // Review controls never appear in a normal launch. Tests can isolate storage while exercising user-facing UI.
 enum WReviewMode {
-    static var tools:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && !ProcessInfo.processInfo.arguments.contains("-wire-user-flow")}
+    static var tools:Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-wire-fixture") && !ProcessInfo.processInfo.arguments.contains("-wire-user-flow")
+        #else
+        false
+        #endif
+    }
 }
 
 // Storefront outline matches the weight and 24pt grid of the existing navigation icons.

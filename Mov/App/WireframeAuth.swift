@@ -8,8 +8,8 @@ struct WireframeAuthSessionComposition {
     let apiClient: (any APIResponseSending)?
 
     static func resolve(arguments: [String]) -> WireframeAuthSessionComposition {
+        #if DEBUG
         if arguments.contains("-wire-auth-session-flow-fixture") {
-            #if DEBUG
             guard arguments.contains("-wire-fixture"),
                   let service = argument("-wire-auth-session-fixture-service", in: arguments),
                   service.hasPrefix("com.movtorun.ui-fixture.auth-session."),
@@ -22,9 +22,6 @@ struct WireframeAuthSessionComposition {
             let store = KeychainAuthSessionStore(service: service, keychain: keychain)
             let apiClient = WireframeAuthSessionFixtureTransport(arguments: arguments)
             return .init(store: store, client: AuthSessionClient(apiClient: apiClient, sessionStore: store), apiClient: apiClient)
-            #else
-            return .init(store: nil, client: nil, apiClient: nil)
-            #endif
         }
 
         // Screen preview and user-flow fixtures must never touch a person's shared
@@ -35,6 +32,7 @@ struct WireframeAuthSessionComposition {
             }
             return .init(store: nil, client: nil, apiClient: nil)
         }
+        #endif
 
         let store = KeychainAuthSessionStore.shared
         guard let configuration = try? APIClientConfiguration.bundled() else {
@@ -50,6 +48,7 @@ struct WireframeAuthSessionComposition {
     }
 }
 
+#if DEBUG
 private final class WireframeAuthSessionMemoryStore: AuthSessionStoring, @unchecked Sendable {
     let mutationCoordinator = AuthSessionMutationCoordinator()
     private let lock = NSLock()
@@ -66,7 +65,6 @@ private final class WireframeAuthSessionMemoryStore: AuthSessionStoring, @unchec
     }
 }
 
-#if DEBUG
 private final class WireframeAuthSessionFixtureKeychainAccess: AuthSessionKeychainAccess, @unchecked Sendable {
     private let base = SecurityAuthSessionKeychainAccess()
     private let lock = NSLock()
@@ -242,6 +240,7 @@ extension WireframeRoot {
     }
 }
 
+#if DEBUG
 enum WireframeSocialLoginFixtureTerms {
     static let catalog=SocialLoginConsentCatalog(required:[
         SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)
@@ -335,6 +334,7 @@ struct WireframeSocialLoginCredentialFixture: SocialLoginCredentialProviding {
         cancelled ? nil : "fixture-only-\(provider.rawValue)-credential"
     }
 }
+#endif
 
 /// A non-secret session snapshot used only by password-reset UI tests.
 final class WireframePasswordResetSessionFixtureStore: AuthSessionStoring, @unchecked Sendable {
@@ -450,8 +450,12 @@ extension WireframeRoot {
         guard validateAuth(id) else{return}
         switch id {
         case "A01":
+            #if DEBUG
             if reviewTools && authSessionClient == nil { ui.setLoggedIn(true);ui.save();go("H00") }
             else { submitEmailLogin() }
+            #else
+            submitEmailLogin()
+            #endif
         case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;issueEmailChallenge();go("A19")
         case "A10":submitPasswordResetRequest()
         case "A12":submitPasswordReset()

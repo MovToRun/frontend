@@ -247,6 +247,32 @@ final class AuthSessionPersistenceTests: XCTestCase {
         XCTAssertEqual(try store.loadSnapshot(), old)
     }
 
+    func testCancelledLoginIgnoresLateSuccessfulResponseAndDoesNotPersistSession() async throws {
+        let store = makeStore()
+        let transport = GatedAuthSessionTransport()
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "fixture-password", deviceID: UUID())
+        }
+        await transport.waitForRequestCount(1)
+        login.cancel()
+        await transport.respond(tokenResponse(
+            access: serverAccessToken(memberID: "41", marker: "cancelled-login-late-success"),
+            refresh: "fixture-cancelled-login-refresh"
+        ))
+
+        do {
+            _ = try await login.value
+            XCTFail("A successful response returned after cancellation must not complete login")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+        let requestCount = await transport.requestCount()
+        XCTAssertEqual(requestCount, 1)
+    }
+
     func testRestoreAfterLaunchRefreshesSavedSessionAndDoesNothingWhenNoSessionExists() async throws {
         let emptyStore = makeStore()
         let unusedTransport = ScriptedAuthSessionTransport([])
