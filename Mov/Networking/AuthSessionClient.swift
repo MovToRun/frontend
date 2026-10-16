@@ -183,6 +183,7 @@ actor AuthSessionMutationCoordinator {
     }
 
     func commitLogin(_ snapshot: AuthSessionSnapshot, lease: UUID, store: any AuthSessionStoring) throws {
+        guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
         guard activeLoginID == lease,
               activeLoginVersion == mutationVersion,
               activeLogoutID == nil else {
@@ -399,6 +400,7 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
     }
 
     func login(email: String, password: String, deviceID: UUID) async throws -> AuthSessionSnapshot {
+        guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
         let store = try requiredStore()
         let body: Data
         do {
@@ -417,6 +419,7 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             throw AuthSessionFailure.sessionChanged
         }
         do {
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             let response = try await apiClient.sendResponse(
                 path: "auth/login",
                 method: "POST",
@@ -424,9 +427,11 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
                 headers: Self.jsonHeaders,
                 queryItems: []
             )
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             guard response.statusCode == 200 else { throw Self.mapResponseFailure(response, isLogin: true) }
 
             let snapshot = try Self.decodeSession(response.data, refreshRequestID: nil)
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             try await coordinator.commitLogin(snapshot, lease: lease, store: store)
             return snapshot
         } catch let failure as AuthSessionFailure {

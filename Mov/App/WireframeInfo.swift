@@ -280,13 +280,14 @@ extension WireframeRoot {
             if socialLoginCompletionSubmitted {
                 guard let request=socialLoginPendingCompletion else{return}
                 do {
-                    _=try await coordinator.complete(request)
+                    let tokens=try await coordinator.complete(request)
+                    let snapshot=try loadCommittedSocialSnapshot(tokens)
                     guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
                     socialLoginCompletionSubmitted=false
                     socialLoginPendingCompletion=nil
                     socialLoginPendingAttempt=nil
                     socialLoginNextCompletionRequestID=nil
-                    ui.setLoggedIn(true);ui.save()
+                    applyAuthenticatedSnapshot(snapshot)
                     socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
                     go("H00")
                 } catch let failure as SocialLoginFailure {
@@ -328,12 +329,13 @@ extension WireframeRoot {
                 socialLoginPendingCompletion=request
                 socialLoginCompletionSubmitted=true
                 do {
-                    _=try await coordinator.complete(request)
+                    let tokens=try await coordinator.complete(request)
+                    let snapshot=try loadCommittedSocialSnapshot(tokens)
                     guard socialLoginInvocationID==invocationID,ui.screen=="A14" else{return}
                     socialLoginCompletionSubmitted=false
                     socialLoginPendingCompletion=nil
                     socialLoginPendingAttempt=nil
-                    ui.setLoggedIn(true);ui.save()
+                    applyAuthenticatedSnapshot(snapshot)
                     socialLoginInvocationID=nil;socialLoginBusy=false;socialLoginTask=nil
                     go("H00")
                 } catch let failure as SocialLoginFailure {
@@ -383,7 +385,9 @@ extension WireframeRoot {
     case "reset-email":if ui.path.last=="A10"{back()}else{go("A10")}
     case "reset-verification":guard ui.screen=="A11",ui.passwordReset.issuedAt != nil else{return};go("A24")
     case "consent-reviewed":ui.error="";if ui.consentTopic=="이용약관"{ui.consentTerms=true}else{ui.consentPrivacy=true};back()
-    case "local-login":ui.setLoggedIn(true);ui.save();go("H00")
+    case "local-login":
+        if reviewTools {ui.setLoggedIn(true);ui.save();go("H00")}
+        else {go("A01");ui.error="계정 인증을 확인할 수 없어 로그인 화면으로 이동했어요."}
     case "switch-local-account":if reviewTools{store.cancelPendingRunUploadDrain();ui.switchLocalAccount(store,clearShare:{shareWorkspace.clear()})}
     case "save":saveRun()
     case "delete-week":
@@ -411,15 +415,22 @@ extension WireframeRoot {
             remoteReads.requestSessionLogout(accountScopeID:ui.remoteAccountScopeID,screen:"T10")
             return
         }
-        store.cancelPendingRunUploadDrain()
-        ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
+        if reviewTools {
+            store.cancelPendingRunUploadDrain()
+            ui.setLoggedIn(false);ui.save();ui.authFilled=false;go("A01")
+        } else {
+            ui.error="로그아웃 서버 설정을 확인할 수 없어 로그아웃하지 않았어요."
+        }
     case "test-account-scope-switch":
         guard ui.screen=="T17",
               ProcessInfo.processInfo.arguments.contains("-wire-account-link-scope-switch-regression") else{return}
         ui.resetRemoteAccountScope()
         remoteReads.accountDidChange(to:ui.remoteAccountScopeID)
         go("T05")
-    case "social-success":guard ui.screen=="A14", !ui.provider.isEmpty,!socialLoginBusy else{return};ui.verified=true;if socialLoginCoordinator != nil{runSocialLoginFixture()}else if ui.profile.providers.contains(ui.provider){ui.setLoggedIn(true);ui.save();go("H00")}else{ui.consentTerms=false;ui.consentPrivacy=false;go("A02")}
+    case "social-success":
+        guard ui.screen=="A14",!ui.provider.isEmpty,!socialLoginBusy else{return}
+        guard socialLoginCoordinator != nil else {ui.error="선택한 소셜 로그인을 사용할 수 없어요. 로그인 연결을 확인해 주세요.";return}
+        ui.verified=true;runSocialLoginFixture()
     case "link":
         guard ui.screen=="T06" else{return}
         if remoteReads.shouldUseAccountLinkUI {

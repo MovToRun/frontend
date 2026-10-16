@@ -151,7 +151,7 @@ private final class AuthSessionKeychainCoordinatorRegistry: @unchecked Sendable 
     }
 }
 
-private struct SecurityAuthSessionKeychainAccess: AuthSessionKeychainAccess {
+struct SecurityAuthSessionKeychainAccess: AuthSessionKeychainAccess {
     func readData(service: String, account: String, synchronizable: Bool) throws -> Data? {
         var query = Self.identityQuery(service: service, account: account, synchronizable: synchronizable)
         query[kSecReturnData as String] = true

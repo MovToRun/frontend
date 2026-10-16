@@ -1,5 +1,247 @@
 import SwiftUI
 
+/// The normal app root owns one Keychain store and shares it with every auth
+/// consumer. Fixture arguments are accepted only with an isolated service name.
+struct WireframeAuthSessionComposition {
+    let store: (any AuthSessionStoring)?
+    let client: AuthSessionClient?
+    let apiClient: (any APIResponseSending)?
+
+    static func resolve(arguments: [String]) -> WireframeAuthSessionComposition {
+        if arguments.contains("-wire-auth-session-flow-fixture") {
+            #if DEBUG
+            guard arguments.contains("-wire-fixture"),
+                  let service = argument("-wire-auth-session-fixture-service", in: arguments),
+                  service.hasPrefix("com.movtorun.ui-fixture.auth-session."),
+                  UUID(uuidString: String(service.dropFirst("com.movtorun.ui-fixture.auth-session.".count))) != nil else {
+                return .init(store: nil, client: nil, apiClient: nil)
+            }
+            let keychain = WireframeAuthSessionFixtureKeychainAccess(
+                failNextReplacement: arguments.contains("-wire-auth-session-fail-write-once")
+            )
+            let store = KeychainAuthSessionStore(service: service, keychain: keychain)
+            let apiClient = WireframeAuthSessionFixtureTransport(arguments: arguments)
+            return .init(store: store, client: AuthSessionClient(apiClient: apiClient, sessionStore: store), apiClient: apiClient)
+            #else
+            return .init(store: nil, client: nil, apiClient: nil)
+            #endif
+        }
+
+        // Screen preview and user-flow fixtures must never touch a person's shared
+        // Keychain entry. Social fixtures receive a fresh in-memory store below.
+        if arguments.contains("-wire-fixture") || arguments.contains("-wire-user-flow") {
+            if arguments.contains("-wire-social-login-fixture") {
+                return .init(store: WireframeAuthSessionMemoryStore(), client: nil, apiClient: nil)
+            }
+            return .init(store: nil, client: nil, apiClient: nil)
+        }
+
+        let store = KeychainAuthSessionStore.shared
+        guard let configuration = try? APIClientConfiguration.bundled() else {
+            return .init(store: store, client: nil, apiClient: nil)
+        }
+        let apiClient = APIClient(configuration: configuration)
+        return .init(store: store, client: AuthSessionClient(apiClient: apiClient, sessionStore: store), apiClient: apiClient)
+    }
+
+    private static func argument(_ name: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else { return nil }
+        return arguments[index + 1]
+    }
+}
+
+private final class WireframeAuthSessionMemoryStore: AuthSessionStoring, @unchecked Sendable {
+    let mutationCoordinator = AuthSessionMutationCoordinator()
+    private let lock = NSLock()
+    private var snapshot: AuthSessionSnapshot?
+
+    func loadSnapshot() throws -> AuthSessionSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return snapshot
+    }
+
+    func replaceAtomically(with snapshot: AuthSessionSnapshot?) throws {
+        lock.lock(); defer { lock.unlock() }
+        self.snapshot = snapshot
+    }
+}
+
+#if DEBUG
+private final class WireframeAuthSessionFixtureKeychainAccess: AuthSessionKeychainAccess, @unchecked Sendable {
+    private let base = SecurityAuthSessionKeychainAccess()
+    private let lock = NSLock()
+    private var failNextReplacement: Bool
+
+    init(failNextReplacement: Bool) { self.failNextReplacement = failNextReplacement }
+
+    func readData(service: String, account: String, synchronizable: Bool) throws -> Data? {
+        try base.readData(service: service, account: account, synchronizable: synchronizable)
+    }
+
+    func replaceData(
+        _ data: Data,
+        service: String,
+        account: String,
+        accessibility: AuthSessionKeychainAccessibility,
+        synchronizable: Bool
+    ) throws {
+        lock.lock()
+        let shouldFail = failNextReplacement
+        failNextReplacement = false
+        lock.unlock()
+        if shouldFail { throw AuthSessionKeychainStoreError.keychainUnavailable }
+        try base.replaceData(data, service: service, account: account, accessibility: accessibility, synchronizable: synchronizable)
+    }
+
+    func deleteData(service: String, account: String, synchronizable: Bool) throws {
+        try base.deleteData(service: service, account: account, synchronizable: synchronizable)
+    }
+}
+
+private actor WireframeAuthSessionFixtureTransport: APIResponseSending {
+    private let rejectsLogin: Bool
+    private let refreshFailure: String?
+
+    init(arguments: [String]) {
+        rejectsLogin = arguments.contains("-wire-auth-login-unauthorized")
+        refreshFailure = arguments.contains("-wire-auth-refresh-unauthenticated") ? "unauthenticated"
+            : arguments.contains("-wire-auth-refresh-timeout") ? "timeout"
+            : arguments.contains("-wire-auth-refresh-account-changed") ? "account-changed" : nil
+    }
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        switch path {
+        case "auth/login":
+            guard !rejectsLogin,
+                  let body,
+                  let request = try? JSONDecoder().decode(LoginRequest.self, from: body),
+                  request.email == "runner@example.test", request.password == "MovDemo482619" else {
+                return .init(statusCode: 401, data: Data(), requestID: "fixture-auth-login-rejected")
+            }
+            return Self.tokenResponse(memberID: "41", refreshToken: "fixture-refresh-41")
+        case "auth/token/refresh":
+            switch refreshFailure {
+            case "unauthenticated": return .init(statusCode: 401, data: Data(), requestID: "fixture-auth-refresh-expired")
+            case "timeout": throw APIClientError.transport(.timedOut)
+            case "account-changed": return Self.tokenResponse(memberID: "99", refreshToken: "fixture-refresh-99")
+            default: return Self.tokenResponse(memberID: "41", refreshToken: "fixture-refresh-41-next")
+            }
+        case "auth/logout":
+            return .init(statusCode: 204, data: Data(), requestID: "fixture-auth-logout")
+        default:
+            return .init(statusCode: 404, data: Data(), requestID: "fixture-auth-unavailable")
+        }
+    }
+
+    private static func tokenResponse(memberID: String, refreshToken: String) -> APIClientResponse {
+        // These JWT-shaped strings are static mock-server responses, not app-issued tokens.
+        let accessToken = memberID == "99"
+            ? "fixture-header.eyJzdWIiOiI5OSJ9.fixture-signature"
+            : "fixture-header.eyJzdWIiOiI0MSJ9.fixture-signature"
+        let data = try! JSONSerialization.data(withJSONObject: [
+            "accessToken": accessToken,
+            "refreshToken": refreshToken,
+            "tokenType": "Bearer",
+            "accessExpiresInSeconds": 900,
+            "refreshExpiresInSeconds": 604_800
+        ])
+        return .init(statusCode: 200, data: data, requestID: "fixture-auth-session")
+    }
+
+    private struct LoginRequest: Decodable {
+        let email: String
+        let password: String
+    }
+}
+#endif
+
+extension WireframeRoot {
+    func restoreAuthSessionForLaunch() async {
+        defer { splash = false }
+        guard !Task.isCancelled else { return }
+
+        let savedSnapshot: AuthSessionSnapshot?
+        do {
+            savedSnapshot = try authSessionStore?.loadSnapshot()
+        } catch {
+            routeToSignedOut(message: "저장된 로그인을 안전하게 확인하지 못했어요.")
+            return
+        }
+
+        guard let savedSnapshot else {
+            // UserDefaults is a display cache only. A stale `logged` bit never opens
+            // the authenticated screens without a server-issued Keychain snapshot.
+            routeToSignedOut(message: "")
+            return
+        }
+        guard let authSessionClient else {
+            routeToSignedOut(message: "로그인 서버 설정이 없어 저장된 로그인을 확인할 수 없어요.")
+            return
+        }
+
+        do {
+            guard let snapshot = try await authSessionClient.restoreAfterAppLaunch() else {
+                routeToSignedOut(message: "")
+                return
+            }
+            guard !Task.isCancelled else { return }
+            if snapshot.memberID != savedSnapshot.memberID { ui.resetRemoteAccountScope() }
+            ui.setLoggedIn(true);ui.save();ui.error=""
+            ui.screen = store.session == nil ? "H00" : "H06"
+            ui.rootIndex = 2
+        } catch let failure as AuthSessionFailure {
+            guard !Task.isCancelled else { return }
+            let message: String
+            switch failure {
+            case .unauthenticated:
+                message = "로그인이 만료됐어요. 다시 로그인해 주세요."
+            case .storageUnavailable:
+                message = "로그인을 안전하게 확인하지 못했어요. 이 기기 설정을 확인해 주세요."
+            case .memberIdentityChanged, .sessionChanged:
+                message = "계정 상태가 바뀌었어요. 다시 로그인해 주세요."
+            case .transport, .serviceUnavailable, .serverFailure:
+                message = "저장된 로그인을 확인하지 못했어요. 연결을 확인하고 다시 시도해 주세요."
+            case .cancelled:
+                message = "로그인 확인이 취소됐어요. 다시 시도해 주세요."
+            default:
+                message = "저장된 로그인을 확인하지 못했어요. 다시 로그인해 주세요."
+            }
+            routeToSignedOut(message: message)
+        } catch {
+            guard !Task.isCancelled else { return }
+            routeToSignedOut(message: "저장된 로그인을 확인하지 못했어요. 다시 로그인해 주세요.")
+        }
+    }
+
+    func routeToSignedOut(message: String) {
+        ui.setLoggedIn(false);ui.save();ui.authFilled=false
+        ui.error=message;ui.authErrorField=""
+        ui.screen="A01";ui.rootIndex=2
+    }
+
+    func applyAuthenticatedSnapshot(_ snapshot: AuthSessionSnapshot, replacing previousMemberID: String? = nil) {
+        if let previousMemberID, previousMemberID != snapshot.memberID { ui.resetRemoteAccountScope() }
+        ui.setLoggedIn(true);ui.save();ui.error="";ui.authErrorField=""
+        ui.authPassword="";ui.authConfirm="";ui.authCurrent="";ui.authFilled=false
+    }
+
+    func loadCommittedSocialSnapshot(_ tokens: SocialLoginSessionTokens) throws -> AuthSessionSnapshot {
+        guard let authSessionStore, let snapshot=try authSessionStore.loadSnapshot() else {
+            throw SocialLoginFailure.storageUnavailable
+        }
+        guard let issued=try? AuthSessionSnapshot.fromServerIssuedTokens(
+            accessToken:tokens.accessToken,
+            refreshToken:tokens.refreshToken,
+            tokenType:tokens.tokenType,
+            accessExpiresInSeconds:tokens.accessExpiresInSeconds,
+            refreshExpiresInSeconds:tokens.refreshExpiresInSeconds
+        ),issued.memberID==snapshot.memberID,issued.refreshToken==snapshot.refreshToken else {
+            throw SocialLoginFailure.invalidResponse
+        }
+        return snapshot
+    }
+}
+
 enum WireframeSocialLoginFixtureTerms {
     static let catalog=SocialLoginConsentCatalog(required:[
         SocialLoginConsent(documentId:"terms.test.privacy",version:"fixture-v1",accepted:true)
@@ -17,7 +259,7 @@ actor WireframeSocialLoginServiceFixture: SocialLoginServing {
     private var failedCompletionRequest: SocialLoginCompletionRequest?
     private let challenge = SocialLoginChallenge(state: String(repeating: "s", count: 43), nonce: String(repeating: "n", count: 43), expiresInSeconds: 600)
     private let proof = SocialLoginProof(socialSignupProof: String(repeating: "p", count: 43), expiresInSeconds: 600)
-    private let tokens = SocialLoginSessionTokens(accessToken: "fixture-only-access", refreshToken: "fixture-only-refresh", tokenType: "Bearer", accessExpiresInSeconds: 900, refreshExpiresInSeconds: 604_800)
+    private let tokens = SocialLoginSessionTokens(accessToken: "fixture-header.eyJzdWIiOiI5OSJ9.fixture-signature", refreshToken: "fixture-only-refresh", tokenType: "Bearer", accessExpiresInSeconds: 900, refreshExpiresInSeconds: 604_800)
 
     init(
         requiresSignup: Bool,
@@ -169,13 +411,16 @@ extension WireframeRoot {
                     if reviewTools{Button{if id=="A10"{ui.passwordReset.email="runner@example.test";ui.passwordReset.error=""}else if id=="A12"{ui.passwordReset.newPassword="MovDemo482619";ui.passwordReset.confirmPassword="MovDemo482619";ui.passwordReset.error=""}else{ui.authFilled=true;ui.authEmail="runner@example.test";ui.authPassword="MovDemo482619";ui.authConfirm=ui.authPassword;ui.authCurrent=ui.authPassword;ui.error=""}}label:{Text("가상 예시값 채우기").font(W.font(12)).frame(maxWidth:.infinity,minHeight:36,alignment:.leading).contentShape(Rectangle())}.buttonStyle(.plain)}
                     if !ui.passwordReset.error.isEmpty && ["A10","A12"].contains(id){WAuthNotice(text:ui.passwordReset.error,danger:true).padding(.vertical,8)}
                     if !ui.error.isEmpty && ui.authErrorField.isEmpty{WAuthNotice(text:ui.error,danger:true).padding(.vertical,8)}
-                    Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).disabled((id=="A10" && ui.passwordReset.isRequestingCode) || (id=="A12" && ui.passwordReset.isCompleting)).accessibilityIdentifier("authPrimary")
+                    if id=="A01",authSessionClient==nil,!reviewTools {
+                        WAuthNotice(text:"로그인 서버 설정이 없어 로그인할 수 없어요.",danger:true).accessibilityIdentifier("authLoginUnavailable").padding(.top,8)
+                    }
+                    Button(authSubmitTitle(id)){submitAuth(id)}.buttonStyle(WButtonStyle()).padding(.top,9).disabled((id=="A01" && authLoginBusy) || (id=="A10" && ui.passwordReset.isRequestingCode) || (id=="A12" && ui.passwordReset.isCompleting)).accessibilityIdentifier("authPrimary")
                 }
                 if id=="A01"{
                     VStack(spacing:0){
-                        HStack(spacing:24){Button("회원가입"){ui.authFilled=false;ui.provider="이메일";go("A07")};Button("비밀번호 찾기"){ui.authFilled=false;ui.resetBack="A01";go("A10")}}.buttonStyle(.plain).font(W.font(12,.semibold)).frame(maxWidth:.infinity,minHeight:44)
+                        HStack(spacing:24){Button("회원가입"){ui.authFilled=false;ui.provider="이메일";go("A07")}.disabled(authLoginBusy);Button("비밀번호 찾기"){ui.authFilled=false;ui.resetBack="A01";go("A10")}.disabled(authLoginBusy)}.buttonStyle(.plain).font(W.font(12,.semibold)).frame(maxWidth:.infinity,minHeight:44)
                         HStack(spacing:12){W.line.frame(height:1);Text("또는 소셜 계정으로").font(W.font(12)).fixedSize();W.line.frame(height:1)}.frame(height:18).padding(.top,14).padding(.bottom,16)
-                        HStack(spacing:18){ForEach(["카카오","네이버","Google","Apple"],id:\.self){provider in Button{ui.provider=provider;go("A14")}label:{providerMark(provider)}.accessibilityLabel(provider+"로 로그인")}}.frame(maxWidth:.infinity)
+                        HStack(spacing:18){ForEach(["카카오","네이버","Google","Apple"],id:\.self){provider in Button{ui.provider=provider;go("A14")}label:{providerMark(provider)}.accessibilityLabel(provider+"로 로그인").disabled(authLoginBusy)}}.frame(maxWidth:.infinity)
                         authDemoNote.frame(maxWidth:.infinity,alignment:.leading).padding(.top,10)
                     }.padding(.top,-13)
                 }
@@ -204,13 +449,62 @@ extension WireframeRoot {
         if ["A16","A17"].contains(id) && !ui.settingsGrant{ui.pending=id;ui.pendingBack="T05";go("T15");return}
         guard validateAuth(id) else{return}
         switch id {
-        case "A01":ui.setLoggedIn(true);ui.save();go("H00")
+        case "A01":
+            if reviewTools && authSessionClient == nil { ui.setLoggedIn(true);ui.save();go("H00") }
+            else { submitEmailLogin() }
         case "A07":ui.consentTerms=false;ui.consentPrivacy=false;ui.verified=false;issueEmailChallenge();go("A19")
         case "A10":submitPasswordResetRequest()
         case "A12":submitPasswordReset()
         case "A16":ui.passwordChanged=false;if !ui.profile.providers.contains("이메일"){ui.profile.providers.append("이메일")};ui.save();go("A18")
         case "A17":ui.setLoggedIn(false);ui.save();ui.authFilled=false;ui.passwordChanged=true;go("A18")
         default:break
+        }
+    }
+
+    func submitEmailLogin() {
+        guard ui.screen=="A01",!authLoginBusy else{return}
+        guard let authSessionClient, let authSessionStore else {
+            ui.authErrorField="";ui.error="로그인 서버 설정을 확인할 수 없어요."
+            return
+        }
+        let invocationID=UUID()
+        let email=ui.authEmail.trimmingCharacters(in:.whitespacesAndNewlines)
+        let password=ui.authPassword
+        let previousMemberID=(try? authSessionStore.loadSnapshot())?.memberID
+        authLoginInvocationID=invocationID;authLoginBusy=true;ui.error="";ui.authErrorField=""
+        authLoginTask=Task { @MainActor in
+            defer {
+                if authLoginInvocationID==invocationID {
+                    authLoginInvocationID=nil;authLoginBusy=false;authLoginTask=nil
+                }
+            }
+            do {
+                let committed=try await authSessionClient.login(email:email,password:password,deviceID:UUID())
+                guard authLoginInvocationID==invocationID,ui.screen=="A01",!Task.isCancelled else{return}
+                guard let stored=try authSessionStore.loadSnapshot(),stored==committed else {
+                    throw AuthSessionFailure.storageUnavailable
+                }
+                applyAuthenticatedSnapshot(stored,replacing:previousMemberID)
+                authLoginInvocationID=nil;authLoginBusy=false;authLoginTask=nil
+                go(store.session == nil ? "H00":"H06")
+            } catch let failure as AuthSessionFailure {
+                guard authLoginInvocationID==invocationID,ui.screen=="A01",!Task.isCancelled else{return}
+                ui.error=Self.loginMessage(for:failure);ui.authErrorField=""
+            } catch {
+                guard authLoginInvocationID==invocationID,ui.screen=="A01",!Task.isCancelled else{return}
+                ui.error="로그인을 마치지 못했어요. 다시 시도해 주세요.";ui.authErrorField=""
+            }
+        }
+    }
+
+    private static func loginMessage(for failure:AuthSessionFailure)->String {
+        switch failure {
+        case .invalidCredentials: return "이메일 또는 비밀번호를 확인해 주세요."
+        case .storageUnavailable: return "로그인을 이 기기에 안전하게 저장하지 못했어요. 다시 시도해 주세요."
+        case .serviceUnavailable,.transport: return "로그인 서버에 연결할 수 없어요. 연결을 확인하고 다시 시도해 주세요."
+        case .cancelled: return "로그인이 취소됐어요. 다시 시도해 주세요."
+        case .sessionChanged,.memberIdentityChanged: return "계정 상태가 바뀌었어요. 다시 로그인해 주세요."
+        default: return "로그인을 마치지 못했어요. 입력한 정보를 확인해 주세요."
         }
     }
     @ViewBuilder var authDemoNote:some View {if reviewTools{Text("SIMULATION · 가상 값으로만 확인해 주세요\n실제 가입·인증·메일 발송 없이 동작해요").font(W.font(11)).lineSpacing(5).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)}}
