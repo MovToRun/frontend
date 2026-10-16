@@ -23,8 +23,9 @@
 
 - A C09 share-preview draft captures its authenticated member and remote account-scope ID when the composer starts. A scope change now resets community composer state from any screen, including preview, and publish checks the captured binding against both the active member and live auth snapshot before sending.
 - Separate `WindowGroup` stores/services now share a process-wide, root-and-member keyed execution lease. Lease generations prevent stale scene cleanup from releasing a newer operation. The lease remains held through upload/create/attachment verification, and a durable compare-and-set writes `creatingPost` immediately before the non-idempotent create request.
-- Successful operation cleanup writes a compact completion tombstone before deleting draft text and attachment bytes. A stale scene cannot recreate the same completed operation ID; a new operation ID can proceed normally.
+- Successful operation cleanup adds the completed operation ID to a durable per-member ledger before deleting draft text and attachment bytes. The ledger keeps all completed IDs when later operations finish, migrates the earlier single-tombstone format, and survives removal of later drafts. Stale operation IDs remain blocked after store recreation/restart while a fresh ID can proceed.
 - Unit and UI tests now depend on `MovUITestHost` instead of `Mov.app`. Its bundle ID is separate, while the product remains `com.movtorun.mov`. Fixed UI-test UserDefaults suites and fixture Keychain service names were changed to per-run UUID scopes. A fail-closed pre-test script checks the host/runner identities and suite/service patterns before an Xcode TestAction starts.
+- The preflight now inspects built product, host, runner, and test-bundle plists, resolves and checks the executable `TEST_HOST`, and verifies the generated `.xctestrun` host/target paths. A negative harness confirms that a command-line product bundle-ID override is rejected based on the built product plist. `ThemeTests` imports the source-equivalent `MovUITestHost` module, keeping the host's module and bundle identities separate from the product app.
 
 ## Backend decisions still needed
 
@@ -36,10 +37,11 @@
 
 ## Verification
 
-- `swift test` under Xcode 26.3, with all SwiftPM scratch/module caches in `/tmp`: **191 tests passed, 0 failures**. Regressions cover draft member/scope binding, account switch/cancel/late create response, independent-store lease exclusion and generation safety, one create POST across two services, completed-operation replay rejection, 5xx as unknown, restart recovery, and journal persistence failures.
+- `swift test` under Xcode 26.3, with all SwiftPM scratch/module caches in `/tmp`: **193 tests passed, 0 failures**. Regressions cover draft member/scope binding, account switch/cancel/late create response, independent-store lease exclusion and generation safety, one create POST across two services, completed-operation replay rejection, two successive completed IDs across store restart, stale first-operation rejection after second completion/restart, 5xx as unknown, restart recovery, and journal persistence failures.
 - Install-free, signing-disabled iOS-device-SDK Release builds of both the product app and separate `MovUITestHost` **passed** with derived data under `/tmp`. This also compiled the app asset catalog for the device SDK; neither app was installed or launched.
+- Simulator-SDK `build-for-testing` **passed** with derived data under `/tmp`; this compiles the product app, isolated host, and test bundles but does not execute tests, install apps, or launch a simulator. The standalone artifact preflight passed against the resulting build products, and the CLI override negative check passed.
 - `plutil -lint` accepted `Mov.xcodeproj/project.pbxproj` and `Mov/Info.plist`; the shared Xcode scheme parsed as XML. The product Info.plist has no diff, and its resolved product bundle ID remains `com.movtorun.mov`.
-- The UI-test isolation script is installed as a TestAction preflight but was intentionally not run in this turn. No UI/host test, simulator launch, app install, or simulator-device mutation was performed. The preflight and suite/service isolation remain for independent review before focused UI work.
+- The UI-test isolation script is installed as a TestAction preflight and was run directly against the build-for-testing artifacts. The Xcode TestAction itself was intentionally not run. No UI/host test, simulator launch, app install, or simulator-device mutation was performed. Independent review of the isolated host and UUID suite/service fixture isolation remains before focused UI work.
 - No real API, S3, OAuth provider, account, credential, infrastructure, or deployment was used. The original `/Users/seunghwan/Documents/Mov` checkout and product data were not edited.
 
 ## Follow-up list

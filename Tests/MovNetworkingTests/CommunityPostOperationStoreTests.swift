@@ -68,23 +68,55 @@ final class CommunityPostOperationStoreTests: XCTestCase {
         try second.releaseExecutionLease(secondLease)
     }
 
-    func testCompletedOperationTombstoneRejectsStaleCreateRetry() throws {
+    func testCompletedOperationLedgerRetainsOlderIDsAfterNewOperationAndRestart() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = FileCommunityPostOperationStore(rootURL: root)
-        var record = makeRecord(phase: .postCreated, postID: "42", attachmentVersion: 1, attachments: [])
-        try store.save(record, attachmentData: [:])
+        let first = makeRecord(phase: .postCreated, postID: "42", attachmentVersion: 1, attachments: [])
+        try store.save(first, attachmentData: [:])
+        try store.markCompleted(first)
 
-        try store.markCompleted(record)
+        // The previous version encoded a single completed ID. Verify that adding a
+        // second completion migrates that marker instead of replacing its history.
+        let legacyMarker = try JSONSerialization.data(withJSONObject: ["operationID": first.operationID.uuidString])
+        let markerURL = root.appendingPathComponent("member-\(memberID)", isDirectory: true)
+            .appendingPathComponent("completed.json")
+        try legacyMarker.write(to: markerURL, options: .atomic)
 
-        XCTAssertNil(try store.load(memberID: memberID))
-        XCTAssertThrowsError(try store.acquireExecutionLease(memberID: memberID, operationID: record.operationID)) {
+        let second = makeRecord(phase: .postCreated, postID: "43", attachmentVersion: 1, attachments: [])
+        try store.save(second, attachmentData: [:])
+        try store.markCompleted(second)
+
+        let restarted = FileCommunityPostOperationStore(rootURL: root)
+        XCTAssertNil(try restarted.load(memberID: memberID))
+        for completed in [first, second] {
+            XCTAssertThrowsError(try restarted.acquireExecutionLease(memberID: memberID, operationID: completed.operationID)) {
+                XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationAlreadyCompleted)
+            }
+            XCTAssertThrowsError(try restarted.save(completed, attachmentData: [:])) {
+                XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationAlreadyCompleted)
+            }
+        }
+        let third = makeRecord(phase: .draftReady, postID: nil, attachmentVersion: nil, attachments: [])
+        XCTAssertNoThrow(try restarted.save(third, attachmentData: [:]))
+    }
+
+    func testRemovingLaterDraftDoesNotEraseCompletedOperationHistory() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        let first = makeRecord(phase: .postCreated, postID: "42", attachmentVersion: 1, attachments: [])
+        try store.save(first, attachmentData: [:])
+        try store.markCompleted(first)
+
+        let second = makeRecord(phase: .draftReady, postID: nil, attachmentVersion: nil, attachments: [])
+        try store.save(second, attachmentData: [:])
+        try store.remove(memberID: memberID, operationID: second.operationID)
+
+        let restarted = FileCommunityPostOperationStore(rootURL: root)
+        XCTAssertThrowsError(try restarted.acquireExecutionLease(memberID: memberID, operationID: first.operationID)) {
             XCTAssertEqual($0 as? CommunityPostOperationStoreError, .operationAlreadyCompleted)
         }
-        record = CommunityPostOperationRecord(operationID: UUID(), memberID: memberID, boardKey: .free,
-                                              title: "New run", content: "New update", runID: nil,
-                                              phase: .draftReady, postID: nil, attachmentVersion: nil, attachments: [])
-        XCTAssertNoThrow(try store.save(record, attachmentData: [:]))
     }
 
     private func makeAttachment(assetID: String?) -> CommunityPostOperationAttachment {
@@ -209,6 +241,39 @@ final class CommunityPostPublishingServiceTests: XCTestCase {
         } catch { XCTFail("unexpected error: \(error)") }
         let finalRequests = await api.recordedRequests()
         XCTAssertEqual(finalRequests.map(\.method), ["POST", "PUT"])
+    }
+
+    func testStaleFirstOperationAfterSecondCompletionAndRestartCannotAcquireLeaseOrPost() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-completed-ledger-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstStore = FileCommunityPostOperationStore(rootURL: root)
+        let staleFirst = makeRecord(memberID: memberID, phase: .draftReady, postID: nil, attachments: [])
+
+        var completedFirst = staleFirst
+        completedFirst.phase = .postCreated
+        completedFirst.postID = "42"
+        try firstStore.save(completedFirst, attachmentData: [:])
+        try firstStore.markCompleted(completedFirst)
+
+        let completedSecond = makeRecord(memberID: memberID, phase: .postCreated, postID: "43", attachments: [])
+        try firstStore.save(completedSecond, attachmentData: [:])
+        try firstStore.markCompleted(completedSecond)
+
+        let restartedStore = FileCommunityPostOperationStore(rootURL: root)
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "never-a-community-route", method: "GET", response: .init(statusCode: 200, data: Data()))
+        ])
+        let service = makeService(api: api, store: restartedStore,
+                                  sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID)))
+        do {
+            _ = try await service.publish(record: staleFirst, attachmentData: [:], isScopeCurrent: { true })
+            XCTFail("the first completed operation must stay retired after a second operation completes and the store restarts")
+        } catch let failure as CommunityPostOperationStoreError {
+            XCTAssertEqual(failure, .operationAlreadyCompleted)
+        } catch { XCTFail("unexpected error: \(error)") }
+
+        let requests = await api.recordedRequests()
+        XCTAssertTrue(requests.isEmpty, "a stale operation must fail before it can send another create POST")
     }
 
     func testKnownPostIDAndAttachmentsResumeWithoutCreatingAnotherPostAfterRestart() async throws {

@@ -89,8 +89,35 @@ private struct CommunityPostOperationLeaseKey: Hashable {
     let memberID: String
 }
 
-private struct CompletedCommunityPostOperation: Codable {
-    let operationID: UUID
+private struct CompletedCommunityPostOperations: Codable {
+    let operationIDs: [UUID]
+
+    init(operationIDs: Set<UUID>) {
+        self.operationIDs = operationIDs.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operationIDs
+        case operationID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let operationIDs = try container.decodeIfPresent([UUID].self, forKey: .operationIDs) {
+            self.operationIDs = operationIDs
+        } else if let legacyOperationID = try container.decodeIfPresent(UUID.self, forKey: .operationID) {
+            // Version 1 stored only the most recently completed operation.
+            self.operationIDs = [legacyOperationID]
+        } else {
+            throw DecodingError.dataCorruptedError(forKey: .operationIDs, in: container,
+                                                   debugDescription: "Missing completed operation IDs")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(operationIDs, forKey: .operationIDs)
+    }
 }
 
 private final class CommunityPostOperationCoordinator: @unchecked Sendable {
@@ -177,7 +204,13 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
             let folder = try memberFolder(memberID)
             guard let record = try loadUnlocked(memberID: memberID) else { return }
             guard record.operationID == operationID else { throw CommunityPostOperationStoreError.operationAlreadyExists }
-            do { try fileManager.removeItem(at: folder) }
+            do {
+                try fileManager.removeItem(at: folder.appendingPathComponent("operation.json"))
+                for attachment in record.attachments {
+                    let url = attachmentURL(for: attachment, memberID: memberID)
+                    if fileManager.fileExists(atPath: url.path) { try fileManager.removeItem(at: url) }
+                }
+            }
             catch { throw CommunityPostOperationStoreError.storageUnavailable }
         }
     }
@@ -189,10 +222,10 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
             guard CommunityPostOperationCoordinator.shared.lease(for: key) == nil else {
                 throw CommunityPostOperationStoreError.operationInProgress
             }
-            let completedID = try completedOperationID(memberID: memberID)
-            if completedID == operationID { throw CommunityPostOperationStoreError.operationAlreadyCompleted }
+            let completedIDs = try completedOperationIDs(memberID: memberID)
+            if completedIDs.contains(operationID) { throw CommunityPostOperationStoreError.operationAlreadyCompleted }
             if let existing = try loadStoredUnlocked(memberID: memberID) {
-                if existing.operationID != operationID, completedID != existing.operationID {
+                if existing.operationID != operationID, !completedIDs.contains(existing.operationID) {
                     throw CommunityPostOperationStoreError.operationAlreadyExists
                 }
                 if existing.hasAmbiguousCreate {
@@ -247,7 +280,9 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys]
                 let folder = try memberFolder(record.memberID)
-                try encoder.encode(CompletedCommunityPostOperation(operationID: current.operationID))
+                var completedIDs = try completedOperationIDs(memberID: record.memberID)
+                completedIDs.insert(current.operationID)
+                try encoder.encode(CompletedCommunityPostOperations(operationIDs: completedIDs))
                     .write(to: folder.appendingPathComponent("completed.json"), options: .atomic)
                 for url in try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
                 where url.lastPathComponent != "completed.json" { try? fileManager.removeItem(at: url) }
@@ -257,7 +292,7 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
 
     private func loadUnlocked(memberID: String) throws -> CommunityPostOperationRecord? {
         let record = try loadStoredUnlocked(memberID: memberID)
-        if let record, try completedOperationID(memberID: memberID) == record.operationID { return nil }
+        if let record, try completedOperationIDs(memberID: memberID).contains(record.operationID) { return nil }
         return record
     }
 
@@ -281,10 +316,10 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
 
     private var rootPath: String { rootURL.standardizedFileURL.path }
 
-    private func completedOperationID(memberID: String) throws -> UUID? {
+    private func completedOperationIDs(memberID: String) throws -> Set<UUID> {
         let url = try memberFolder(memberID).appendingPathComponent("completed.json")
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
-        do { return try JSONDecoder().decode(CompletedCommunityPostOperation.self, from: Data(contentsOf: url)).operationID }
+        guard fileManager.fileExists(atPath: url.path) else { return [] }
+        do { return Set(try JSONDecoder().decode(CompletedCommunityPostOperations.self, from: Data(contentsOf: url)).operationIDs) }
         catch { throw CommunityPostOperationStoreError.storageUnavailable }
     }
 
@@ -308,20 +343,17 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
         let folder = try memberFolder(record.memberID)
         do {
             try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            let completedIDs = try completedOperationIDs(memberID: record.memberID)
+            guard !completedIDs.contains(record.operationID) else {
+                throw CommunityPostOperationStoreError.operationAlreadyCompleted
+            }
             if let existing = try loadStoredUnlocked(memberID: record.memberID) {
-                let completedID = try completedOperationID(memberID: record.memberID)
-                if existing.operationID == record.operationID, completedID == record.operationID {
-                    throw CommunityPostOperationStoreError.operationAlreadyCompleted
-                }
-                if existing.operationID != record.operationID, completedID != existing.operationID {
+                if existing.operationID != record.operationID, !completedIDs.contains(existing.operationID) {
                     throw CommunityPostOperationStoreError.operationAlreadyExists
                 }
-                if completedID != existing.operationID {
+                if !completedIDs.contains(existing.operationID) {
                     try Self.validatePhaseChange(from: existing, to: record, allowCreateTransition: allowCreateTransition)
                 }
-            }
-            if try completedOperationID(memberID: record.memberID) == record.operationID {
-                throw CommunityPostOperationStoreError.operationAlreadyCompleted
             }
             for attachment in record.attachments {
                 let url = attachmentURL(for: attachment, memberID: record.memberID)
@@ -342,10 +374,11 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             try encoder.encode(record).write(to: folder.appendingPathComponent("operation.json"), options: .atomic)
-            try? fileManager.removeItem(at: folder.appendingPathComponent("completed.json"))
             let keep = Set(record.attachments.map(Self.fileName(for:)))
             for url in try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            where url.lastPathComponent != "operation.json" && !keep.contains(url.lastPathComponent) {
+            where url.lastPathComponent != "operation.json"
+                && url.lastPathComponent != "completed.json"
+                && !keep.contains(url.lastPathComponent) {
                 try? fileManager.removeItem(at: url)
             }
         } catch let error as CommunityPostOperationStoreError {

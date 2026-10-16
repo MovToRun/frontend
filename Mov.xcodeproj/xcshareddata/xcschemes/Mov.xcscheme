@@ -7,7 +7,7 @@
       buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
-            buildForTesting = "NO"
+            buildForTesting = "YES"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -47,9 +47,9 @@
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"
-                     BlueprintIdentifier = "B10000000000000000000008"
-                     BuildableName = "MovUITestHost.app"
-                     BlueprintName = "MovUITestHost"
+                     BlueprintIdentifier = "00000000000000000000001B"
+                     BuildableName = "MovTests.xctest"
+                     BlueprintName = "MovTests"
                      ReferencedContainer = "container:Mov.xcodeproj">
                   </BuildableReference>
                </EnvironmentBuildable>
