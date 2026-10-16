@@ -245,7 +245,9 @@ final class AuthSessionPersistenceTests: XCTestCase {
     }
 
     func testLostRefreshResponseRetriesSameTokenAndRequestIDThenReplacesSnapshotAtomically() async throws {
-        let store = makeStore()
+        let service = uniqueService()
+        let keychain = InMemoryKeychain()
+        let store = KeychainAuthSessionStore(service: service, keychain: keychain)
         let original = try snapshot(memberID: "41", access: serverAccessToken(memberID: "41", marker: "before"), refresh: "fixture-rtr-before")
         try store.replaceAtomically(with: original)
         let replacement = tokenResponse(
@@ -265,15 +267,17 @@ final class AuthSessionPersistenceTests: XCTestCase {
         } catch let failure as AuthSessionFailure {
             XCTAssertEqual(failure, .transport(.timedOut))
         }
-        let pending = try XCTUnwrap(try store.loadSnapshot())
+        let relaunchedStore = KeychainAuthSessionStore(service: service, keychain: keychain)
+        let relaunchedClient = AuthSessionClient(apiClient: transport, sessionStore: relaunchedStore)
+        let pending = try XCTUnwrap(try relaunchedStore.loadSnapshot())
         let requestID = try XCTUnwrap(pending.refreshRequestID)
         XCTAssertEqual(pending.accessToken, original.accessToken)
         XCTAssertEqual(pending.refreshToken, original.refreshToken)
 
-        let completed = try await client.restoreAfterAppLaunch()
+        let completed = try await relaunchedClient.restoreAfterAppLaunch()
 
         XCTAssertEqual(completed?.refreshToken, "fixture-rtr-after")
-        XCTAssertNil(try store.loadSnapshot()?.refreshRequestID)
+        XCTAssertNil(try relaunchedStore.loadSnapshot()?.refreshRequestID)
         let capturedFirstRequest = await transport.request(at: 0)
         let capturedRetryRequest = await transport.request(at: 1)
         let firstRequest = try XCTUnwrap(capturedFirstRequest)
