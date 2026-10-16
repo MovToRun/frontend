@@ -79,7 +79,7 @@ extension WireframeRoot {
         WPage(title:"현재 러닝",back:back){
             WMetric(record:current)
             WMap(route:current.hasMeasuredDistance,routePoints:current.routePoints ?? []).frame(height:160).clipShape(RoundedRectangle(cornerRadius:12))
-            if current.serverJudgement == .pending{WNotice(text:"거리와 페이스는 기기 GPS의 임시 측정값이에요. 서버 판정 후 유효 구간이 결정돼요.")}
+            if let notice=serverJudgementNotice(current){WNotice(text:notice,danger:current.serverJudgement == .invalid).accessibilityIdentifier("serverJudgementNotice")}
             VStack(spacing:0){
                 WRow(title:current.serverJudgement == .pending ? "기기 측정 평균 페이스":"유효 구간 평균 페이스",value:(current.kilometers>0 && current.pace.count==4 ? "0":"")+current.pace+" /km",plain:true)
                 WRow(title:"추정 소모 칼로리",value:current.caloriesText,plain:true)
@@ -161,8 +161,27 @@ extension WireframeRoot {
             WText(text:remoteReads.hasRunRecordsUpdater ? "서버 응답과 기기 저장 기록은 따로 표시해요. 측정값은 유지하고 제목과 메모만 수정할 수 있어요.":"서버 응답과 기기 저장 기록은 따로 표시해요. 이 화면에서는 기록을 수정하거나 업로드하지 않아요.",small:true)
         }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(W.soft,in:RoundedRectangle(cornerRadius:14)).accessibilityElement(children:.contain).accessibilityIdentifier("remoteRunRecordsPanel")
     }
+    private func shouldShowRemoteRun(_ summary:BackendRunSummary)->Bool {
+        guard let ownerID=store.authenticatedUploadMemberID else{return true}
+        return !store.hasLocalRecord(ownerID:ownerID,clientRunID:summary.clientRunID)
+    }
+    private func serverJudgementNotice(_ record:RunRecord)->String? {
+        switch record.serverJudgement {
+        case .valid:
+            let distance=record.serverValidDistanceMeters.map{MovNumber.display(Double($0)/1_000)+" km"} ?? "유효 거리 확인 완료"
+            let time=record.serverValidSeconds.map{RunRecord.clock(Double($0))+" 유효 러닝"} ?? "유효 시간 확인 완료"
+            return "서버 판정: 유효한 러닝 · \(distance) · \(time)"
+        case .invalid:
+            let reason=record.serverVerdictReason.map{$0.trimmingCharacters(in:.whitespacesAndNewlines)}.flatMap{$0.isEmpty ? nil:$0}
+            return "서버 판정: 비유효 기록 · 원본 측정값은 기기에 보관돼요.\(reason.map{" 판정 사유: \($0)"} ?? "")"
+        case .pending:
+            return "기기 측정값은 임시 기록이에요. 서버 판정과 유효 구간을 기다리고 있어요."
+        case nil:
+            return nil
+        }
+    }
     @ViewBuilder private func remoteRunRows(_ items:[BackendRunSummary])->some View {
-        ForEach(items){summary in
+        ForEach(items.filter(shouldShowRemoteRun)){summary in
             Button{ui.openRemoteRecord(id:summary.id)}label:{
                 HStack(alignment:.top,spacing:12){
                     Image(systemName:"figure.run.circle.fill").font(.system(size:25)).foregroundStyle(W.lime).frame(width:38,height:42)
@@ -187,23 +206,23 @@ extension WireframeRoot {
         return try? RunPointReward(status:status,pointsAwarded:reward.pointsAwarded.flatMap{Int(exactly:$0)})
     }
     @ViewBuilder func recordRow(_ r:RunRecord,home:Bool=false)->some View {
-        let validSeconds=r.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? r.seconds
+        let validSeconds=r.serverJudgement == nil ? (r.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? r.seconds):r.displayedSeconds
         let pace=r.kilometers>0 && r.pace.count==4 ? "0"+r.pace:r.pace
         let showsPointExample = !home && WReviewMode.tools && r.isValid
         if home {
-            Button{ui.openRecord(r)}label:{HStack(spacing:14){WMap(route:r.hasMeasuredDistance,routePoints:r.routePoints ?? []).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12));VStack(alignment:.leading,spacing:5){Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true);Text("\(MovNumber.display(r.kilometers)) km").font(W.font(18,.semibold));WText(text:recordDateText(r.date)+" · \(RunRecord.clock(r.seconds)) 유효 러닝 · 예시",small:true)};Spacer();Image(systemName:"chevron.right").font(W.font(13))}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,15).contentShape(Rectangle())}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}
+            Button{ui.openRecord(r)}label:{HStack(spacing:14){WMap(route:r.hasMeasuredDistance,routePoints:r.routePoints ?? []).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12));VStack(alignment:.leading,spacing:5){Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true);Text("\(MovNumber.display(r.displayedKilometers)) km").font(W.font(18,.semibold));WText(text:recordDateText(r.date)+" · \(RunRecord.clock(r.displayedSeconds)) \(r.serverJudgement == .pending ? "기기 측정 시간":r.serverJudgement == .invalid ? "서버 판정 비유효":"유효 러닝") · 예시",small:true)};Spacer();Image(systemName:"chevron.right").font(W.font(13))}.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,15).contentShape(Rectangle())}.buttonStyle(.plain).overlay(alignment:.bottom){W.line.frame(height:1)}
         } else {
           Button{ui.openRecord(r)}label:{
             HStack(spacing:14){
                 WMap(route:r.hasMeasuredDistance,routePoints:r.routePoints ?? []).frame(width:70,height:64).clipShape(RoundedRectangle(cornerRadius:12))
                 VStack(alignment:.leading,spacing:5){
                     Text(r.title).font(W.font(13,.medium)).fixedSize(horizontal:false,vertical:true)
-                    Text("\(MovNumber.display(r.kilometers)) km").font(W.font(18,.semibold))
+                    Text("\(MovNumber.display(r.displayedKilometers)) km").font(W.font(18,.semibold))
                     Text(recordDateText(r.date)).font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier(home ? "homeRecordDate":"recordDate")
                     if !home {
-                        Text("\(RunRecord.clock(validSeconds)) \(r.serverJudgement == .pending ? "기기 측정 시간":"유효 러닝")").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordValidityTime")
+                        Text("\(RunRecord.clock(validSeconds)) \(r.serverJudgement == .pending ? "기기 측정 시간":r.serverJudgement == .invalid ? "서버 판정 비유효":"유효 러닝")").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordValidityTime")
                         HStack(spacing:7){
-                            Text("\(pace) /km\(r.serverJudgement == .pending ? " · 임시":"")").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordPace")
+                            Text("\(r.serverJudgement == .invalid ? "비유효":pace) /km\(r.serverJudgement == .pending ? " · 임시":"")").font(W.font(12)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("recordPace")
                             if let reward = r.pointReward {
                                 WRunPointRewardIndicator(reward:reward,identifier:"runPointReward-list")
                             } else if showsPointExample {
@@ -303,13 +322,13 @@ extension WireframeRoot {
                     WInlineRecordField(value:current.title,multiline:false,save:{value in var record=current;record.title=value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? RunRecord.title(for:record.date):value;store.update(record)},focus:{scrollEditor(proxy,"inlineTitle")}).id("inlineTitle")
                     WMetric(record:current,saved:true)
                     WMap(route:current.hasMeasuredDistance,routePoints:current.routePoints ?? []).frame(height:170).clipShape(RoundedRectangle(cornerRadius:12))
-                    if current.serverJudgement == .pending{WNotice(text:"이 화면의 거리와 구간은 기기 GPS 측정값이에요. 서버 판정은 서버 기록에서 확인해 주세요.")}
+                    if let notice=serverJudgementNotice(current){WNotice(text:notice,danger:current.serverJudgement == .invalid).accessibilityIdentifier("serverJudgementNotice")}
                     WRow(title:"추정 소모 칼로리",value:current.caloriesText)
                     if let reward=current.pointReward{WRunPointRewardRow(reward:reward,identifier:"runPointReward-detail")}
                     WText(text:current.weightKg==nil ? "기록 당시 체중 정보가 없어요":"기록 당시의 체중으로 계산",small:true)
-                    WDisclosure(title:current.serverJudgement == .pending ? "기기 측정값과 서버 판정":"유효 구간과 원본 기록",expanded:$ui.validityExpanded,triangle:true){VStack(alignment:.leading,spacing:8){if current.serverJudgement == .pending{WText(text:"서버에 업로드되어 판정되기 전까지 이 거리와 페이스는 임시 측정값이에요. 기기 화면에서 유효 구간으로 집계하지 않아요.",small:true)}else{ForEach(Array(current.validityDetails.enumerated()),id:\.offset){item in WText(text:item.element,small:true)};WText(text:"표시한 거리와 페이스는 저장된 유효 구간을 바탕으로 계산해요. 원본 판별 정보가 없는 구간을 임의로 분류하지 않아요.",small:true)}}.frame(maxWidth:.infinity,alignment:.leading)}.font(W.font(12)).padding(.vertical,18)
+                    WDisclosure(title:current.serverJudgement == .pending ? "기기 측정값과 서버 판정":"유효 구간과 원본 기록",expanded:$ui.validityExpanded,triangle:true){VStack(alignment:.leading,spacing:8){if current.serverJudgement == .pending{WText(text:"서버 판정 전까지 이 거리와 페이스는 임시 측정값이에요. 유효 통계에 포함하지 않아요.",small:true)}else if current.serverJudgement == .valid{WText(text:"표시한 합계는 서버가 판정한 유효 거리와 시간이에요. 서버 구간별 판정 정보는 이 응답에 포함되지 않아요.",small:true)}else if current.serverJudgement == .invalid{WText(text:"서버에서 비유효로 판정했어요. 원본 GPS와 측정값은 그대로 보관해요.",small:true)}else{ForEach(Array(current.validityDetails.enumerated()),id:\.offset){item in WText(text:item.element,small:true)};WText(text:"저장된 유효 구간으로 계산해요. 원본 판별 정보가 없는 구간은 임의로 분류하지 않아요.",small:true)}}.frame(maxWidth:.infinity,alignment:.leading)}.font(W.font(12)).padding(.vertical,18)
                     WInlineRecordField(value:current.memo,multiline:true,save:{value in var record=current;record.memo=value;store.update(record)},focus:{scrollEditor(proxy,"inlineMemo")}).id("inlineMemo")
-                    WRow(title:"구간 기록",subtitle:current.serverJudgement == .pending ? "기기 임시 구간 · 서버 판정 대기":"유효 구간·제외 이유",action:{go("L05")})
+                    WRow(title:"구간 기록",subtitle:current.serverJudgement == .pending ? "기기 임시 구간 · 서버 판정 대기":current.serverJudgement == .valid ? "서버 유효 합계":current.serverJudgement == .invalid ? "서버 판정 비유효":"유효 구간·제외 이유",action:{go("L05")})
                     if current.isValid{Button("공유 콘텐츠 보기"){go("Q03")}.font(W.font(14,.medium)).frame(maxWidth:.infinity,minHeight:48).background(W.soft,in:RoundedRectangle(cornerRadius:12)).accessibilityIdentifier("openShareGallery")}
                     Button("이 러닝 기록 삭제"){go("L07")}.foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).font(W.font(13)).frame(minHeight:44).accessibilityIdentifier("deleteRecord")
                 }.padding(24)}.scrollDismissesKeyboard(.interactively)
@@ -322,8 +341,8 @@ extension WireframeRoot {
     }
 
     var recordEdit:some View {WPage(title:"기록 편집",back:back){WField(label:"제목 (40자 이내)",text:$ui.title,limit:40).accessibilityIdentifier("recordTitleInput").padding(.top,18);WField(label:"메모 (300자 이내)",text:$ui.memo,limit:300,multiline:true).accessibilityIdentifier("recordMemoInput");WText(text:"제목을 비우면 시작 날짜와 시간대의 기본 이름을 사용해요.\n거리·시간·경로는 바꾸지 않아요.",small:true);if !ui.error.isEmpty{WNotice(text:ui.error,danger:true)}}actions:{Button("변경 저장"){guard ui.title.count<=40 && ui.memo.count<=300 else{ui.error="제목은 40자, 메모는 300자 이내로 입력해 주세요.";return};var r=current;r.title=ui.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? RunRecord.title(for:r.date):ui.title;r.memo=ui.memo;store.update(r);back()}.buttonStyle(WButtonStyle()).accessibilityIdentifier("saveRecordEdit")}}
-    var splits:some View {let chart=WPaceChart(record:current);return WPage(title:"구간 기록",back:back){HStack{Text(current.serverJudgement == .pending ? "기기 임시 구간 평균 페이스":"구간 평균 페이스").font(W.font(16,.semibold));Spacer();Text(chart.averageLabel).font(W.font(13,.medium)).foregroundStyle(chart.hasAverage ? W.ink:W.muted).accessibilityIdentifier("splitAverageLabel")};chart.padding(.top,-18)}actions:{}}
-    var completion:some View {WPage(title:"러닝 완료",back:ui.screen=="S02" ? nil:{go("H00")}){VStack(alignment:.leading,spacing:0){if ["S01","S05"].contains(ui.screen){WCompletionFeedback(recordID:current.id,seen:$ui.completionFeedbackSeen)};WText(text:recordWhen(current),small:true).padding(.top,["S01","S05"].contains(ui.screen) ? 0:6)};Text(ProcessInfo.processInfo.arguments.contains("-wire-review-size") ? "10월 1일 아침 러닝":current.title).font(W.font(14,.medium));WHeading(text:ui.screen=="S03" ? "아직 저장하지\n못했어요":ui.screen=="S02" ? "기록을\n저장하고 있어요":ui.screen=="S05" ? "유효한 러닝\n구간이 없어요":current.serverJudgement == .pending ? "기기에 기록했어요":"가볍게,\n잘 달렸어요").padding(.top,-7);WMetric(record:current,saved:ui.screen != "S03").padding(.top,-3);WMap(route:current.hasMeasuredDistance,routePoints:current.routePoints ?? []).frame(height:172).clipShape(RoundedRectangle(cornerRadius:14));WRow(title:"추정 소모 칼로리",value:current.caloriesText,separator:current.pointReward != nil);if let reward=current.pointReward{WRunPointRewardRow(reward:reward,identifier:"runPointReward-completion",separator:false)};if ui.screen=="S01" && current.serverJudgement == .pending{WNotice(text:"기기 측정값은 임시 기록이에요. 서버 판정 결과와 유효 구간은 서버 기록에서 확인할 수 있어요.").accessibilityIdentifier("serverJudgementNotice")};if let message=store.uploadMessage,ui.screen=="S01"{WNotice(text:message,danger:store.uploadNeedsRetry).accessibilityIdentifier("runUploadStatus")};if !["S01","S05"].contains(ui.screen){WNotice(text:ui.screen=="S03" ? "이 기기에 임시 기록이 남아 있어요. 다시 저장해 주세요.":ui.screen=="S02" ? "저장 결과를 확인하기 전에는 완료로 표시하지 않아요.":"기기에 저장됨 · 동기화 대기",danger:ui.screen=="S03")} }actions:{if ui.screen=="S02"{Button("저장 중…"){}.buttonStyle(WButtonStyle()).disabled(true)}else if ui.screen=="S03"{Button("다시 저장"){saveRun()}.buttonStyle(WButtonStyle());button("임시 기록 확인","H06",kind:1)}else{if ui.screen=="S01" && store.uploadNeedsRetry{Button("업로드 다시 시도"){Task{@MainActor in _=await store.retryPendingRunUploads()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("retryRunUpload")};button("기록 보기","L04");if ui.screen=="S01" && current.isValid{button("공유 이미지 만들기","Q01",kind:1).accessibilityIdentifier("createRunShare")};button("홈으로","H00",kind:1)}}}
+    var splits:some View {let chart=WPaceChart(record:current);return WPage(title:"구간 기록",back:back){HStack{Text(current.serverJudgement == .pending ? "기기 임시 구간 평균 페이스":current.serverJudgement == .valid ? "서버 유효 평균 페이스":"구간 평균 페이스").font(W.font(16,.semibold));Spacer();Text(chart.averageLabel).font(W.font(13,.medium)).foregroundStyle(chart.hasAverage ? W.ink:W.muted).accessibilityIdentifier("splitAverageLabel")};chart.padding(.top,-18)}actions:{}}
+    var completion:some View {WPage(title:"러닝 완료",back:ui.screen=="S02" ? nil:{go("H00")}){VStack(alignment:.leading,spacing:0){if ["S01","S05"].contains(ui.screen){WCompletionFeedback(recordID:current.id,seen:$ui.completionFeedbackSeen)};WText(text:recordWhen(current),small:true).padding(.top,["S01","S05"].contains(ui.screen) ? 0:6)};Text(ProcessInfo.processInfo.arguments.contains("-wire-review-size") ? "10월 1일 아침 러닝":current.title).font(W.font(14,.medium));WHeading(text:ui.screen=="S03" ? "아직 저장하지\n못했어요":ui.screen=="S02" ? "기록을\n저장하고 있어요":ui.screen=="S05" ? "유효한 러닝\n구간이 없어요":current.serverJudgement == .pending ? "기기에 기록했어요":"가볍게,\n잘 달렸어요").padding(.top,-7);WMetric(record:current,saved:ui.screen != "S03").padding(.top,-3);WMap(route:current.hasMeasuredDistance,routePoints:current.routePoints ?? []).frame(height:172).clipShape(RoundedRectangle(cornerRadius:14));WRow(title:"추정 소모 칼로리",value:current.caloriesText,separator:current.pointReward != nil);if let reward=current.pointReward{WRunPointRewardRow(reward:reward,identifier:"runPointReward-completion",separator:false)};if ui.screen=="S01",let notice=serverJudgementNotice(current){WNotice(text:notice,danger:current.serverJudgement == .invalid).accessibilityIdentifier("serverJudgementNotice")};if let message=store.uploadMessage,ui.screen=="S01"{WNotice(text:message,danger:store.uploadNeedsRetry).accessibilityIdentifier("runUploadStatus")};if !["S01","S05"].contains(ui.screen){WNotice(text:ui.screen=="S03" ? "이 기기에 임시 기록이 남아 있어요. 다시 저장해 주세요.":ui.screen=="S02" ? "저장 결과를 확인하기 전에는 완료로 표시하지 않아요.":"기기에 저장됨 · 동기화 대기",danger:ui.screen=="S03")} }actions:{if ui.screen=="S02"{Button("저장 중…"){}.buttonStyle(WButtonStyle()).disabled(true)}else if ui.screen=="S03"{Button("다시 저장"){saveRun()}.buttonStyle(WButtonStyle());button("임시 기록 확인","H06",kind:1)}else{if ui.screen=="S01" && store.uploadNeedsRetry{Button("업로드 다시 시도"){Task{@MainActor in _=await store.retryPendingRunUploads()}}.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("retryRunUpload")};button("기록 보기","L04");if ui.screen=="S01" && current.isValid{button("공유 이미지 만들기","Q01",kind:1).accessibilityIdentifier("createRunShare")};button("홈으로","H00",kind:1)}}}
 }
 
 struct WRunPointRewardIndicator:View {
@@ -356,12 +375,16 @@ struct WPaceChart:View {
     var record:RunRecord
     @State private var selected=0
     struct Point:Identifiable {var id:Int;var start:Double;var end:Double;var pace:Double;var group:Int}
-    var points:[Point] {if record.serverJudgement == .pending{var distance=0.0;return record.provisionalSplits.map{split in let start=distance;distance+=split.distanceMeters/1_000;return Point(id:split.id,start:start,end:distance,pace:split.seconds/max(0.001,split.distanceMeters/1_000),group:0)}};var distance=0.0;var group=0;var result:[Point]=[];for (i,s) in (record.segments ?? []).enumerated(){if s.type != "include" || s.distance<=0 || s.seconds<=0{group+=1;continue};let start=distance;distance+=s.distance;result.append(Point(id:i,start:start,end:distance,pace:s.seconds/s.distance,group:group))};return result}
-    var hasAverage:Bool {record.kilometers>0 && record.seconds>0}
+    var points:[Point] {if record.serverJudgement == .pending{var distance=0.0;return record.provisionalSplits.map{split in let start=distance;distance+=split.distanceMeters/1_000;return Point(id:split.id,start:start,end:distance,pace:split.seconds/max(0.001,split.distanceMeters/1_000),group:0)}};guard record.serverJudgement == nil else{return []};var distance=0.0;var group=0;var result:[Point]=[];for (i,s) in (record.segments ?? []).enumerated(){if s.type != "include" || s.distance<=0 || s.seconds<=0{group+=1;continue};let start=distance;distance+=s.distance;result.append(Point(id:i,start:start,end:distance,pace:s.seconds/s.distance,group:group))};return result}
+    var chartKilometers:Double {record.displayedKilometers}
+    var chartSeconds:Double {record.displayedSeconds}
+    var hasAverage:Bool {record.serverJudgement != .invalid && chartKilometers>0 && chartSeconds>0}
     var averageLabel:String {hasAverage ? record.pace+" /km":"0:00 /km"}
     var hasExcludedSegments:Bool {record.segments?.contains{$0.type != "include" || $0.distance<=0 || $0.seconds<=0} ?? false}
     var sourceNote:String {
         if record.serverJudgement == .pending{return "기기에 저장한 GPS 샘플로 계산한 임시 구간이에요. 서버 판정과 유효 구간은 서버 기록에서 확인해 주세요."}
+        if record.serverJudgement == .valid{return "서버 판정에서 확인한 유효 거리와 시간의 합계예요. 서버 구간별 판정 정보는 이 화면에서 제공하지 않아요."}
+        if record.serverJudgement == .invalid{return "서버에서 비유효로 판정한 기록이에요. 원본 측정값은 보존하고 유효 통계에 포함하지 않아요."}
         if record.segments != nil {
             let base="명시한 가상 구간의 유효 거리와 이동 시간으로 계산해요. 실제 자동 판별 기능은 아직 없어요."
             return hasExcludedSegments ? base+"\n제외된 구간은 거리·이동 시간·페이스에 반영하지 않아요.":base
@@ -370,28 +393,28 @@ struct WPaceChart:View {
     }
     var body:some View {VStack(alignment:.leading,spacing:0){
         if points.isEmpty{VStack(spacing:14){Text(hasAverage ? "구간 데이터가 없어요":"아직 표시할 페이스가 없어요").font(W.font(18,.medium));WText(text:hasAverage ? "유효 평균은 확인할 수 있어요. 임의의 구간이나 변화 선은 만들지 않아요.":"유효한 거리와 시간이 있는 기록부터 표시해요.",small:true)}.frame(maxWidth:.infinity,minHeight:210).background(W.soft,in:RoundedRectangle(cornerRadius:12))}
-        else {Text(record.serverJudgement == .pending ? "기기 임시 페이스 (분/km) · 위로 갈수록 빨라요":"페이스 (분/km) · 위로 갈수록 빨라요").font(W.font(11)).foregroundStyle(W.muted).padding(.top,21).padding(.bottom,4)
+        else {Text(record.serverJudgement == .pending ? "기기 임시 페이스 (분/km) · 위로 갈수록 빨라요":record.serverJudgement == .valid ? "서버 유효 페이스 (분/km) · 위로 갈수록 빨라요":"페이스 (분/km) · 위로 갈수록 빨라요").font(W.font(11)).foregroundStyle(W.muted).padding(.top,21).padding(.bottom,4)
             GeometryReader{geometry in
-                let values=points.map(\.pace)+[record.seconds/max(0.01,record.kilometers)]
+                let values=points.map(\.pace)+[chartSeconds/max(0.01,chartKilometers)]
                 let low=max(0,floor((values.min() ?? 0)/30)*30-30),high=ceil((values.max() ?? 60)/30)*30+30
                 let width:CGFloat=320
-                let x:(Double)->CGFloat={(54+CGFloat($0/max(0.01,record.kilometers))*232)*width/320}
+                let x:(Double)->CGFloat={(54+CGFloat($0/max(0.01,chartKilometers))*232)*width/320}
                 let y:(Double)->CGFloat={22+CGFloat(($0-low)/(high-low))*128}
                 ZStack(alignment:.topLeading){
-                    ForEach([low,(low+high)/2,high],id:\.self){v in Path{p in p.move(to:CGPoint(x:x(0),y:y(v)));p.addLine(to:CGPoint(x:x(record.kilometers),y:y(v)))}.stroke(Color.wire(0xEEEEEE,0x373A38),lineWidth:1);Text(pace(v)).font(W.font(12.5)).foregroundStyle(W.muted).frame(width:45,alignment:.trailing).position(x:22.5,y:y(v))}
+                    ForEach([low,(low+high)/2,high],id:\.self){v in Path{p in p.move(to:CGPoint(x:x(0),y:y(v)));p.addLine(to:CGPoint(x:x(chartKilometers),y:y(v)))}.stroke(Color.wire(0xEEEEEE,0x373A38),lineWidth:1);Text(pace(v)).font(W.font(12.5)).foregroundStyle(W.muted).frame(width:45,alignment:.trailing).position(x:22.5,y:y(v))}
                     Path{path in var previous:Int?;for point in points{let p=CGPoint(x:x(point.end),y:y(point.pace));if previous==point.group{path.addLine(to:p)}else{path.move(to:p)};previous=point.group}}.stroke(W.lime,style:StrokeStyle(lineWidth:3.5,lineCap:.round,lineJoin:.round))
                     if !points.isEmpty{let point=points[min(selected,points.count-1)];Path{p in p.move(to:CGPoint(x:x(point.end),y:18));p.addLine(to:CGPoint(x:x(point.end),y:155))}.stroke(Color.wire(0xD6D6D6,0x666A67),style:StrokeStyle(lineWidth:1,dash:[2,4]))}
-                    Path{p in let average=record.seconds/max(0.01,record.kilometers);p.move(to:CGPoint(x:x(0),y:y(average)));p.addLine(to:CGPoint(x:x(record.kilometers),y:y(average)))}.stroke(W.muted,style:StrokeStyle(lineWidth:1,dash:[4,4]))
+                    Path{p in let average=chartSeconds/max(0.01,chartKilometers);p.move(to:CGPoint(x:x(0),y:y(average)));p.addLine(to:CGPoint(x:x(chartKilometers),y:y(average)))}.stroke(W.muted,style:StrokeStyle(lineWidth:1,dash:[4,4]))
                     ForEach(Array(points.enumerated()),id:\.element.id){i,p in Circle().fill(W.lime).opacity(i==selected ? 1:0.75).frame(width:i==selected ? 12:7,height:i==selected ? 12:7).position(x:x(p.end),y:y(p.pace))}
-                    HStack{Text("0");Spacer();Text(MovNumber.display(record.kilometers/2));Spacer();Text(MovNumber.display(record.kilometers))}.font(W.font(12.5)).foregroundStyle(W.muted).padding(.leading,54*width/320).padding(.trailing,34*width/320).offset(y:162)
-                    Text(record.serverJudgement == .pending ? "누적 기기 측정 거리 (km)":"누적 유효 거리 (km)").font(W.font(12.5)).foregroundStyle(W.muted).frame(width:286*width/320,alignment:.trailing).offset(y:186)
+                    HStack{Text("0");Spacer();Text(MovNumber.display(chartKilometers/2));Spacer();Text(MovNumber.display(chartKilometers))}.font(W.font(12.5)).foregroundStyle(W.muted).padding(.leading,54*width/320).padding(.trailing,34*width/320).offset(y:162)
+                    Text(record.serverJudgement == .pending ? "누적 기기 측정 거리 (km)":record.serverJudgement == .valid ? "누적 서버 유효 거리 (km)":"누적 유효 거리 (km)").font(W.font(12.5)).foregroundStyle(W.muted).frame(width:286*width/320,alignment:.trailing).offset(y:186)
                 }.frame(width:320,height:216,alignment:.topLeading).scaleEffect(geometry.size.width/320,anchor:.topLeading).contentShape(Rectangle()).gesture(DragGesture(minimumDistance:0).onChanged{v in selected=points.enumerated().min(by:{abs(x($0.element.end)-v.location.x)<abs(x($1.element.end)-v.location.x)})?.offset ?? 0})
         }.aspectRatio(320.0/216.0,contentMode:.fit).accessibilityElement(children:.ignore).accessibilityLabel("구간 평균 페이스 그래프").accessibilityValue(readout).accessibilityAdjustableAction{d in selected=min(points.count-1,max(0,selected+(d == .increment ? 1:-1)))}
             Text(readout).font(W.font(13)).frame(maxWidth:.infinity,minHeight:24);Text("┄ \(record.serverJudgement == .pending ? "기기 측정 평균":"유효 평균") \(record.pace) /km").font(W.font(11)).foregroundStyle(W.muted).frame(maxWidth:.infinity,alignment:.center).padding(.top,7)
         }
         Text(sourceNote).font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).lineSpacing(5.15).padding(.top,23)
         Text("구간별 기록").font(W.font(15,.semibold)).padding(.top,29).padding(.bottom,5);VStack(spacing:0){splitRow("구간",value:"페이스",header:true)
-        if record.serverJudgement == .pending,!points.isEmpty{ForEach(points){point in splitRow("임시 구간 \(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace))}}else if let segments=record.segments,!segments.isEmpty{ForEach(Array(segments.enumerated()),id:\.offset){i,s in if let point=points.first(where:{$0.id==i}){splitRow("\(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace),separator:i<segments.count-1)}else{VStack(alignment:.leading,spacing:6){Text(exclusionTitle(s)).font(W.font(14,.medium));WText(text:exclusionDescription(s),small:true)}.padding(.vertical,12)}}}else if record.serverJudgement == .pending{splitRow("GPS 샘플 부족",value:"—")}else if hasAverage{splitRow("전체 \(MovNumber.display(record.kilometers)) km",value:record.pace)}else{splitRow("유효 기록 없음",value:"0:00")} }
+        if record.serverJudgement == .pending,!points.isEmpty{ForEach(points){point in splitRow("임시 구간 \(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace))}}else if record.serverJudgement == nil,let segments=record.segments,!segments.isEmpty{ForEach(Array(segments.enumerated()),id:\.offset){i,s in if let point=points.first(where:{$0.id==i}){splitRow("\(MovNumber.display(point.start))–\(MovNumber.display(point.end)) km",value:pace(point.pace),separator:i<segments.count-1)}else{VStack(alignment:.leading,spacing:6){Text(exclusionTitle(s)).font(W.font(14,.medium));WText(text:exclusionDescription(s),small:true)}.padding(.vertical,12)}}}else if record.serverJudgement == .pending{splitRow("GPS 샘플 부족",value:"—")}else if record.serverJudgement == .valid,hasAverage{splitRow("서버 유효 합계 \(MovNumber.display(chartKilometers)) km",value:record.pace)}else if hasAverage{splitRow("전체 \(MovNumber.display(chartKilometers)) km",value:record.pace)}else{splitRow("유효 기록 없음",value:"0:00")} }
     }.onChange(of:record.id){_,_ in selected=0}.onChange(of:points.count){_,count in selected=min(selected,max(0,count-1))}}
     func pace(_ seconds:Double)->String {String(format:"%d:%02d",Int(seconds)/60,Int(seconds)%60)}
     func splitRow(_ title:String,value:String,header:Bool=false,separator:Bool=true)->some View {HStack{Text(title).font(W.font(12,header ? .semibold:.regular));Spacer();Text(value).font(W.font(header ? 12:11,header ? .semibold:.regular)).foregroundStyle(header ? W.ink:W.muted)}.frame(minHeight:49).overlay(alignment:.bottom){if separator{W.line.frame(height:1)}}}

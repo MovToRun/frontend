@@ -107,6 +107,75 @@ private actor RunStoreUploadSenderFake: RunUploading {
     func uploadedPayloads() -> [RunUploadPayload] { uploaded }
 }
 
+private func acceptedRunSummary(
+    for payload:RunUploadPayload,
+    verdict:String="VALID",
+    validDistanceMeters:Int64?=nil,
+    validSeconds:Int64?=nil
+)->BackendRunSummary {
+    let distance=Int64(max(0,payload.distanceMeters))
+    let moving=Int64(max(0,payload.movingSeconds))
+    let validDistance=validDistanceMeters.map{min(distance,max(0,$0))} ?? distance
+    let acceptedSeconds=validSeconds.map{min(moving,max(0,$0))} ?? moving
+    return BackendRunSummary(
+        id:"server-\(payload.clientRunID.uuidString)",clientRunID:payload.clientRunID,version:1,
+        startedAt:payload.startedAt,endedAt:payload.endedAt,runDate:"2026-10-05",
+        elapsedSeconds:Int64(max(payload.movingSeconds,Int(payload.endedAt.timeIntervalSince(payload.startedAt)))),
+        movingSeconds:moving,distanceMeters:distance,verdict:verdict,verdictReason:nil,
+        validDistanceMeters:verdict == "VALID" ? validDistance:nil,
+        validSeconds:verdict == "VALID" ? acceptedSeconds:nil,
+        paceSecondsPerKm:verdict == "VALID" && validDistance>0 ? Int64(Double(acceptedSeconds)*1_000/Double(validDistance)):nil,
+        title:payload.title,memo:payload.memo,createdAt:payload.endedAt,updatedAt:payload.endedAt,pointReward:nil
+    )
+}
+
+private actor RunStoreAcceptedSummaryUploader:RunUploading {
+    private var requests:[(RunUploadPayload,RunUploadSession)]=[]
+    private var retriesRemaining:Int
+    private let verdict:String
+    private let validDistanceRatio:Double
+    private let validSecondsRatio:Double
+
+    init(retries:Int=0,verdict:String="VALID",validDistanceRatio:Double=0.6,validSecondsRatio:Double=0.6) {
+        self.retriesRemaining=retries;self.verdict=verdict
+        self.validDistanceRatio=validDistanceRatio;self.validSecondsRatio=validSecondsRatio
+    }
+
+    func upload(_ payload:RunUploadPayload,session:RunUploadSession) async throws -> RunUploadDelivery {
+        requests.append((payload,session))
+        if retriesRemaining>0 {retriesRemaining-=1;return .retryLater(code:"TRANSPORT")}
+        let validDistance=Int64(Double(max(0,payload.distanceMeters))*validDistanceRatio)
+        let validSeconds=Int64(Double(max(0,payload.movingSeconds))*validSecondsRatio)
+        return .acceptedSummary(acceptedRunSummary(for:payload,verdict:verdict,validDistanceMeters:validDistance,validSeconds:validSeconds))
+    }
+
+    func sentRequests()->[(RunUploadPayload,RunUploadSession)] {requests}
+}
+
+private struct FixedRunUploadResponseTransport:APIResponseSending {
+    let response:APIClientResponse
+    func sendResponse(path:String,method:String,body:Data?,headers:[String:String],queryItems:[URLQueryItem]) async throws -> APIClientResponse {response}
+}
+
+private func runUploadServerResponse(for payload:RunUploadPayload)throws->Data {
+    let timestamp=ISO8601DateFormatter();timestamp.timeZone=TimeZone(identifier:"Asia/Seoul");timestamp.formatOptions=[.withInternetDateTime,.withFractionalSeconds,.withColonSeparatorInTimeZone]
+    let runDate=DateFormatter();runDate.locale=Locale(identifier:"en_US_POSIX");runDate.calendar=Calendar(identifier:.gregorian);runDate.timeZone=TimeZone(identifier:"Asia/Seoul");runDate.dateFormat="yyyy-MM-dd"
+    let distance=payload.distanceMeters;let moving=payload.movingSeconds
+    let validDistance=max(1,distance/2);let validSeconds=max(1,moving/2)
+    let elapsed=max(moving,Int(payload.endedAt.timeIntervalSince(payload.startedAt)))
+    let response:[String:Any]=[
+        "id":"server-\(payload.clientRunID.uuidString)","clientRunId":payload.clientRunID.uuidString,"version":1,
+        "startedAt":timestamp.string(from:payload.startedAt),"endedAt":timestamp.string(from:payload.endedAt),
+        "runDate":runDate.string(from:payload.startedAt),"elapsedSeconds":elapsed,"movingSeconds":moving,
+        "distanceMeters":distance,"verdict":"VALID","verdictReason":NSNull(),
+        "validDistanceMeters":validDistance,"validSeconds":validSeconds,
+        "paceSecondsPerKm":Int(Double(validSeconds)*1_000/Double(validDistance)),
+        "title":payload.title.map{$0 as Any} ?? NSNull(),"memo":payload.memo.map{$0 as Any} ?? NSNull(),
+        "createdAt":timestamp.string(from:payload.endedAt),"updatedAt":timestamp.string(from:payload.endedAt),"pointReward":NSNull()
+    ]
+    return try JSONSerialization.data(withJSONObject:response,options:[.sortedKeys])
+}
+
 private actor RunStoreUploadSequenceFake:RunUploading {
     private var deliveries:[RunUploadDelivery]
     private var sent:[(RunUploadPayload,RunUploadSession)]=[]
@@ -1523,7 +1592,7 @@ final class ThemeTests:XCTestCase {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         defer{try? FileManager.default.removeItem(at:directory)}
         let owner="123"
-        let sender=RunStoreUploadSequenceFake(deliveries:[.retryLater(code:"TRANSPORT"),.accepted])
+        let sender=RunStoreAcceptedSummaryUploader(retries:1)
         let outbox=try RunUploadOutbox(
             persistence:FileRunUploadOutboxPersistence(fileURL:directory.appendingPathComponent("outbox.json")),
             sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:owner,accessToken:"fake-token")),
@@ -1580,9 +1649,112 @@ final class ThemeTests:XCTestCase {
 
         let retry=await store.drainPendingRunUploads()
         XCTAssertEqual(retry,.completed(uploadedCount:1,deletedCount:0))
-        let sent=await sender.requests().map(\.0)
+        let sent=await sender.sentRequests().map(\.0)
         XCTAssertEqual(sent,[payload,payload],"Replay after a lost network response uses the exact same body and clientRunId")
-        XCTAssertEqual(store.records.first?.serverJudgement,.pending,"POST acceptance alone does not overwrite local data with a server verdict")
+        let finalRecord=try XCTUnwrap(store.records.first)
+        XCTAssertEqual(finalRecord.serverJudgement,.valid,"The POST summary verdict is merged into the same local record after durable acknowledgement")
+        XCTAssertEqual(finalRecord.kilometers,finished.kilometers,"The original device measurement remains available after server adjudication")
+        XCTAssertLessThan(finalRecord.displayedKilometers,finalRecord.kilometers,"The UI summary uses the server-accepted distance")
+        XCTAssertEqual(store.totalDistance,finalRecord.displayedKilometers,"Statistics count the adjudicated record once using server-valid distance")
+        XCTAssertEqual(store.records.count,1)
+        XCTAssertTrue(store.hasLocalRecord(ownerID:owner,clientRunID:payload.clientRunID),"A matching server list row is represented by the same local member/clientRunId record")
+        let acknowledgedOutbox=try await outbox.snapshot()
+        XCTAssertTrue(acknowledgedOutbox.isEmpty,"The durable receipt is removed only after the local result is saved")
+        XCTAssertTrue(store.uploadMessage?.contains("서버 판정 완료") == true)
+    }
+
+    @MainActor func testPersistedServerAcknowledgementIsAppliedAfterRelaunchWithoutResending() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+        defer{try? FileManager.default.removeItem(at:directory)}
+        let outboxURL=directory.appendingPathComponent("outbox.json")
+        let canonicalURL=directory.appendingPathComponent("owned-records.json")
+        let session=RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A"))
+        let sender=RunStoreAcceptedSummaryUploader()
+        let outbox=try RunUploadOutbox(persistence:FileRunUploadOutboxPersistence(fileURL:outboxURL),sessionProvider:session,uploader:sender)
+        let location=RunLocationCaptureFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:outbox,uploadDrainer:outbox,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalURL),locationCapture:location)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        location.emit(RunLocationFix(recordedAt:startedAt,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(60),latitude:37.56750,longitude:126.97800,accuracyMeters:4))
+        let completedValue=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completedValue)
+        let payload=try XCTUnwrap(completed.uploadPayload)
+
+        let simulatedProcessCrash=try await outbox.drain(ownerID:"member-A")
+        let acceptedSummary=try XCTUnwrap(simulatedProcessCrash.acceptedSummaries.first)
+        XCTAssertEqual(store.records.first?.serverJudgement,.pending,"The original process did not yet merge the response into its local snapshot")
+        let persistedReceipt=try await outbox.snapshot()
+        XCTAssertEqual(persistedReceipt.first?.state,.serverAcknowledged(acceptedSummary))
+
+        let relaunchSender=RunStoreAcceptedSummaryUploader()
+        let relaunchedOutbox=try RunUploadOutbox(persistence:FileRunUploadOutboxPersistence(fileURL:outboxURL),sessionProvider:session,uploader:relaunchSender)
+        let relaunched=RunStore(defaults:defaults,uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),uploadQueue:relaunchedOutbox,uploadDrainer:relaunchedOutbox,ownedRecordsPersistence:FileRunStoreOwnedRecordsPersistence(fileURL:canonicalURL))
+        await relaunched.recoverPendingRunUploads()
+
+        let recovered=try XCTUnwrap(relaunched.records.first)
+        XCTAssertEqual(recovered.id,completed.id,"Recovery updates the existing local record rather than appending a server copy")
+        XCTAssertEqual(recovered.clientRunID,payload.clientRunID)
+        XCTAssertEqual(recovered.serverJudgement,.valid)
+        XCTAssertEqual(recovered.serverRunID,acceptedSummary.id)
+        XCTAssertEqual(recovered.kilometers,completed.kilometers)
+        XCTAssertEqual(relaunched.records.count,1)
+        XCTAssertTrue(relaunched.hasLocalRecord(ownerID:"member-A",clientRunID:payload.clientRunID))
+        let clearedReceipt=try await relaunchedOutbox.snapshot()
+        XCTAssertTrue(clearedReceipt.isEmpty,"Recovery removes the receipt only after canonical local persistence")
+        let relaunchRequests=await relaunchSender.sentRequests()
+        XCTAssertTrue(relaunchRequests.isEmpty,"Relaunch recovery applies the durable server response offline without a second POST")
+    }
+
+    @MainActor func testLateAcceptedSummaryCannotCrossAccountSwitch() async throws {
+        let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!
+        defer{defaults.removePersistentDomain(forName:suite)}
+        let identity=RunStoreUploadIdentityFake(memberID:"member-A")
+        let drainer=RunStoreUploadDrainerFake(suspends:true)
+        let location=RunLocationCaptureFake()
+        let store=RunStore(defaults:defaults,uploadIdentityProvider:identity,uploadDrainer:drainer,ownedRecordsPersistence:RunStoreOwnedRecordsFake(),locationCapture:location)
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400)
+        XCTAssertTrue(store.start(at:startedAt))
+        location.emit(RunLocationFix(recordedAt:startedAt,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(60),latitude:37.56750,longitude:126.97800,accuracyMeters:4))
+        let completedValue=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
+        let completed=try XCTUnwrap(completedValue)
+        let payload=try XCTUnwrap(completed.uploadPayload)
+        let summary=acceptedRunSummary(for:payload,validDistanceMeters:500,validSeconds:100)
+        let pending=Task{@MainActor in await store.drainPendingRunUploads()}
+        await drainer.waitForCalls(1)
+        identity.memberID="member-B"
+        await drainer.complete(RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished,acceptedSummaries:[summary]))
+
+        let lateResult=await pending.value
+        XCTAssertEqual(lateResult,.ignored,"A late result is ignored after identity changes")
+        XCTAssertFalse(store.applyServerRunSummary(summary,ownerID:"member-A"),"A response for member A cannot be applied while member B is active")
+        let unchanged=try XCTUnwrap(store.records.first)
+        XCTAssertEqual(unchanged.id,completed.id)
+        XCTAssertEqual(unchanged.clientRunID,payload.clientRunID)
+        XCTAssertEqual(unchanged.serverJudgement,.pending)
+        XCTAssertEqual(unchanged.kilometers,completed.kilometers)
+    }
+
+    func testRunUploadClientDecodesPostSummaryAndRetriesMalformedSuccess() async throws {
+        let startedAt=Date(timeIntervalSince1970:1_791_233_400.125)
+        let payload=RunUploadPayload(clientRunID:UUID(),startedAt:startedAt,endedAt:startedAt.addingTimeInterval(180),movingSeconds:180,distanceMeters:1_250,title:"Fixture run",memo:"No network")
+        let response=APIClientResponse(statusCode:201,data:try runUploadServerResponse(for:payload),requestID:"fake-response")
+        let client=RunUploadClient(apiClient:FixedRunUploadResponseTransport(response:response))
+        let delivery=try await client.upload(payload,session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token"))
+        guard case .acceptedSummary(let summary)=delivery else {return XCTFail("A valid HTTP success returns the backend judgement summary")}
+        XCTAssertEqual(summary.clientRunID,payload.clientRunID)
+        XCTAssertEqual(summary.verdict,"VALID")
+        XCTAssertEqual(summary.distanceMeters,Int64(payload.distanceMeters))
+        XCTAssertEqual(summary.validDistanceMeters,Int64(payload.distanceMeters/2))
+        XCTAssertEqual(summary.validSeconds,Int64(payload.movingSeconds/2))
+        XCTAssertEqual(summary.id,"server-\(payload.clientRunID.uuidString)")
+
+        let malformed=RunUploadClient(apiClient:FixedRunUploadResponseTransport(response:APIClientResponse(statusCode:201,data:Data(),requestID:nil)))
+        let malformedDelivery=try await malformed.upload(payload,session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token"))
+        XCTAssertEqual(malformedDelivery,.retryLater(code:"INVALID_ACK"))
     }
 
     @MainActor func testRunAutomaticallyCapsWallDurationAtSixHoursIncludingPause() async throws {
@@ -1715,7 +1887,8 @@ final class ThemeTests:XCTestCase {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
         defer{try? FileManager.default.removeItem(at:directory)}
         let canonicalFile=directory.appendingPathComponent("owned-run-records.json")
-        let sender=RunStoreUploadSenderFake()
+        let sender=RunStoreAcceptedSummaryUploader()
+        let location=RunLocationCaptureFake()
         let outbox=try RunUploadOutbox(
             persistence:FailSecondRunUploadOutboxWrite(),
             sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"member-A",accessToken:"fake-token-A")),
@@ -1727,11 +1900,13 @@ final class ThemeTests:XCTestCase {
             uploadIdentityProvider:RunStoreUploadIdentityFake(memberID:"member-A"),
             uploadQueue:outbox,
             uploadDrainer:outbox,
-            ownedRecordsPersistence:ownedRecords
+            ownedRecordsPersistence:ownedRecords,
+            locationCapture:location
         )
         let startedAt=Date(timeIntervalSince1970:1_791_233_400)
         XCTAssertTrue(store.start(at:startedAt))
-        store.session?.distance=1.25
+        location.emit(RunLocationFix(recordedAt:startedAt,latitude:37.56650,longitude:126.97800,accuracyMeters:4))
+        location.emit(RunLocationFix(recordedAt:startedAt.addingTimeInterval(60),latitude:37.56750,longitude:126.97800,accuracyMeters:4))
         let completionResult=await store.finishAndEnqueue(save:true,at:startedAt.addingTimeInterval(180))
         let completed=try XCTUnwrap(completionResult)
         let clientRunID=try XCTUnwrap(completed.clientRunID)
@@ -1746,11 +1921,13 @@ final class ThemeTests:XCTestCase {
 
         let secondDrain=await store.drainPendingRunUploads()
         XCTAssertEqual(secondDrain,.completed(uploadedCount:1,deletedCount:0))
-        let sent=await sender.uploadedPayloads()
+        let sent=await sender.sentRequests().map(\.0)
         XCTAssertEqual(sent.map(\.clientRunID),[clientRunID,clientRunID],"The accepted upload is retried with the same id after its local acknowledgement failed")
         let canonicalAfterRetry=try XCTUnwrap(ownedRecords.loadSnapshot().canonicalRecords.first)
         XCTAssertEqual(canonicalAfterRetry.id,completed.id,"Server acknowledgement never removes the canonical completion record")
         XCTAssertEqual(canonicalAfterRetry.uploadPayload?.clientRunID,clientRunID)
+        XCTAssertEqual(canonicalAfterRetry.serverJudgement,.valid,"The retry summary is merged after the outbox can persist its acknowledgement")
+        XCTAssertEqual(canonicalAfterRetry.kilometers,completed.kilometers,"The server result does not rewrite original measurements")
     }
     @MainActor func testRunUploadDrainReportsPermanentDeliveryFailureAndRetainsCanonicalRecord() async throws {
         let suite="MovTests."+UUID().uuidString;let defaults=UserDefaults(suiteName:suite)!

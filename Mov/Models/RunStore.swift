@@ -275,7 +275,34 @@ struct RunRecord: Identifiable, Codable, Equatable {
     var routePoints:[RunUploadPoint]? = nil
     var pauseIntervals:[RunUploadPause]? = nil
     var serverJudgement:RunServerJudgement? = nil
-    var caloriesText:String {guard isValid || serverJudgement == .pending else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*kilometers).rounded())) kcal"}
+    var serverRunID:String? = nil
+    var serverVersion:Int64? = nil
+    var serverVerdictReason:String? = nil
+    var serverValidDistanceMeters:Int64? = nil
+    var serverValidSeconds:Int64? = nil
+    var serverPaceSecondsPerKm:Int64? = nil
+    var serverUpdatedAt:Date? = nil
+    var displayedKilometers:Double {
+        serverJudgement == .valid ? Double(serverValidDistanceMeters ?? 0)/1_000 : kilometers
+    }
+    var displayedSeconds:Double {
+        serverJudgement == .valid ? Double(serverValidSeconds ?? 0) : seconds
+    }
+    var statisticalKilometers:Double {
+        switch serverJudgement {
+        case .valid: Double(serverValidDistanceMeters ?? 0)/1_000
+        case .invalid, .pending: 0
+        case nil: kilometers
+        }
+    }
+    var statisticalSeconds:Double {
+        switch serverJudgement {
+        case .valid: Double(serverValidSeconds ?? 0)
+        case .invalid, .pending: 0
+        case nil: seconds
+        }
+    }
+    var caloriesText:String {guard isValid || serverJudgement == .pending else{return "0 kcal"};guard let weightKg else{return "—"};return "약 \(Int((weightKg*displayedKilometers).rounded())) kcal"}
     var isValid: Bool {
         switch serverJudgement {
         case .valid: true
@@ -284,7 +311,14 @@ struct RunRecord: Identifiable, Codable, Equatable {
         }
     }
     var hasMeasuredDistance:Bool {kilometers > 0}
-    var pace: String { guard kilometers>0 else{return "0:00"};let value=max(0,Int(seconds/kilometers));return String(format:"%d:%02d",value/60,value%60) }
+    var pace: String {
+        if serverJudgement == .valid, let serverPaceSecondsPerKm, let value=Int(exactly:serverPaceSecondsPerKm) {
+            return String(format:"%d:%02d",value/60,value%60)
+        }
+        guard displayedKilometers>0 else{return "0:00"}
+        let value=max(0,Int(displayedSeconds/displayedKilometers))
+        return String(format:"%d:%02d",value/60,value%60)
+    }
     var provisionalSplits:[RunLocalSplit] {
         guard let routePoints, routePoints.count > 1 else { return [] }
         var accumulatedDistance = 0.0
@@ -348,8 +382,8 @@ struct RunPeriodSummary: Equatable {
     init(records: [RunRecord]) {
         let valid = records.filter(\.isValid)
         recordCount = valid.count
-        kilometers = valid.reduce(0) { $0 + $1.kilometers }
-        seconds = valid.reduce(0) { $0 + $1.seconds }
+        kilometers = valid.reduce(0) { $0 + $1.statisticalKilometers }
+        seconds = valid.reduce(0) { $0 + $1.statisticalSeconds }
     }
 }
 struct DemoSession: Codable {
@@ -944,6 +978,7 @@ enum RunStoreUploadDrainResult: Equatable {
     /// Re-enqueues completed snapshots after launch. The outbox de-duplicates the
     /// same owner/clientRunId/payload, and this method never drains or sends requests.
     func recoverPendingRunUploads() async {
+        await recoverAcceptedRunSummaries()
         guard let uploadQueue else { return }
         let snapshots: [RunRecord]
         do {
@@ -972,6 +1007,64 @@ enum RunStoreUploadDrainResult: Equatable {
                 // Leave the atomic recovery source pending so a later launch can retry it.
             }
         }
+    }
+
+    private func recoverAcceptedRunSummaries() async {
+        guard let ownerID=authenticatedUploadMemberID,let uploadDrainer else{return}
+        let summaries:[BackendRunSummary]
+        do { summaries=try await uploadDrainer.pendingAcceptedRunSummaries(ownerID:ownerID) }
+        catch {
+            uploadMessage="서버 판정 대기를 복구하지 못했습니다. 기기 기록은 보존했어요."
+            uploadNeedsRetry=true
+            return
+        }
+        guard !summaries.isEmpty else{return}
+        var appliedIDs:[UUID]=[]
+        for summary in summaries {
+            guard authenticatedUploadMemberID==ownerID,
+                  applyServerRunSummary(summary,ownerID:ownerID) else {
+                uploadMessage="서버 판정 결과를 기기에 반영하지 못했습니다. 저장된 기록은 보존했어요."
+                uploadNeedsRetry=true
+                return
+            }
+            appliedIDs.append(summary.clientRunID)
+        }
+        do {
+            try await uploadDrainer.acknowledgeAcceptedRunSummaries(ownerID:ownerID,clientRunIDs:appliedIDs)
+            guard authenticatedUploadMemberID==ownerID else{return}
+            setServerJudgementMessage(summaries)
+        } catch {
+            uploadMessage="서버 판정은 기기에 반영했어요. 업로드 상태 확인을 다시 시도해 주세요."
+            uploadNeedsRetry=true
+        }
+    }
+
+    private func applyAcceptedRunSummaries(_ summaries:[BackendRunSummary],ownerID:String) async -> Bool {
+        guard !summaries.isEmpty else{return true}
+        guard authenticatedUploadMemberID==ownerID,let uploadDrainer else{return false}
+        var appliedIDs:[UUID]=[]
+        for summary in summaries {
+            guard authenticatedUploadMemberID==ownerID,
+                  applyServerRunSummary(summary,ownerID:ownerID) else{return false}
+            appliedIDs.append(summary.clientRunID)
+        }
+        do {
+            try await uploadDrainer.acknowledgeAcceptedRunSummaries(ownerID:ownerID,clientRunIDs:appliedIDs)
+            guard authenticatedUploadMemberID==ownerID else{return false}
+        } catch {return false}
+        setServerJudgementMessage(summaries)
+        return true
+    }
+
+    private func setServerJudgementMessage(_ summaries:[BackendRunSummary]) {
+        guard !summaries.isEmpty else{return}
+        let valid=summaries.filter{$0.verdict=="VALID"}.count
+        let invalid=summaries.filter{$0.verdict=="INVALID"}.count
+        if invalid>0 && valid>0 {uploadMessage="서버 판정 결과를 기기 기록에 반영했어요 · 유효 \(valid)건, 비유효 \(invalid)건"}
+        else if invalid>0 {uploadMessage="서버에서 비유효로 판정한 결과를 기기 기록에 반영했어요"}
+        else if valid>0 {uploadMessage="서버 판정 완료 · 유효 기록으로 반영했어요"}
+        else {uploadMessage="서버 판정 대기 상태를 기기 기록에 반영했어요"}
+        uploadNeedsRetry=false
     }
 
     /// Drains the existing outbox only when an authenticated stable member ID is available.
@@ -1015,9 +1108,11 @@ enum RunStoreUploadDrainResult: Equatable {
             return .ignored
         }
 
-        let result:RunStoreUploadDrainResult
+        var result:RunStoreUploadDrainResult
+        var acceptedSummaries:[BackendRunSummary]=[]
         switch drainResult {
         case .success(let report):
+            acceptedSummaries=report.acceptedSummaries
             result = Self.uploadDrainResult(for: report)
         case .failure(let error):
             if error is CancellationError { result = .cancelled }
@@ -1025,10 +1120,16 @@ enum RunStoreUploadDrainResult: Equatable {
                 result = .retryableAcknowledgementFailure
             } else { result = .storageFailure }
         }
+        if !acceptedSummaries.isEmpty,
+           !(await applyAcceptedRunSummaries(acceptedSummaries,ownerID:ownerID)) {
+            result = .retryableAcknowledgementFailure
+        }
         switch result {
         case .completed(let uploadedCount, _):
-            uploadMessage = uploadedCount > 0 ? "업로드 접수 완료 · 서버 판정은 서버 기록에서 확인해 주세요" : "업로드할 기록이 없어요"
-            uploadNeedsRetry = false
+            if acceptedSummaries.isEmpty {
+                uploadMessage = uploadedCount > 0 ? "업로드 접수 완료 · 서버 판정 대기" : (uploadMessage ?? "업로드할 기록이 없어요")
+                uploadNeedsRetry = false
+            }
         case .permanentFailure(let count, _, _):
             uploadMessage = "\(count)개 기록의 업로드를 완료하지 못했어요. 저장된 측정값을 확인해 주세요"
             uploadNeedsRetry = false
@@ -1214,6 +1315,68 @@ enum RunStoreUploadDrainResult: Equatable {
         records[index]=updated
         _ = persist()
     }
+
+    var authenticatedUploadMemberID:String? {
+        uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID)
+    }
+
+    func hasLocalRecord(ownerID:String,clientRunID:UUID)->Bool {
+        records.contains{$0.uploadOwnerID==ownerID && $0.clientRunID==clientRunID}
+    }
+
+    /// Applies an authoritative POST/list summary to the one local snapshot that was
+    /// created for the same authenticated member and immutable clientRunId.
+    @discardableResult func applyServerRunSummary(_ summary:BackendRunSummary,ownerID:String)->Bool {
+        let matchingIndices=records.indices.filter{
+            records[$0].uploadOwnerID==ownerID && records[$0].clientRunID==summary.clientRunID
+        }
+        guard Self.validMemberID(ownerID) != nil,
+              authenticatedUploadMemberID==ownerID,
+              matchingIndices.count==1,
+              let index=matchingIndices.first,
+              let payload=records[index].uploadPayload,
+              summary.matches(payload) else {return false}
+        let judgement:RunServerJudgement
+        switch summary.verdict {
+        case "VALID":
+            guard summary.validDistanceMeters != nil,
+                  summary.validSeconds != nil,
+                  summary.paceSecondsPerKm != nil else {return false}
+            judgement = .valid
+        case "INVALID": judgement = .invalid
+        case "PENDING": judgement = .pending
+        default: return false
+        }
+        var updated=records[index]
+        updated.serverRunID=summary.id
+        updated.serverVersion=summary.version
+        updated.serverJudgement=judgement
+        updated.serverVerdictReason=summary.verdictReason
+        updated.serverValidDistanceMeters=summary.validDistanceMeters
+        updated.serverValidSeconds=summary.validSeconds
+        updated.serverPaceSecondsPerKm=summary.paceSecondsPerKm
+        updated.serverUpdatedAt=summary.updatedAt
+        if let reward=summary.pointReward,
+           let status=RunPointRewardStatus(rawValue:reward.status.rawValue),
+           let value=try? RunPointReward(status:status,pointsAwarded:reward.pointsAwarded.flatMap{Int(exactly:$0)}) {
+            updated.pointReward=value
+        }
+        if records[index]==updated {return true}
+
+        let previous=records[index]
+        records[index]=updated
+        do {
+            try ownedRecordsPersistence.saveCanonical(records.filter{$0.uploadOwnerID != nil})
+        } catch {
+            records[index]=previous
+            storageMessage="서버 판정 결과를 기기에 안전하게 저장하지 못했습니다. 업로드 확인을 다시 시도해 주세요."
+            return false
+        }
+        // The owner-scoped file is canonical. UserDefaults is only its local read cache.
+        _=persist()
+        return true
+    }
+
     func delete(_ id: UUID) {
         guard storageMessage == nil,
               let record = records.first(where: { $0.id == id }) else { return }
@@ -1231,17 +1394,17 @@ enum RunStoreUploadDrainResult: Equatable {
     }
     func weeklyRecords(asOf now: Date = WReviewClock.now) -> [RunRecord] { var calendar=Calendar(identifier:.iso8601);calendar.timeZone = .current;let interval=calendar.dateInterval(of:.weekOfYear,for:now)!;return records.filter{interval.contains($0.date) && $0.isValid} }
     var weeklyRecords: [RunRecord] { weeklyRecords(asOf: WReviewClock.now) }
-    var weeklyDistance: Double { weeklyRecords.reduce(0){$0+$1.kilometers} }
-    var weeklySeconds: Double { weeklyRecords.reduce(0){$0+$1.seconds} }
-    var totalDistance: Double { records.filter(\.isValid).reduce(0){$0+$1.kilometers} }
+    var weeklyDistance: Double { weeklyRecords.reduce(0){$0+$1.statisticalKilometers} }
+    var weeklySeconds: Double { weeklyRecords.reduce(0){$0+$1.statisticalSeconds} }
+    var totalDistance: Double { records.filter(\.isValid).reduce(0){$0+$1.statisticalKilometers} }
     var activityDays: Int {
         let groups=Dictionary(grouping: records.filter(\.isValid)) { Calendar.current.startOfDay(for:$0.date) }
-        return groups.values.filter { $0.reduce(0){$0+$1.seconds} >= 240 && $0.reduce(0){$0+$1.kilometers} >= 1 }.count
+        return groups.values.filter { $0.reduce(0){$0+$1.statisticalSeconds} >= 240 && $0.reduce(0){$0+$1.statisticalKilometers} >= 1 }.count
     }
     func averageDistance(asOf now: Date) -> Double {
         let start=Calendar.current.date(byAdding:.month,value:-1,to:now) ?? now
         let recent=records.filter{$0.isValid && $0.date >= start && $0.date <= now}
-        return recent.isEmpty ? 0 : recent.reduce(0){$0+$1.kilometers}/Double(recent.count)
+        return recent.isEmpty ? 0 : recent.reduce(0){$0+$1.statisticalKilometers}/Double(recent.count)
     }
     var averageDistance: Double { averageDistance(asOf: Date()) }
     var tier: String {

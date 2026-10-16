@@ -592,13 +592,13 @@ enum WCommunityCoursePolicy {
         guard accountVerified else{return .unauthenticated}
         guard draftOwnerID==viewerID else{return .ownerChanged}
         guard let id=UUID(uuidString:selectedRecordID),let record=records.first(where:{$0.id==id}) else{return .missingRecord}
-        guard record.isValid,record.seconds>0 else{return .invalidRecord}
+        guard record.isValid,record.displayedSeconds>0 else{return .invalidRecord}
         return .eligible(record)
     }
     static func playbackStep(_ current:Double,duration:Double)->(time:Double,finished:Bool){let next=min(max(0,duration),max(0,current)+60);return(next,next>=max(0,duration))}
     static func pace(distance:Double,seconds:Double)->String{guard distance>0,seconds>=0 else{return "0:00 /km"};return RunRecord.clock(seconds/distance)+" /km"}
     static func makeCourse(id:String,authorMemberID:String,authorName:String,authorRank:String,title:String,introduction:String,hideEnds:Bool,record:RunRecord)->WCommunityCourse {
-        WCommunityCourse(id:id,authorMemberID:authorMemberID,authorName:authorName,authorRank:authorRank,title:title,introduction:introduction,hideEnds:hideEnds,record:WCommunityCourseRecordSnapshot(id:record.id.uuidString,title:record.title,distance:record.kilometers,seconds:record.seconds,recordedAt:record.date))
+        WCommunityCourse(id:id,authorMemberID:authorMemberID,authorName:authorName,authorRank:authorRank,title:title,introduction:introduction,hideEnds:hideEnds,record:WCommunityCourseRecordSnapshot(id:record.id.uuidString,title:record.title,distance:record.displayedKilometers,seconds:record.displayedSeconds,recordedAt:record.date))
     }
 }
 
@@ -1070,16 +1070,16 @@ extension WireframeRoot {
         return "\(firstParts.month!).\(firstParts.day!) — \(lastParts.month!).\(lastParts.day!)\(example)"
     }
     func homeRecentRecord(_ record:RunRecord)->some View {
-        let validSeconds=record.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? record.seconds
+        let validSeconds=record.serverJudgement == nil ? (record.segments?.filter{$0.type=="include"}.reduce(0){$0+$1.seconds} ?? record.seconds):record.displayedSeconds
         return Button { ui.openRecord(record) } label: {
             HStack(spacing:10) {
                 VStack(alignment:.leading,spacing:5) {
                     Text(record.title).font(W.font(14,.medium)).fixedSize(horizontal:false,vertical:true).accessibilityIdentifier("homeRecentTitle")
                     HStack(alignment:.firstTextBaseline,spacing:4) {
-                        Text(MovNumber.display(record.kilometers)).font(W.font(19,.semibold)).monospacedDigit()
+                        Text(MovNumber.display(record.displayedKilometers)).font(W.font(19,.semibold)).monospacedDigit()
                         Text("km").font(W.font(13))
                     }.accessibilityIdentifier("homeRecentDistance")
-                    Text("\(recordWhen(record)) · \(RunRecord.clock(validSeconds)) 유효 러닝\(record.isExample == true ? " · 예시":"")")
+                    Text("\(recordWhen(record)) · \(RunRecord.clock(validSeconds)) \(record.serverJudgement == .pending ? "기기 측정 시간":record.serverJudgement == .invalid ? "서버 판정 비유효":"유효 러닝")\(record.isExample == true ? " · 예시":"")")
                         .font(W.font(10)).foregroundStyle(W.muted).lineLimit(1).accessibilityIdentifier("homeRecentMetadata")
                 }
                 Spacer(minLength:6)
@@ -2735,7 +2735,7 @@ extension WireframeRoot {
                 Text("유효 기록을 선택해 코스와 러닝 기록을 함께 공유해요.").font(W.font(13)).lineSpacing(6).foregroundStyle(W.muted).fixedSize(horizontal:false,vertical:true)
                 VStack(alignment:.leading,spacing:8){
                     Text("러닝 기록").font(W.font(13))
-                    Picker("러닝 기록",selection:$ui.communityCourseRecordID){Text("기록 선택").tag("");ForEach(eligible){record in Text("\(record.title) · \(MovNumber.display(record.kilometers)) km").tag(record.id.uuidString)}}.pickerStyle(.menu).frame(maxWidth:.infinity,minHeight:50,alignment:.leading).padding(.horizontal,14).background(Color.wire(0xF4F4F4,0x262626),in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Color.wire(0xDDDDDD,0x373737))).accessibilityIdentifier("communityCourseRecordPicker")
+                    Picker("러닝 기록",selection:$ui.communityCourseRecordID){Text("기록 선택").tag("");ForEach(eligible){record in Text("\(record.title) · \(MovNumber.display(record.displayedKilometers)) km").tag(record.id.uuidString)}}.pickerStyle(.menu).frame(maxWidth:.infinity,minHeight:50,alignment:.leading).padding(.horizontal,14).background(Color.wire(0xF4F4F4,0x262626),in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Color.wire(0xDDDDDD,0x373737))).accessibilityIdentifier("communityCourseRecordPicker")
                 }
                 if eligible.isEmpty{WNotice(text:"공유할 유효 기록이 없어요.")}
                 WField(label:"코스 이름",text:$ui.communityCourseTitle,placeholder:"코스 이름을 입력해 주세요",limit:60,textSize:15,labelSize:13,accessibilityID:"communityCourseName",softFieldStyle:true)
@@ -2744,7 +2744,7 @@ extension WireframeRoot {
                 if !ui.communityCourseError.isEmpty{WNotice(text:ui.communityCourseError,danger:true).accessibilityIdentifier("communityCourseError")}
             }
         }actions:{
-            if ui.communityAccountVerified{Button("미리보기"){let result=WCommunityCoursePolicy.publicationResult(accountVerified:ui.communityAccountVerified,draftOwnerID:ui.communityCourseDraftOwnerID,viewerID:ui.communityViewerMemberID,selectedRecordID:ui.communityCourseRecordID,records:store.records);guard case .eligible(let record)=result else{ui.communityCourseError=eligible.isEmpty ? "공유할 유효 기록이 없어요.":"선택한 러닝 기록을 다시 확인해 주세요.";return};guard !ui.communityCourseTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,!ui.communityCourseIntroduction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityCourseError="코스 이름과 소개를 입력해 주세요.";return};ui.communityCourseDistance=record.kilometers;ui.communityCourseSeconds=record.seconds;ui.communityCourseDraft=true;ui.communityCourseError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(eligible.isEmpty).accessibilityIdentifier("communityCoursePreview")}
+            if ui.communityAccountVerified{Button("미리보기"){let result=WCommunityCoursePolicy.publicationResult(accountVerified:ui.communityAccountVerified,draftOwnerID:ui.communityCourseDraftOwnerID,viewerID:ui.communityViewerMemberID,selectedRecordID:ui.communityCourseRecordID,records:store.records);guard case .eligible(let record)=result else{ui.communityCourseError=eligible.isEmpty ? "공유할 유효 기록이 없어요.":"선택한 러닝 기록을 다시 확인해 주세요.";return};guard !ui.communityCourseTitle.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,!ui.communityCourseIntroduction.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{ui.communityCourseError="코스 이름과 소개를 입력해 주세요.";return};ui.communityCourseDistance=record.displayedKilometers;ui.communityCourseSeconds=record.displayedSeconds;ui.communityCourseDraft=true;ui.communityCourseError="";go("C09")}.buttonStyle(WButtonStyle()).disabled(eligible.isEmpty).accessibilityIdentifier("communityCoursePreview")}
             else{Button("계정 인증 확인"){ui.communityCourseDraft=false;go("C11")}.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCourseVerify")}
         }.onChange(of:ui.communityCourseTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:60);if limited != value{ui.communityCourseTitle=limited}}
          .onChange(of:ui.communityCourseIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:2000);if limited != value{ui.communityCourseIntroduction=limited}}

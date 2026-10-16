@@ -1,7 +1,7 @@
 import Foundation
 
-struct BackendRunPointReward: Equatable, Sendable {
-    enum Status: String, Decodable, Sendable {
+struct BackendRunPointReward: Codable, Equatable, Sendable {
+    enum Status: String, Codable, Sendable {
         case pending = "PENDING"
         case settled = "SETTLED"
         case unavailable = "UNAVAILABLE"
@@ -11,7 +11,7 @@ struct BackendRunPointReward: Equatable, Sendable {
     let pointsAwarded: Int64?
 }
 
-struct BackendRunSummary: Equatable, Sendable, Identifiable {
+struct BackendRunSummary: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let clientRunID: UUID
     let version: Int64
@@ -583,6 +583,38 @@ private struct RunSummaryResponse: Decodable {
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.isLenient = false
         return formatter.date(from: value).map { formatter.string(from: $0) == value } ?? false
+    }
+}
+
+extension BackendRunSummary {
+    static func decodeServerSummary(_ data: Data) throws -> BackendRunSummary {
+        do {
+            return try JSONDecoder().decode(RunSummaryResponse.self, from: data).value()
+        } catch let failure as RunRecordsFailure {
+            throw failure
+        } catch {
+            throw RunRecordsFailure.invalidResponse
+        }
+    }
+
+    func matches(_ payload: RunUploadPayload) -> Bool {
+        guard clientRunID == payload.clientRunID,
+              movingSeconds == Int64(exactly: payload.movingSeconds),
+              distanceMeters == Int64(exactly: payload.distanceMeters),
+              ["VALID", "INVALID", "PENDING"].contains(verdict),
+              verdict != "VALID" || (validDistanceMeters != nil && validSeconds != nil && paceSecondsPerKm != nil),
+              let summaryEnd = endedAt,
+              let expectedStart = Self.wholeSecond(payload.startedAt),
+              let expectedEnd = Self.wholeSecond(payload.endedAt),
+              let receivedStart = Self.wholeSecond(startedAt),
+              let receivedEnd = Self.wholeSecond(summaryEnd) else { return false }
+        return receivedStart == expectedStart && receivedEnd == expectedEnd
+    }
+
+    private static func wholeSecond(_ date: Date) -> Int64? {
+        let seconds = date.timeIntervalSince1970.rounded(.down)
+        guard seconds.isFinite else { return nil }
+        return Int64(exactly: seconds)
     }
 }
 

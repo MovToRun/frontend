@@ -211,27 +211,41 @@ struct WMetric:View {
     var reservePauseSpace=false
     var clockOverride:Double?=nil
     var metricPace:String {
-        guard record.kilometers>0 else{return saved ? record.pace:"—"}
+        guard record.displayedKilometers>0 else{return saved ? record.pace:"—"}
         return record.pace.count==4 ? "0"+record.pace:record.pace
     }
     var metricDistance:Text {
-        record.kilometers>0 || saved
-            ? Text(record.kilometers,format:.number.precision(.fractionLength(2)))
+        record.displayedKilometers>0 || saved
+            ? Text(record.displayedKilometers,format:.number.precision(.fractionLength(2)))
             : Text("—")
+    }
+    private var distanceLabel:String {
+        switch record.serverJudgement {
+        case .pending: "기기 측정 거리"
+        case .invalid: "서버 판정 원본 거리"
+        case .valid, nil: "유효 거리"
+        }
+    }
+    private var timeLabel:String {
+        switch record.serverJudgement {
+        case .pending: "기기 측정 시간"
+        case .invalid: "기록 상태"
+        case .valid, nil: saved ? "유효 러닝 시간":"러닝 시간"
+        }
     }
     var body:some View {
         VStack(alignment:.leading,spacing:0){
-            metricLabel(record.serverJudgement == .pending ? "기기 측정 거리":"유효 거리")
+            metricLabel(distanceLabel)
             (metricDistance.font(W.font(52,.bold)).kerning(-2.34)+Text(" km").font(W.font(22,.semibold)).kerning(-0.44))
                 .monospacedDigit().frame(height:57.2,alignment:.leading).padding(.top,5).padding(.bottom,22).accessibilityIdentifier("runDistanceMetric")
             HStack(alignment:.top,spacing:20){
                 VStack(alignment:.leading,spacing:0){
-                    metricLabel(record.serverJudgement == .pending ? "기기 측정 시간":saved && !record.isValid ? "기록 상태":saved ? "유효 러닝 시간":"러닝 시간")
-                    Text(saved && !record.isValid && record.serverJudgement != .pending ? "비유효 러닝":RunRecord.clock(clockOverride ?? record.seconds)).font(W.font(saved && !record.isValid && record.serverJudgement != .pending ? 18:28,.semibold)).kerning(-0.98).monospacedDigit().frame(height:39.2,alignment:.leading)
+                    metricLabel(timeLabel)
+                    Text(saved && !record.isValid && record.serverJudgement != .pending ? "비유효 러닝":RunRecord.clock(clockOverride ?? record.displayedSeconds)).font(W.font(saved && !record.isValid && record.serverJudgement != .pending ? 18:28,.semibold)).kerning(-0.98).monospacedDigit().frame(height:39.2,alignment:.leading)
                     if paused || reservePauseSpace{Text(paused ? "일시정지":" ").font(W.font(12)).foregroundStyle(W.muted).frame(height:19).padding(.top,3)}
                 }.frame(maxWidth:.infinity,alignment:.leading)
                 VStack(alignment:.leading,spacing:0){
-                    metricLabel(record.serverJudgement == .pending ? "기기 측정 페이스":"평균 페이스")
+                    metricLabel(record.serverJudgement == .pending ? "기기 측정 페이스":record.serverJudgement == .invalid ? "기록 상태":"평균 페이스")
                     (Text(metricPace).font(W.font(28,.semibold)).kerning(-0.98)+Text(" /km").font(W.font(14,.medium)).kerning(-0.14)).monospacedDigit().frame(height:39.2,alignment:.leading).accessibilityIdentifier("runPaceMetric")
                     if paused || reservePauseSpace{Color.clear.frame(height:22)}
                 }.padding(.leading,20).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.leading){Color.wire(0xE1E1E1,0xE1E1E1).frame(width:1)}
@@ -578,8 +592,24 @@ actor WireframeRunUploadNetworkFixture:RunUploadEnqueueing,RunUploadDraining {
         if drainAttempts==1 {
             return RunUploadDrainReport(uploadedCount:0,deletedCount:0,terminalCount:0,stopReason:.retryLater(clientRunID:pending[index].payload.clientRunID,code:"TRANSPORT"))
         }
+        let summary=Self.acceptedSummary(for:pending[index].payload)
         pending.remove(at:index)
-        return RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished)
+        return RunUploadDrainReport(uploadedCount:1,deletedCount:0,terminalCount:0,stopReason:.finished,acceptedSummaries:[summary])
+    }
+    private static func acceptedSummary(for payload:RunUploadPayload)->BackendRunSummary {
+        let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX");formatter.calendar=Calendar(identifier:.gregorian);formatter.timeZone=TimeZone(identifier:"Asia/Seoul");formatter.dateFormat="yyyy-MM-dd"
+        let date=formatter.string(from:payload.startedAt)
+        let distance=Int64(max(0,payload.distanceMeters))
+        let seconds=Int64(max(0,payload.movingSeconds))
+        let elapsed=Int64(max(payload.movingSeconds,Int(payload.endedAt.timeIntervalSince(payload.startedAt))))
+        return BackendRunSummary(
+            id:"fixture-\(payload.clientRunID.uuidString)",clientRunID:payload.clientRunID,version:1,
+            startedAt:payload.startedAt,endedAt:payload.endedAt,runDate:date,elapsedSeconds:elapsed,
+            movingSeconds:seconds,distanceMeters:distance,verdict:"VALID",verdictReason:nil,
+            validDistanceMeters:distance,validSeconds:seconds,
+            paceSecondsPerKm:distance>0 ? Int64(Double(seconds)*1_000/Double(distance)):nil,
+            title:payload.title,memo:payload.memo,createdAt:payload.endedAt,updatedAt:payload.endedAt,pointReward:nil
+        )
     }
 }
 #endif

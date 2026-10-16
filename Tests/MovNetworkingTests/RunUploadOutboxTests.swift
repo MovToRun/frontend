@@ -256,6 +256,26 @@ final class RunUploadOutboxTests: XCTestCase {
         )
     }
 
+    private func summaryResponseData(for payload:RunUploadPayload)throws->Data {
+        let timestamp=ISO8601DateFormatter()
+        timestamp.timeZone=TimeZone(identifier:"Asia/Seoul")
+        timestamp.formatOptions=[.withInternetDateTime,.withFractionalSeconds,.withColonSeparatorInTimeZone]
+        let date=DateFormatter();date.locale=Locale(identifier:"en_US_POSIX");date.calendar=Calendar(identifier:.gregorian);date.timeZone=TimeZone(identifier:"Asia/Seoul");date.dateFormat="yyyy-MM-dd"
+        let distance=payload.distanceMeters
+        let moving=payload.movingSeconds
+        let elapsed=max(moving,Int(payload.endedAt.timeIntervalSince(payload.startedAt)))
+        let body:[String:Any]=[
+            "id":"server-\(payload.clientRunID.uuidString)","clientRunId":payload.clientRunID.uuidString,"version":1,
+            "startedAt":timestamp.string(from:payload.startedAt),"endedAt":timestamp.string(from:payload.endedAt),
+            "runDate":date.string(from:payload.startedAt),"elapsedSeconds":elapsed,"movingSeconds":moving,
+            "distanceMeters":distance,"verdict":"VALID","verdictReason":NSNull(),
+            "validDistanceMeters":distance,"validSeconds":moving,"paceSecondsPerKm":356,
+            "title":payload.title.map{$0 as Any} ?? NSNull(),"memo":payload.memo.map{$0 as Any} ?? NSNull(),
+            "createdAt":timestamp.string(from:payload.endedAt),"updatedAt":timestamp.string(from:payload.endedAt),"pointReward":NSNull()
+        ]
+        return try JSONSerialization.data(withJSONObject:body,options:[.sortedKeys])
+    }
+
     private func makeOutbox(
         _ persistence: any RunUploadOutboxPersisting = MemoryOutboxPersistence(),
         session: any RunUploadSessionProviding,
@@ -266,11 +286,14 @@ final class RunUploadOutboxTests: XCTestCase {
 
     func testUploadClientBuildsBackendPostBodyAndDoesNotSendLocalOwnerID() async throws {
         let expected = payload()
-        let response = APIClientResponse(statusCode: 201, data: Data(), requestID: "req-1")
+        let response = APIClientResponse(statusCode: 201, data: try summaryResponseData(for:expected), requestID: "req-1")
         let transport = CapturingUploadTransport(response: response)
         let client = RunUploadClient(apiClient: transport)
         let result = try await client.upload(expected, session: userA)
-        XCTAssertEqual(result, .accepted)
+        guard case .acceptedSummary(let summary)=result else {return XCTFail("A valid success body returns its authoritative run summary")}
+        XCTAssertEqual(summary.clientRunID,expected.clientRunID)
+        XCTAssertEqual(summary.distanceMeters,Int64(expected.distanceMeters))
+        XCTAssertEqual(summary.verdict,"VALID")
 
         let capturedRequest = await transport.request()
         let request = try XCTUnwrap(capturedRequest)
@@ -292,19 +315,22 @@ final class RunUploadOutboxTests: XCTestCase {
     func testUploadClientMapsSuccessDeletedConflictPermanentFutureAndLostResponse() async throws {
         let clientID = UUID()
         let testPayload = payload(clientID)
-        func client(_ status: Int, _ code: String?) -> RunUploadClient {
-            let data = code.map { Data(#"{"code":"\#($0)"}"#.utf8) } ?? Data()
+        func client(_ status: Int, _ code: String?, _ responseData:Data?=nil) -> RunUploadClient {
+            let data = responseData ?? (code.map { Data(#"{"code":"\#($0)"}"#.utf8) } ?? Data())
             return RunUploadClient(apiClient: FixedRunUploadTransport(
                 response: APIClientResponse(statusCode: status, data: data, requestID: nil)
             ))
         }
 
-        let success = try await client(200, nil).upload(testPayload, session: userA)
+        let success = try await client(200, nil,try summaryResponseData(for:testPayload)).upload(testPayload, session: userA)
+        let malformedSuccess = try await client(200,nil,Data()).upload(testPayload,session:userA)
         let deleted = try await client(410, "RUN_DELETED").upload(testPayload, session: userA)
         let conflict = try await client(409, "CLIENT_RUN_ID_CONFLICT").upload(testPayload, session: userA)
         let tooLarge = try await client(413, "PAYLOAD_TOO_LARGE").upload(testPayload, session: userA)
         let future = try await client(422, "RUN_IN_FUTURE").upload(testPayload, session: userA)
-        XCTAssertEqual(success, .accepted)
+        guard case .acceptedSummary(let summary)=success else {return XCTFail("Success includes the authoritative server judgement summary")}
+        XCTAssertEqual(summary.clientRunID,testPayload.clientRunID)
+        XCTAssertEqual(malformedSuccess,.retryLater(code:"INVALID_ACK"))
         XCTAssertEqual(deleted, .alreadyDeleted)
         XCTAssertEqual(conflict, .terminal(code: "CLIENT_RUN_ID_CONFLICT"))
         XCTAssertEqual(tooLarge, .terminal(code: "PAYLOAD_TOO_LARGE"))

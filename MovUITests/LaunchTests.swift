@@ -575,17 +575,19 @@ import UIKit
         XCTAssertTrue(app.buttons["retryRunUpload"].exists,"The local record offers manual retry when upload is unavailable")
         XCTAssertTrue(app.staticTexts["runUploadStatus"].label.contains("네트워크 전송이 실패"),app.debugDescription)
         tap("retryRunUpload")
-        XCTAssertTrue(waitForLayout({self.app.staticTexts["runUploadStatus"].label.contains("업로드 접수 완료")},timeout:5),app.debugDescription)
+        XCTAssertTrue(waitForLayout({self.app.staticTexts["runUploadStatus"].label.contains("서버 판정 완료")},timeout:5),app.debugDescription)
         XCTAssertFalse(app.buttons["retryRunUpload"].exists,"A successful retry clears the upload error affordance")
 
         tap("기록 보기")
         XCTAssertTrue(app.descendants(matching:.any)["screen-L04"].waitForExistence(timeout:5),app.debugDescription)
         XCTAssertTrue(app.staticTexts["runDistanceMetric"].label.contains("km"),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["serverJudgementNotice"].label.contains("서버 판정: 유효한 러닝"),app.debugDescription)
         XCTAssertTrue(app.descendants(matching:.any)["mapSurface"].exists,"The saved record keeps its GPS route points")
         let splits=app.buttons.matching(NSPredicate(format:"label CONTAINS %@","구간 기록")).firstMatch
         XCTAssertTrue(splits.waitForExistence(timeout:5),app.debugDescription)
         splits.tap()
-        XCTAssertTrue(app.staticTexts["기기 임시 페이스 (분/km) · 위로 갈수록 빨라요"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["서버 유효 평균 페이스"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","서버 유효 합계")).firstMatch.waitForExistence(timeout:5),app.debugDescription)
     }
 
     func testRunPointRewardContractAcrossCompletionListAndDetail() {
