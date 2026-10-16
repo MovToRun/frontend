@@ -547,6 +547,40 @@ enum RunStoreUploadDrainResult: Equatable {
             return false
         }
     }
+
+    /// Removes only records and queued uploads owned by this member. Ownerless
+    /// history, other members' records, and account-independent goals are retained.
+    func clearOwnedRecords(for memberID: String) async -> Bool {
+        guard Self.validMemberID(memberID) != nil, storageMessage == nil,
+              session?.uploadOwnerID != memberID else { return false }
+        if let uploadQueue, !(uploadQueue is any RunUploadOwnerScopedClearing) { return false }
+
+        cancelPendingRunUploadDrain()
+        let previousRecords = records
+        let retainedRecords = previousRecords.filter { $0.uploadOwnerID != memberID }
+        do {
+            let snapshot = try ownedRecordsPersistence.loadSnapshot()
+            let sourceRecords: [RunRecord]
+            switch snapshot {
+            case .missing: sourceRecords = previousRecords.filter { $0.uploadOwnerID != nil }
+            case .legacyPending(let records), .canonical(let records): sourceRecords = records
+            }
+            try ownedRecordsPersistence.saveCanonical(sourceRecords.filter { $0.uploadOwnerID != memberID })
+            if let clearing = uploadQueue as? any RunUploadOwnerScopedClearing {
+                try await clearing.clearRunUploads(ownerID: memberID)
+            }
+            records = retainedRecords
+            guard persist() else {
+                records = previousRecords
+                return false
+            }
+            return true
+        } catch {
+            records = previousRecords
+            return false
+        }
+    }
+
     @discardableResult func start(at now: Date = Date(),weight:Double?=nil) -> Bool {
         guard session == nil, storageMessage == nil else { return false }
         let memberID = uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID)

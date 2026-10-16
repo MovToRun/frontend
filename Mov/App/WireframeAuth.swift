@@ -906,7 +906,48 @@ extension WireframeRoot {
             }
         }
     }
-    var deleteAccount:some View {WPage(title:"회원 탈퇴",back:back){WHeading(text:"계정을 삭제하기 전\n확인해 주세요").padding(.top,9);WText(text:"계정과 연결된 로그인 수단을 삭제하는 흐름이에요. 기기 기록 삭제와 범위가 달라요.");Text("실제 삭제 범위·법정 보존·처리 시간은 출시 정책에서 확정해야 해요. 이 데모는 실제 회원·기록을 삭제하지 않아요.").font(W.font(13)).kerning(-0.195).lineSpacing(6).fixedSize(horizontal:false,vertical:true).offset(y:-1).foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading).padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A))).padding(.top,4).accessibilityIdentifier("accountDeletionImpactNotice");Button{ui.deleteConsent.toggle()}label:{HStack(alignment:.top){WCheck().stroke(ui.deleteConsent ? W.lime:W.muted,style:StrokeStyle(lineWidth:2.1,lineCap:.round,lineJoin:.round)).frame(width:21,height:21).padding(.trailing,4).padding(.top,2);VStack(alignment:.leading,spacing:4){Text("삭제 흐름의 영향 설명을 확인했어요").font(W.font(14)).kerning(-0.21);Text("실제 삭제가 아닌 시뮬레이션이에요").font(W.font(12)).foregroundStyle(W.muted)}.lineSpacing(5).multilineTextAlignment(.leading)}.frame(minHeight:80,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading).overlay(alignment:.bottom){W.line.frame(height:1)}}.buttonStyle(.plain).accessibilityIdentifier("accountDeletionImpactAcknowledgement").accessibilityAddTraits(ui.deleteConsent ? .isSelected:[])}actions:{Button(reviewTools ? "삭제 흐름 확인 · 시뮬레이션":"탈퇴하기"){if reviewTools{go("T16")}else{infoAction("delete-account-demo")}}.buttonStyle(WButtonStyle(kind:2)).disabled(!ui.deleteConsent).accessibilityIdentifier("confirmAccountDeletion");button("계정 유지","T01",kind:1)}}
+    var deleteAccount:some View {
+        let notice = remoteReads.memberWithdrawalNotice
+        let loading: Bool = if case .loadingConfirmation = remoteReads.memberWithdrawalState { true } else { false }
+        let canContinue = remoteReads.hasMemberWithdrawalDependency && notice != nil
+            && remoteReads.memberWithdrawalState == .ready && ui.deleteConsent
+        return WPage(title:"회원 탈퇴",back:back){
+            WHeading(text:"계정을 삭제하기 전\n확인해 주세요").padding(.top,9)
+            WText(text:"탈퇴 안내를 읽고 확인하면, 다음 화면에서 최종 요청을 보낼 수 있어요.")
+            Text(notice?.message ?? (loading ? "탈퇴 안내를 불러오고 있어요.":"탈퇴 안내를 불러오지 못했어요."))
+                .font(W.font(13)).kerning(-0.195).lineSpacing(6).fixedSize(horizontal:false,vertical:true).offset(y:-1)
+                .foregroundStyle(Color.wire(0xA92D32,0xFF9CA3)).frame(maxWidth:.infinity,minHeight:44,alignment:.leading)
+                .padding(16).background(Color.wire(0xFFF1F1,0x3C2024),in:RoundedRectangle(cornerRadius:10))
+                .overlay(RoundedRectangle(cornerRadius:10).stroke(Color.wire(0xF0BFC3,0x83535A)))
+                .padding(.top,4).accessibilityIdentifier("accountDeletionImpactNotice")
+            if let notice {
+                WText(text:"최근 재인증은 \(notice.recentReauthenticationValiditySeconds)초 동안 유효해요. 유효 시간이 지나면 다시 확인해야 해요.",small:true)
+            }
+            if let failure=remoteReads.memberWithdrawalFailure {
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("memberWithdrawalNoticeFailure")
+            }
+            Button{if notice != nil{ui.deleteConsent.toggle()}}label:{
+                HStack(alignment:.top){
+                    WCheck().stroke(ui.deleteConsent ? W.lime:W.muted,style:StrokeStyle(lineWidth:2.1,lineCap:.round,lineJoin:.round))
+                        .frame(width:21,height:21).padding(.trailing,4).padding(.top,2)
+                    VStack(alignment:.leading,spacing:4){
+                        Text("탈퇴 범위와 처리 안내를 확인했어요").font(W.font(14)).kerning(-0.21)
+                        Text("요청 상태와 삭제 완료 상태는 다를 수 있어요.").font(W.font(12)).foregroundStyle(W.muted)
+                    }.lineSpacing(5).multilineTextAlignment(.leading)
+                }.frame(minHeight:80,alignment:.leading).frame(maxWidth:.infinity,alignment:.leading)
+                    .overlay(alignment:.bottom){W.line.frame(height:1)}
+            }.buttonStyle(.plain).disabled(notice == nil).accessibilityIdentifier("accountDeletionImpactAcknowledgement")
+                .accessibilityAddTraits(ui.deleteConsent ? .isSelected:[])
+        }actions:{
+            Button(loading ? "안내를 불러오는 중…":"안내 확인하고 계속") { infoAction("withdrawal-continue") }
+                .buttonStyle(WButtonStyle(kind:2)).disabled(!canContinue).accessibilityIdentifier("confirmAccountDeletion")
+            if remoteReads.hasMemberWithdrawalDependency && notice == nil && !loading {
+                button("안내 다시 불러오기","retry-withdrawal-notice",kind:1)
+            } else {
+                button("계정 유지","cancel-withdrawal",kind:1)
+            }
+        }
+    }
 }
 
 // Offline example input constraints from the original auth adapter; no credential persistence.

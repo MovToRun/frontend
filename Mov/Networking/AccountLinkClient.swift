@@ -21,6 +21,7 @@ enum AccountLinkProvider: String, CaseIterable, Hashable, Sendable {
 enum AccountLinkPurpose: String, Sendable {
     case link = "LINK"
     case unlink = "UNLINK"
+    case withdrawal = "WITHDRAWAL"
 }
 
 enum AccountLinkMutation: Equatable, Sendable {
@@ -97,6 +98,8 @@ protocol AccountLinkFlowServing: Sendable {
     func methods() async throws -> AccountLinkMethods
     func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws
     func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws
+    /// Consumes one purpose-bound proof. Withdrawal cannot reuse LINK or UNLINK proofs.
+    func consumeReauthenticationProof(for purpose: AccountLinkPurpose) async throws -> String
     /// Returns false if cancellation won before the completion request was submitted.
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws
     func unlink(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws
@@ -104,6 +107,10 @@ protocol AccountLinkFlowServing: Sendable {
 }
 
 extension AccountLinkFlowServing {
+    func consumeReauthenticationProof(for purpose: AccountLinkPurpose) async throws -> String {
+        throw AccountLinkFailure.reauthenticationRequired
+    }
+
     func reauthenticateWithPassword(_ password: String) async throws {
         try await reauthenticateWithPassword(password, purpose: .link)
     }
@@ -420,13 +427,18 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
     func reauthenticateWithPassword(_ password: String, purpose: AccountLinkPurpose) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
         operationInProgress = true
+        let startingCancellationGeneration = cancellationGeneration
         reauthProof = nil
         reauthProofPurpose = nil
         defer { operationInProgress = false }
 
         let methods = try await service.methods()
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         guard methods.localPassword else { throw AccountLinkFailure.invalidCredentials }
         let proof = try await service.reauthenticateWithPassword(password, purpose: purpose)
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         reauthProof = proof.reauthProof
         reauthProofPurpose = purpose
     }
@@ -434,19 +446,39 @@ actor AccountLinkFlowCoordinator: AccountLinkFlowServing {
     func reauthenticate(using provider: AccountLinkProvider, purpose: AccountLinkPurpose) async throws {
         guard !operationInProgress else { throw AccountLinkFailure.requestInProgress }
         operationInProgress = true
+        let startingCancellationGeneration = cancellationGeneration
         reauthProof = nil
         reauthProofPurpose = nil
         defer { operationInProgress = false }
 
         let methods = try await service.methods()
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         guard methods.socialProviders.contains(provider) else { throw AccountLinkFailure.invalidCredentials }
         let challenge = try await service.issueReauthChallenge(provider: provider, purpose: purpose)
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         guard let credential = try await credentials.credential(for: provider, purpose: .reauthentication, challenge: challenge) else {
             throw AccountLinkFailure.cancelled
         }
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         let proof = try await service.verifyReauthentication(provider: provider, challenge: challenge, credential: credential, purpose: purpose)
+        guard !Task.isCancelled else { throw AccountLinkFailure.cancelled }
+        guard startingCancellationGeneration == cancellationGeneration else { throw AccountLinkFailure.cancelled }
         reauthProof = proof.reauthProof
         reauthProofPurpose = purpose
+    }
+
+    func consumeReauthenticationProof(for purpose: AccountLinkPurpose) async throws -> String {
+        guard !operationInProgress,
+              let proof = reauthProof,
+              reauthProofPurpose == purpose else {
+            throw AccountLinkFailure.reauthenticationRequired
+        }
+        reauthProof = nil
+        reauthProofPurpose = nil
+        return proof
     }
 
     func link(provider: AccountLinkProvider, onMutationRequestWillSubmit: @escaping @Sendable () async -> Bool) async throws {
@@ -554,5 +586,188 @@ enum AccountLinkFlowFactory {
             credentials: credentialProvider ?? UnavailableAccountLinkCredentialProvider()
         )
         return .available(flow: flow, providerAuthorizationConfigured: credentialProvider != nil)
+    }
+}
+
+struct MemberWithdrawalConfirmationNotice: Decodable, Equatable, Sendable {
+    let message: String
+    let recentReauthenticationValiditySeconds: Int
+}
+
+enum MemberWithdrawalProcessingStatus: String, Decodable, Equatable, Sendable {
+    case completed = "COMPLETED"
+    case pending = "PENDING"
+    case retryableFailure = "RETRYABLE_FAILURE"
+}
+
+struct MemberWithdrawalReceipt: Decodable, Equatable, Sendable {
+    let requestId: String
+    let status: String
+    let gpsStatus: MemberWithdrawalProcessingStatus
+    let profilePhotoStatus: MemberWithdrawalProcessingStatus
+    let communityAttachmentsStatus: MemberWithdrawalProcessingStatus
+
+    var externalMediaDeletionComplete: Bool {
+        profilePhotoStatus == .completed && communityAttachmentsStatus == .completed
+    }
+
+    var allReportedDeletionComplete: Bool {
+        externalMediaDeletionComplete && gpsStatus == .completed
+    }
+}
+
+enum MemberWithdrawalFailure: Error, Equatable, Sendable {
+    case apiEnvironmentUnavailable
+    case accessTokenUnavailable
+    case invalidRequest
+    case invalidResponse
+    case unauthenticated
+    case confirmationRequired
+    case tooManyRequests
+    case serviceUnavailable
+    case serverFailure(statusCode: Int, requestID: String?, outcomeUnknown: Bool)
+    case transport(URLError.Code, outcomeUnknown: Bool)
+    case cancelled
+    case requestInProgress
+    case reauthenticationRequired
+
+    var outcomeUnknown: Bool {
+        switch self {
+        case .serverFailure(_, _, let unknown), .transport(_, let unknown): unknown
+        default: false
+        }
+    }
+
+    var userMessage: String {
+        switch self {
+        case .apiEnvironmentUnavailable:
+            "탈퇴 안내를 불러올 수 없어요. 서버 설정을 확인해 주세요."
+        case .accessTokenUnavailable, .unauthenticated:
+            "로그인 상태나 현재 계정 확인이 만료됐어요. 탈퇴 요청은 확인되지 않아 계정 정보와 기록을 유지했어요."
+        case .invalidRequest, .confirmationRequired:
+            "탈퇴 최종 확인이 필요해요. 안내를 확인한 뒤 다시 진행해 주세요."
+        case .invalidResponse:
+            "탈퇴 처리 응답을 확인할 수 없어요. 계정 정보와 기록은 유지했어요."
+        case .tooManyRequests:
+            "요청 횟수가 많아요. 잠시 기다린 뒤 현재 계정을 다시 확인해 주세요."
+        case .serviceUnavailable:
+            "지금은 탈퇴 요청을 처리할 수 없어요. 계정 정보와 기록을 유지했어요."
+        case .serverFailure(_, _, let unknown) where unknown:
+            "요청 결과를 확인하지 못했어요. 계정 정보와 기록은 유지했어요. 다시 시도하기 전에 현재 계정을 확인해 주세요."
+        case .transport(_, let unknown) where unknown:
+            "연결 결과를 확인하지 못했어요. 계정 정보와 기록은 유지했어요. 다시 시도하기 전에 현재 계정을 확인해 주세요."
+        case .serverFailure, .transport:
+            "탈퇴 요청을 처리하지 못했어요. 계정 정보와 기록을 유지했어요. 현재 계정을 다시 확인해 주세요."
+        case .cancelled:
+            "탈퇴 요청을 취소했어요. 계정 정보와 기록을 유지했어요."
+        case .requestInProgress:
+            "탈퇴 요청을 처리하고 있어요. 잠시만 기다려 주세요."
+        case .reauthenticationRequired:
+            "탈퇴 요청을 위해 현재 계정을 다시 확인해 주세요."
+        }
+    }
+}
+
+protocol MemberWithdrawalServing: Sendable {
+    func confirmationNotice() async throws -> MemberWithdrawalConfirmationNotice
+    func requestWithdrawal(reauthProof: String, confirmed: Bool) async throws -> MemberWithdrawalReceipt
+}
+
+struct MemberWithdrawalClient: MemberWithdrawalServing {
+    private let apiClient: any APIResponseSending
+    private let tokenProvider: any AccessTokenProviding
+
+    init(apiClient: any APIResponseSending, tokenProvider: any AccessTokenProviding) {
+        self.apiClient = apiClient
+        self.tokenProvider = tokenProvider
+    }
+
+    func confirmationNotice() async throws -> MemberWithdrawalConfirmationNotice {
+        let response = try await send(path: "members/me/withdrawal/confirmation", method: "GET", body: nil, authenticated: true)
+        guard response.statusCode == 200 else { throw Self.mapFailure(response, outcomeUnknown: false) }
+        guard let notice = try? JSONDecoder().decode(MemberWithdrawalConfirmationNotice.self, from: response.data),
+              !notice.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              notice.recentReauthenticationValiditySeconds == 300 else {
+            throw MemberWithdrawalFailure.invalidResponse
+        }
+        return notice
+    }
+
+    func requestWithdrawal(reauthProof: String, confirmed: Bool) async throws -> MemberWithdrawalReceipt {
+        guard confirmed else { throw MemberWithdrawalFailure.confirmationRequired }
+        guard Self.isProof(reauthProof) else { throw MemberWithdrawalFailure.reauthenticationRequired }
+        let body: Data
+        do { body = try JSONEncoder().encode(WithdrawalRequest(reauthProof: reauthProof, confirmed: confirmed)) }
+        catch { throw MemberWithdrawalFailure.invalidRequest }
+
+        let response = try await send(path: "members/me/withdrawal", method: "POST", body: body, authenticated: true)
+        guard response.statusCode == 202 else { throw Self.mapFailure(response, outcomeUnknown: true) }
+        guard let receipt = try? JSONDecoder().decode(MemberWithdrawalReceipt.self, from: response.data),
+              !receipt.requestId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              receipt.status == "WITHDRAWN" else {
+            // HTTP 202 without the contracted receipt cannot be used to clear local state.
+            throw MemberWithdrawalFailure.serverFailure(statusCode: 202, requestID: response.requestID, outcomeUnknown: true)
+        }
+        return receipt
+    }
+
+    private func send(path: String, method: String, body: Data?, authenticated: Bool) async throws -> APIClientResponse {
+        var headers = ["Accept": "application/json", "Cache-Control": "no-store"]
+        if body != nil { headers["Content-Type"] = "application/json" }
+        if authenticated {
+            let token: String?
+            do { token = try await tokenProvider.accessToken() }
+            catch is CancellationError { throw MemberWithdrawalFailure.cancelled }
+            catch { throw MemberWithdrawalFailure.accessTokenUnavailable }
+            guard let token, !token.isEmpty,
+                  token.rangeOfCharacter(from: .whitespacesAndNewlines.union(.controlCharacters)) == nil else {
+                throw MemberWithdrawalFailure.accessTokenUnavailable
+            }
+            headers["Authorization"] = "Bearer \(token)"
+        }
+        do {
+            return try await apiClient.sendResponse(path: path, method: method, body: body, headers: headers, queryItems: [])
+        } catch let error as APIClientError {
+            switch error {
+            case .cancelled:
+                throw authenticated
+                    ? MemberWithdrawalFailure.transport(.cancelled, outcomeUnknown: true)
+                    : MemberWithdrawalFailure.cancelled
+            case .transport(let code): throw MemberWithdrawalFailure.transport(code, outcomeUnknown: authenticated)
+            default: throw MemberWithdrawalFailure.invalidResponse
+            }
+        } catch is CancellationError {
+            throw authenticated
+                ? MemberWithdrawalFailure.transport(.cancelled, outcomeUnknown: true)
+                : MemberWithdrawalFailure.cancelled
+        } catch {
+            throw MemberWithdrawalFailure.invalidResponse
+        }
+    }
+
+    private static func mapFailure(_ response: APIClientResponse, outcomeUnknown: Bool) -> MemberWithdrawalFailure {
+        let problem = try? JSONDecoder().decode(WithdrawalProblem.self, from: response.data)
+        return switch response.statusCode {
+        case 401: .unauthenticated
+        case 422 where problem?.code == "WITHDRAWAL_CONFIRMATION_REQUIRED": .confirmationRequired
+        case 429: .tooManyRequests
+        case 503: .serviceUnavailable
+        case 500...599: .serverFailure(statusCode: response.statusCode, requestID: problem?.requestId ?? response.requestID, outcomeUnknown: outcomeUnknown)
+        default: .serverFailure(statusCode: response.statusCode, requestID: problem?.requestId ?? response.requestID, outcomeUnknown: false)
+        }
+    }
+
+    private static func isProof(_ value: String) -> Bool {
+        value.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil
+    }
+
+    private struct WithdrawalRequest: Encodable {
+        let reauthProof: String
+        let confirmed: Bool
+    }
+
+    private struct WithdrawalProblem: Decodable {
+        let code: String?
+        let requestId: String?
     }
 }

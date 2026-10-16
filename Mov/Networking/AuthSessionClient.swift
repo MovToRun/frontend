@@ -283,6 +283,30 @@ actor AuthSessionMutationCoordinator {
         mutationVersion &+= 1
     }
 
+    /// Clears a session only after the server has confirmed member withdrawal.
+    /// The member check prevents a late response from signing out a different account.
+    func clearAfterConfirmedWithdrawal(expectedMemberID: String, store: any AuthSessionStoring) throws {
+        guard activeLoginID == nil, activeLogoutID == nil else {
+            throw SessionLogoutFailure.sessionChanged
+        }
+        let current: AuthSessionSnapshot?
+        do {
+            current = try store.loadSnapshot()
+        } catch {
+            throw SessionLogoutFailure.storageUnavailable
+        }
+        guard let current, current.memberID == expectedMemberID else {
+            throw SessionLogoutFailure.sessionChanged
+        }
+        do {
+            try store.replaceAtomically(with: nil)
+        } catch {
+            throw SessionLogoutFailure.storageUnavailable
+        }
+        refreshInFlight = nil
+        mutationVersion &+= 1
+    }
+
     func finishLogout(lease: UUID) {
         guard activeLogoutID == lease else { return }
         activeLogoutRequestCount -= 1
@@ -516,6 +540,26 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             }
         }
         return try await legacyTokenProvider?.accessToken()
+    }
+
+    /// Called only after a valid 202 WITHDRAWN receipt. It compares the currently
+    /// persisted member before clearing so an account switch cannot be lost.
+    func clearAfterConfirmedWithdrawal(expectedMemberID: String) async throws {
+        let store = try requiredStore()
+        do {
+            try await store.mutationCoordinator.clearAfterConfirmedWithdrawal(
+                expectedMemberID: expectedMemberID,
+                store: store
+            )
+        } catch let failure as SessionLogoutFailure {
+            switch failure {
+            case .sessionChanged: throw AuthSessionFailure.sessionChanged
+            case .storageUnavailable: throw AuthSessionFailure.storageUnavailable
+            case .accessTokenUnavailable: throw AuthSessionFailure.sessionUnavailable
+            case .invalidResponse, .cancelled, .unauthenticated, .serviceUnavailable,
+                 .serverFailure, .transport: throw AuthSessionFailure.sessionChanged
+            }
+        }
     }
 
     func logout() async throws {
