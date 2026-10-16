@@ -82,6 +82,52 @@ struct AuthSessionSnapshot: Equatable, Sendable {
               let number = Int64(value), number > 0 else { return false }
         return String(number) == value
     }
+
+    /// Validates only the shape and claims needed by local ownership boundaries.
+    /// Signature verification and token issuance remain server responsibilities.
+    static func fromServerIssuedTokens(
+        accessToken: String,
+        refreshToken: String,
+        tokenType: String,
+        accessExpiresInSeconds: Int,
+        refreshExpiresInSeconds: Int,
+        refreshRequestID: UUID? = nil,
+        allowsRemainingRefreshTTL: Bool = false
+    ) throws -> AuthSessionSnapshot {
+        guard tokenType == "Bearer",
+              accessExpiresInSeconds == 900,
+              (refreshExpiresInSeconds == 604_800
+                || (allowsRemainingRefreshTTL && (0...604_800).contains(refreshExpiresInSeconds))),
+              let memberID = memberIDFromTrustedServerToken(accessToken) else {
+            throw AuthSessionFailure.invalidResponse
+        }
+        return try AuthSessionSnapshot(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            memberID: memberID,
+            refreshRequestID: refreshRequestID
+        )
+    }
+
+    /// Maps `sub` from a trusted server-issued JWT to the member ID used by
+    /// local ownership checks. This does not verify the JWT signature or claims.
+    private static func memberIDFromTrustedServerToken(_ accessToken: String) -> String? {
+        let parts = accessToken.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, !parts[0].isEmpty, !parts[2].isEmpty else { return nil }
+        let encoded = String(parts[1])
+        guard !encoded.isEmpty, encoded.utf8.allSatisfy({
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+        }) else { return nil }
+        var base64 = encoded.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let remainder = base64.count % 4
+        guard remainder != 1 else { return nil }
+        if remainder > 0 { base64 += String(repeating: "=", count: 4 - remainder) }
+        guard let payload = Data(base64Encoded: base64),
+              let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let subject = claims["sub"] as? String,
+              isCanonicalMemberID(subject) else { return nil }
+        return subject
+    }
 }
 
 /// Implementations must replace this complete snapshot atomically. In particular, a
@@ -119,7 +165,7 @@ actor AuthSessionMutationCoordinator {
     private var activeLoginID: UUID?
     private var activeLoginVersion: UInt64?
     private var activeLogoutID: UUID?
-    private var refreshInFlight: (id: UUID, task: Task<AuthSessionSnapshot, Error>)?
+    private var refreshInFlight: (id: UUID, version: UInt64, task: Task<AuthSessionSnapshot, Error>)?
 
     func beginLogin() throws -> UUID {
         // Keep this owner for the full transport lifetime. Replacing it when a newer
@@ -191,15 +237,28 @@ actor AuthSessionMutationCoordinator {
     func runRefreshSingleFlight(
         _ operation: @escaping @Sendable (UInt64) async throws -> AuthSessionSnapshot
     ) async throws -> AuthSessionSnapshot {
+        guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
         guard activeLoginID == nil, activeLogoutID == nil else { throw AuthSessionFailure.sessionChanged }
-        if let refreshInFlight { return try await refreshInFlight.task.value }
+        if let refreshInFlight {
+            do {
+                let snapshot = try await refreshInFlight.task.value
+                guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
+                guard mutationVersion == refreshInFlight.version &+ 1 else { throw AuthSessionFailure.sessionChanged }
+                return snapshot
+            } catch {
+                finishRefresh(operationID: refreshInFlight.id)
+                throw error
+            }
+        }
 
         let operationID = UUID()
         let version = mutationVersion
         let task = Task { try await operation(version) }
-        refreshInFlight = (operationID, task)
+        refreshInFlight = (operationID, version, task)
         do {
             let result = try await task.value
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
+            guard mutationVersion == version &+ 1 else { throw AuthSessionFailure.sessionChanged }
             finishRefresh(operationID: operationID)
             return result
         } catch {
@@ -372,6 +431,18 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
         return try await coordinator.runRefreshSingleFlight { version in
             try await self.performRefresh(store: store, coordinator: coordinator, startingVersion: version)
         }
+    }
+
+    /// Restores an existing server session on app entry. The backend contract
+    /// requires one normal refresh on re-entry even when the access token is fresh.
+    func restoreAfterAppLaunch() async throws -> AuthSessionSnapshot? {
+        let store = try requiredStore()
+        do {
+            guard try store.loadSnapshot() != nil else { return nil }
+        } catch {
+            throw AuthSessionFailure.storageUnavailable
+        }
+        return try await refresh()
     }
 
     func accessToken() async throws -> String? {
@@ -570,40 +641,15 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
         // Redis PTTL is converted with Duration.toSeconds, so an exact replay may
         // report zero while less than one second remains. Accept only that replay
         // value verbatim; do not extend it or manufacture a replacement token.
-        guard response.tokenType == "Bearer",
-              response.accessExpiresInSeconds == 900,
-              (response.refreshExpiresInSeconds == 604_800
-                || (allowsRemainingRefreshTTL && (0...604_800).contains(response.refreshExpiresInSeconds))),
-              let memberID = memberIDFromTrustedServerToken(response.accessToken) else {
-            throw AuthSessionFailure.invalidResponse
-        }
-        return try AuthSessionSnapshot(
+        return try AuthSessionSnapshot.fromServerIssuedTokens(
             accessToken: response.accessToken,
             refreshToken: response.refreshToken,
-            memberID: memberID,
-            refreshRequestID: refreshRequestID
+            tokenType: response.tokenType,
+            accessExpiresInSeconds: response.accessExpiresInSeconds,
+            refreshExpiresInSeconds: response.refreshExpiresInSeconds,
+            refreshRequestID: refreshRequestID,
+            allowsRemainingRefreshTTL: allowsRemainingRefreshTTL
         )
-    }
-
-    /// Maps `sub` only to the server-issued decimal member ID used by the local
-    /// RunStore ownership boundary. This is format mapping, not JWT verification or
-    /// authorization; the backend validates signatures, expiry, sessions, and access.
-    private static func memberIDFromTrustedServerToken(_ accessToken: String) -> String? {
-        let parts = accessToken.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3, !parts[0].isEmpty, !parts[2].isEmpty else { return nil }
-        let encoded = String(parts[1])
-        guard !encoded.isEmpty, encoded.utf8.allSatisfy({
-            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
-        }) else { return nil }
-        var base64 = encoded.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-        let remainder = base64.count % 4
-        guard remainder != 1 else { return nil }
-        if remainder > 0 { base64 += String(repeating: "=", count: 4 - remainder) }
-        guard let payload = Data(base64Encoded: base64),
-              let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let subject = claims["sub"] as? String,
-              AuthSessionSnapshot.isCanonicalMemberID(subject) else { return nil }
-        return subject
     }
 
     private static func mapResponseFailure(_ response: APIClientResponse, isLogin: Bool) -> AuthSessionFailure {

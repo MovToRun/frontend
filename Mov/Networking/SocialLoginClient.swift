@@ -122,6 +122,8 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
     case cancelled
     case requestInProgress
     case providerAuthorizationUnavailable
+    case storageUnavailable
+    case sessionChanged
 
     /// True when the backend has returned a response that conclusively rejects completion.
     /// Transport and malformed-response failures keep the exact request available for replay.
@@ -131,7 +133,8 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
              .nicknameAlreadyUsed, .signupRequestConflict, .tooManyRequests, .providerAuthorizationUnavailable,
              .requestInProgress:
             true
-        case .invalidResponse, .serviceUnavailable, .serverFailure, .transport, .cancelled:
+        case .invalidResponse, .serviceUnavailable, .serverFailure, .transport, .cancelled,
+             .storageUnavailable, .sessionChanged:
             false
         }
     }
@@ -162,6 +165,10 @@ enum SocialLoginFailure: Error, Equatable, Sendable {
             "요청을 처리하고 있어요. 잠시만 기다려 주세요."
         case .providerAuthorizationUnavailable:
             "제공자 인증이 설정되지 않았어요."
+        case .storageUnavailable:
+            "로그인 정보를 기기에 안전하게 저장하지 못했어요. 이전 로그인 상태를 유지하고 다시 시도해 주세요."
+        case .sessionChanged:
+            "계정 상태가 바뀌어 로그인 결과를 적용하지 못했어요. 현재 상태를 다시 확인해 주세요."
         }
     }
 }
@@ -195,17 +202,24 @@ enum SocialLoginOutcome: Equatable, Sendable {
     case signupRequired(SocialLoginAttempt)
 }
 
-/// Coordinates the provider boundary without selecting an OAuth SDK or persisting tokens.
-/// The caller owns the completion payload and must retain it unchanged for a retry.
+/// Coordinates provider completion and optionally commits server-issued session tokens
+/// through the app's shared durable store. The caller retains the completion payload
+/// unchanged for retries.
 actor SocialLoginCoordinator {
     private let service: any SocialLoginServing
     private let credentials: any SocialLoginCredentialProviding
+    private let sessionStore: (any AuthSessionStoring)?
     private var isStarting = false
     private var completions: [UUID: (SocialLoginCompletionRequest, Task<SocialLoginSessionTokens, Error>)] = [:]
 
-    init(service: any SocialLoginServing, credentials: any SocialLoginCredentialProviding) {
+    init(
+        service: any SocialLoginServing,
+        credentials: any SocialLoginCredentialProviding,
+        sessionStore: (any AuthSessionStoring)? = nil
+    ) {
         self.service = service
         self.credentials = credentials
+        self.sessionStore = sessionStore
     }
 
     func begin(provider: SocialLoginProvider, deviceID: UUID) async throws -> SocialLoginAttempt {
@@ -278,13 +292,61 @@ actor SocialLoginCoordinator {
             return try await task.value
         }
 
-        let task = Task { try await service.complete(request) }
+        let task = Task { try await completeAndPersist(request) }
         completions[request.requestID] = (request, task)
         defer { completions.removeValue(forKey: request.requestID) }
         do {
             return try await task.value
         } catch is CancellationError {
             throw SocialLoginFailure.cancelled
+        }
+    }
+
+    private func completeAndPersist(_ request: SocialLoginCompletionRequest) async throws -> SocialLoginSessionTokens {
+        guard let sessionStore else { return try await service.complete(request) }
+
+        let coordinator = sessionStore.mutationCoordinator
+        let lease: UUID
+        do {
+            lease = try await coordinator.beginLogin()
+        } catch let failure as AuthSessionFailure {
+            throw Self.mapSessionFailure(failure)
+        } catch {
+            throw SocialLoginFailure.sessionChanged
+        }
+
+        do {
+            let tokens = try await service.complete(request)
+            let snapshot = try AuthSessionSnapshot.fromServerIssuedTokens(
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                tokenType: tokens.tokenType,
+                accessExpiresInSeconds: tokens.accessExpiresInSeconds,
+                refreshExpiresInSeconds: tokens.refreshExpiresInSeconds
+            )
+            try await coordinator.commitLogin(snapshot, lease: lease, store: sessionStore)
+            return tokens
+        } catch let failure as AuthSessionFailure {
+            await coordinator.finishLogin(lease: lease)
+            throw Self.mapSessionFailure(failure)
+        } catch {
+            await coordinator.finishLogin(lease: lease)
+            throw error
+        }
+    }
+
+    private static func mapSessionFailure(_ failure: AuthSessionFailure) -> SocialLoginFailure {
+        switch failure {
+        case .storageUnavailable:
+            .storageUnavailable
+        case .sessionChanged, .memberIdentityChanged:
+            .sessionChanged
+        case .requestInProgress:
+            .requestInProgress
+        case .cancelled:
+            .cancelled
+        default:
+            .invalidResponse
         }
     }
 
