@@ -215,6 +215,60 @@ private struct UnusedSocialLoginCredentials: SocialLoginCredentialProviding {
 }
 
 final class AuthSessionPersistenceTests: XCTestCase {
+    func testFixtureCleanupRequiresAnExplicitUUIDScopedAuthFixture() {
+        let service = AuthSessionFixtureLaunchPolicy.servicePrefix + UUID().uuidString
+        let validArguments = [
+            "-wire-fixture",
+            "-wire-auth-session-flow-fixture",
+            "-wire-auth-session-fixture-service", service,
+            "-wire-auth-session-fixture-cleanup"
+        ]
+
+        XCTAssertTrue(AuthSessionFixtureLaunchPolicy.isFixtureServiceName(service))
+        XCTAssertFalse(AuthSessionFixtureLaunchPolicy.isFixtureServiceName("com.movtorun.auth-session.shared"))
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: [
+            "-wire-fixture", "-wire-auth-session-flow-fixture",
+            "-wire-auth-session-fixture-service", "com.movtorun.ui-fixture.auth-session.not-a-uuid"
+        ]))
+        #if DEBUG
+        XCTAssertEqual(AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: validArguments), service)
+        #else
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: validArguments))
+        #endif
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: [
+            "-wire-auth-session-fixture-cleanup"
+        ]))
+    }
+
+    func testFixtureAppearanceDefaultsStayInTheInjectedSuite() {
+        let suite = "mov.tests.appearance.\(UUID().uuidString)"
+        let arguments = ["-wire-fixture", "-wire-test-store-suite", suite]
+        #if DEBUG
+        XCTAssertEqual(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: arguments), suite)
+        XCTAssertEqual(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: ["-wire-fixture"]), "mov.wireframe.review")
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: []))
+        #else
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: arguments))
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: ["-wire-fixture"]))
+        #endif
+    }
+
+#if !DEBUG
+    func testReleaseIgnoresAuthFixtureCleanupArguments() {
+        let service = AuthSessionFixtureLaunchPolicy.servicePrefix + UUID().uuidString
+        let arguments = [
+            "-wire-fixture",
+            "-wire-auth-session-flow-fixture",
+            "-wire-auth-session-fixture-service", service,
+            "-wire-auth-session-fixture-cleanup"
+        ]
+
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: arguments))
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.fixtureServiceName(arguments: arguments))
+        XCTAssertNil(AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments: arguments))
+    }
+#endif
+
     func testKeychainStoreRestoresWholeSnapshotAfterStoreRecreationAndUsesDeviceOnlyPolicy() throws {
         let service = uniqueService()
         let keychain = InMemoryKeychain()
@@ -245,6 +299,32 @@ final class AuthSessionPersistenceTests: XCTestCase {
             XCTAssertFalse(String(describing: error).contains(old.refreshToken))
         }
         XCTAssertEqual(try store.loadSnapshot(), old)
+    }
+
+    func testCancelledLoginIgnoresLateSuccessfulResponseAndDoesNotPersistSession() async throws {
+        let store = makeStore()
+        let transport = GatedAuthSessionTransport()
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "fixture-password", deviceID: UUID())
+        }
+        await transport.waitForRequestCount(1)
+        login.cancel()
+        await transport.respond(tokenResponse(
+            access: serverAccessToken(memberID: "41", marker: "cancelled-login-late-success"),
+            refresh: "fixture-cancelled-login-refresh"
+        ))
+
+        do {
+            _ = try await login.value
+            XCTFail("A successful response returned after cancellation must not complete login")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+        let requestCount = await transport.requestCount()
+        XCTAssertEqual(requestCount, 1)
     }
 
     func testRestoreAfterLaunchRefreshesSavedSessionAndDoesNothingWhenNoSessionExists() async throws {

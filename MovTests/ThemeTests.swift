@@ -2381,6 +2381,26 @@ final class AuthSessionClientSessionTests: XCTestCase {
         XCTAssertEqual((body["deviceId"] as? String)?.lowercased(), AuthSessionFixtures.deviceID.uuidString.lowercased())
     }
 
+    func testCancelledLoginResponseDoesNotCommitTheServerSession() async throws {
+        let store = AuthSessionFixtureStore()
+        let transport = AuthSessionFixtureTransport([.hold])
+        let client = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let login = Task {
+            try await client.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
+        }
+        await transport.waitForRequests(1)
+        login.cancel()
+        await transport.resumeRequest(0, with: AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "cancelled-login"))
+
+        do {
+            _ = try await login.value
+            XCTFail("A cancelled login must not publish a late response")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
     func testLoginIsBusyAcrossClientsSharingStoreUntilServerRequestCompletes() async throws {
         let store = AuthSessionFixtureStore()
         let transport = AuthSessionFixtureTransport([
@@ -2445,10 +2465,19 @@ final class AuthSessionClientSessionTests: XCTestCase {
 
         let successfulResponse = AuthSessionFixtures.tokenResponse(memberID: "41", refreshToken: "completed-after-cancel")
         await transport.resumeRequest(0, with: successfulResponse)
-        let result = try await login.value
+        do {
+            _ = try await login.value
+            XCTFail("A successful server response received after cancellation cannot be committed")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .cancelled)
+        }
+        XCTAssertNil(try store.loadSnapshot(), "The late server response cannot recreate a session after cancellation")
+
+        let retried = try await secondClient.login(email: "runner@example.test", password: "FixturePass482619", deviceID: AuthSessionFixtures.deviceID)
         let serverState = await transport.loginServerState()
-        XCTAssertEqual(result.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(retried.refreshToken, serverState.activeRefreshToken)
         XCTAssertEqual(try store.loadSnapshot()?.refreshToken, serverState.activeRefreshToken)
+        XCTAssertEqual(serverState.requestCount, 2, "The shared request owner is released after the canceled transport finishes")
         XCTAssertEqual(serverState.maximumConcurrentRequests, 1)
     }
 
@@ -5306,6 +5335,51 @@ extension ThemeTests {
 }
 
 extension ThemeTests {
+    @MainActor func testAuthLogoutBridgeTreatsAlreadyClearedSessionAsSameIntentSuccess() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session(memberID: "41"))
+        let requester = PendingSessionLogoutBridgeFake()
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(
+            sessionLogoutRequester: requester,
+            authSessionStore: store
+        ))
+        await bridge.activate(feature: nil, accountScopeID: "account-a", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(1)
+
+        // Another in-flight request for the same logout already committed the 204.
+        try store.replaceAtomically(with: nil)
+        await requester.complete(0, with: .failure(.sessionChanged))
+        for _ in 0..<200 {
+            if bridge.sessionLogoutState == .loggedOut { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(bridge.sessionLogoutState, .loggedOut)
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    @MainActor func testAuthLogoutSessionChangedDoesNotClearANewerAccount() async throws {
+        let store = AuthSessionFixtureStore(snapshot: try AuthSessionFixtures.session(memberID: "41"))
+        let requester = PendingSessionLogoutBridgeFake()
+        let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(
+            sessionLogoutRequester: requester,
+            authSessionStore: store
+        ))
+        await bridge.activate(feature: nil, accountScopeID: "account-a", screen: "T10")
+        bridge.requestSessionLogout(accountScopeID: "account-a", screen: "T10")
+        await requester.waitForCalls(1)
+        let accountB = try AuthSessionFixtures.session(memberID: "99", refreshToken: "account-b-refresh")
+        try store.replaceAtomically(with: accountB)
+        await requester.complete(0, with: .failure(.sessionChanged))
+        for _ in 0..<200 {
+            if case .failed = bridge.sessionLogoutState { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(bridge.sessionLogoutState, .failed(.sessionChanged))
+        XCTAssertEqual(try store.loadSnapshot(), accountB)
+    }
+
     @MainActor func testAuthLogoutBridgeDeduplicatesRetriesAndAcceptsOnlyConfirmedSuccess() async {
         let requester = PendingSessionLogoutBridgeFake()
         let bridge = WireframeRemoteReadBridge(dependencies: WireframeRemoteReadDependencies(sessionLogoutRequester: requester))

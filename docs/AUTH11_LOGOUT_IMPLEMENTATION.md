@@ -12,7 +12,7 @@ Logout remains limited to the current device session. Existing run records and o
 
 ## Integration boundary
 
-The logout client is optional dependency injection over the existing transport and token-provider protocols. This change does not configure a production API endpoint, provide real tokens, integrate a social provider, or access Keychain credentials. The in-memory requester exists only as a review/test fixture.
+The app root passes the same `KeychainAuthSessionStore.shared` instance to login, logout, password-reset revocation, social completion, and account-link token use. The production logout client is available only when an approved bundled API configuration exists; this repository still has no live endpoint value or credentials. With configuration absent, a normal launch cannot create an authenticated UI session, and the logout UI will not claim success. The in-memory requester exists only as a review/test fixture.
 
 ## Verification coverage
 

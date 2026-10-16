@@ -5,11 +5,22 @@ import UIKit
     private let isolatedStoreSuite="mov.ui.fixture.\(UUID().uuidString)"
     private var accountLinkFixtureSuiteForCleanup:String?
     private var socialLoginFixtureSuitesForCleanup:[String]=[]
+    private var authSessionFixtureServicesForCleanup:[String]=[]
+    private var authSessionFixtureSuitesForCleanup:[String]=[]
     override func setUp(){continueAfterFailure=false}
     override func tearDown(){
         if app.state != .notRunning { app.terminate() }
         if let suite=accountLinkFixtureSuiteForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         for suite in socialLoginFixtureSuitesForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
+        for service in authSessionFixtureServicesForCleanup {
+            let cleanupSuite="mov.auth.cleanup.\(UUID().uuidString)"
+            app.launchArguments=["-wire-fixture","-wire-user-flow","-wire-auth-session-flow-fixture","-wire-auth-session-fixture-service",service,"-wire-auth-session-fixture-cleanup","-wire-test-store-suite",cleanupSuite,"-wire-reset","-appearance","light"]
+            app.launch()
+            _ = app.buttons["authPrimary"].waitForExistence(timeout:10)
+            app.terminate()
+            UserDefaults(suiteName:cleanupSuite)?.removePersistentDomain(forName:cleanupSuite)
+        }
+        for suite in authSessionFixtureSuitesForCleanup { UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         super.tearDown()
     }
     private func makeFixtureStoreSuite(_ prefix:String)->String {
@@ -18,6 +29,23 @@ import UIKit
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openSocialLoginFixture(_ extraArguments:[String]=[]){let suite=makeFixtureStoreSuite("mov.wire.social-login");socialLoginFixtureSuitesForCleanup.append(suite);app.launchArguments=["-wire-screen","A01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-social-login-fixture","-appearance","light"]+extraArguments;app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:15))}
+    private func makeAuthSessionFixture()->(service:String,suite:String){
+        let service="com.movtorun.ui-fixture.auth-session.\(UUID().uuidString)"
+        let suite="mov.auth.session.flow.\(UUID().uuidString)"
+        authSessionFixtureServicesForCleanup.append(service)
+        authSessionFixtureSuitesForCleanup.append(suite)
+        return (service,suite)
+    }
+    private func authSessionFixtureArguments(service:String,suite:String,extra:[String]=[])->[String]{
+        ["-wire-fixture","-wire-user-flow","-wire-auth-session-flow-fixture","-wire-auth-session-fixture-service",service,"-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]+extra
+    }
+    private func openAuthSessionFixture(extra:[String]=[])->(service:String,suite:String){
+        let fixture=makeAuthSessionFixture()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite,extra:extra)
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),app.debugDescription)
+        return fixture
+    }
     func openMemberProfileFixture(_ extraArguments:[String]=[]){
         let suite=makeFixtureStoreSuite("mov.wireframe.test.member-profile")
         app.launchArguments=["-wire-screen","M01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-member-profile-fixture","-appearance","light"]+extraArguments
@@ -2955,6 +2983,93 @@ import UIKit
 }
 
 extension LaunchTests {
+    private func logInWithMockAuthServer() {
+        let email=app.textFields["auth-email"]
+        let password=app.secureTextFields["auth-password"]
+        XCTAssertTrue(email.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(password.waitForExistence(timeout:5),app.debugDescription)
+        email.tap();email.typeText("runner@example.test\n")
+        password.tap();password.typeText("MovDemo482619\n")
+        tap("authPrimary")
+    }
+
+    func testAuth10KeychainLoginRestoreRefreshRetryAndLogoutFlow() {
+        let fixture=openAuthSessionFixture()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:10),app.debugDescription)
+        logInWithMockAuthServer()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:10),app.debugDescription)
+
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite,extra:["-wire-auth-refresh-timeout"])
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-2"].exists,"A failed launch refresh must not trust the cached UserDefaults logged bit")
+
+        // Retry after the simulated lost response with the same isolated Keychain item.
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:15),app.debugDescription)
+
+        // A refresh response for a different member is rejected; the committed old
+        // session remains available for a same-account retry.
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite,extra:["-wire-auth-refresh-account-changed"])
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:15),app.debugDescription)
+
+        tap("tab-4");tap("설정");tap("로그아웃");tap("authLogoutConfirm")
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:10),app.debugDescription)
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),"A confirmed logout clears the fixture Keychain session across relaunch")
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+    }
+
+    func testAuth10RejectedLoginDoesNotPersistASession() {
+        let fixture=openAuthSessionFixture(extra:["-wire-auth-login-unauthorized"])
+        logInWithMockAuthServer()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","이메일 또는 비밀번호를 확인해 주세요")).firstMatch.exists)
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),"A rejected server login leaves no session to restore")
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+    }
+
+    func testAuth10KeychainWriteFailureKeepsLoginOnTheSignInScreen() {
+        _ = openAuthSessionFixture(extra:["-wire-auth-session-fail-write-once"])
+        logInWithMockAuthServer()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","이 기기에 안전하게 저장하지 못했어요")).firstMatch.exists)
+    }
+
+    func testAuth10ExpiredRefreshClearsOnlyTheIsolatedFixtureSession() {
+        let fixture=openAuthSessionFixture()
+        logInWithMockAuthServer()
+        XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:10),app.debugDescription)
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite,extra:["-wire-auth-refresh-unauthenticated"])
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),app.debugDescription)
+        app.terminate()
+        app.launchArguments=authSessionFixtureArguments(service:fixture.service,suite:fixture.suite)
+        app.launch()
+        XCTAssertTrue(app.buttons["authPrimary"].waitForExistence(timeout:15),"An expired server refresh clears this test's isolated Keychain item")
+        XCTAssertFalse(app.buttons["tab-2"].exists)
+    }
+}
+
+extension LaunchTests {
     func testAuthLogoutFailureCanRetryAndSuccessfulLogoutSurvivesRelaunch() {
         let suite = "mov.wireframe.test.auth-logout-success.\(UUID().uuidString)"
         defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
@@ -4547,9 +4662,9 @@ extension LaunchTests {
         if captureViewport{app.launchArguments.append("-wire-capture-viewport")}
         app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))
     }
-    func fillUserAuth(confirm:Bool=false,current:Bool=false){
+    func fillUserAuth(confirm:Bool=false,current:Bool=false,password:String="MovReview482619"){
         if app.textFields["auth-email"].exists{let f=app.textFields["auth-email"];f.tap();f.typeText("runner@example.test");XCTAssertEqual(f.value as? String,"runner@example.test")}
-        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;replaceInput(field,"MovReview482619");if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,"MovReview482619","Entered value for \(identifier)")}}
+        func enterPassword(_ identifier:String){let secure=app.secureTextFields[identifier];let reveal=app.buttons["auth-reveal-\(identifier)"];if secure.exists && reveal.exists{reveal.tap()};let field=app.textFields[identifier].exists ? app.textFields[identifier]:secure;replaceInput(field,password);if app.textFields[identifier].exists{XCTAssertEqual(field.value as? String,password,"Entered value for \(identifier)")}}
         if current{enterPassword("auth-current")}
         if app.secureTextFields["auth-password"].exists{enterPassword("auth-password")}
         if confirm{enterPassword("auth-confirm")}
@@ -4597,14 +4712,19 @@ extension LaunchTests {
     }
     func testUserLoginSignupAndPasswordResetCancelBack(){
         userOpen("A01");XCTAssertFalse(app.buttons["가상 예시값 채우기"].exists);XCTAssertTrue(app.buttons["로그인"].exists)
-        fillUserAuth();tap("authPrimary");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5))
+        fillUserAuth();tap("authPrimary")
+        XCTAssertTrue(app.descendants(matching:.any)["authLoginUnavailable"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].exists,"Missing endpoint configuration must keep login signed out")
+        XCTAssertFalse(app.buttons["tab-2"].exists)
         userOpen("A01");tap("회원가입");fillUserAuth(confirm:true);tap("authPrimary")
         XCTAssertTrue(app.descendants(matching:.any)["screen-A19"].waitForExistence(timeout:5),app.debugDescription)
         let otp=app.descendants(matching:.any)["emailOtpInput"];XCTAssertTrue(otp.waitForExistence(timeout:5));XCTAssertFalse(app.buttons["fillDemoEmailCode"].exists)
         otp.tap();otp.typeText("000000");XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","코드가 일치하지")).firstMatch.waitForExistence(timeout:5))
         otp.tap();otp.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:6)+"482619");XCTAssertTrue(app.descendants(matching:.any)["screen-A02"].waitForExistence(timeout:5),"Pasting all six digits verifies and opens consent automatically")
         tap("모두 동의하고 계속");let nickname=app.textFields.firstMatch;XCTAssertTrue(nickname.waitForExistence(timeout:5));nickname.tap();nickname.typeText("검수러너");tap("계속")
-        XCTAssertTrue(app.buttons["시작하기"].waitForExistence(timeout:5));tap("시작하기");XCTAssertTrue(app.buttons["tab-2"].waitForExistence(timeout:5));capture("User-signup-home")
+        XCTAssertTrue(app.descendants(matching:.any)["memberProfileWeightFailure"].waitForExistence(timeout:5),"Signup must report that no signup service is configured")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-A03"].exists)
+        XCTAssertFalse(app.buttons["tab-2"].exists,"A local preview must not create an account")
         userOpen("A01");tap("비밀번호 찾기")
         let resetEmail=app.textFields["reset-email"]
         XCTAssertTrue(resetEmail.waitForExistence(timeout:5))
@@ -4784,14 +4904,14 @@ extension LaunchTests {
     func visible(_ label:String)->Bool {app.buttons.matching(NSPredicate(format:"label == %@ OR identifier == %@",label,label)).allElementsBoundByIndex.contains{$0.isHittable}}
     func replaceInput(_ field:XCUIElement,_ text:String){
         XCTAssertTrue(field.waitForExistence(timeout:5));field.tap()
+        let keyboard=app.keyboards.firstMatch
         let strongPasswordSuggestion=app.buttons["GenerateStrongPasswordButton"]
-        if strongPasswordSuggestion.waitForExistence(timeout:0.5){
+        if !keyboard.waitForExistence(timeout:1),strongPasswordSuggestion.waitForExistence(timeout:0.5){
             let dismissStrongPasswordSuggestion=app.buttons["xmark"]
-            XCTAssertTrue(dismissStrongPasswordSuggestion.waitForExistence(timeout:2),app.debugDescription)
-            dismissStrongPasswordSuggestion.tap()
+            if dismissStrongPasswordSuggestion.waitForExistence(timeout:2){dismissStrongPasswordSuggestion.tap()}
         }
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5),app.debugDescription)
-        let old=field.value as? String ?? "";field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+text)
+        // Reuse the suite's tap-and-type helper; iOS may not expose the keyboard while its password suggestion is shown.
+        replace(text,into:field)
     }
     func testPointsShopAndHeaderRoutes(){
         userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")

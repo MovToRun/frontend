@@ -26,11 +26,9 @@ struct WCommunityComposerSnapshot:Equatable {
 
 enum WWireDefaults {
     static func resolve(arguments:[String] = ProcessInfo.processInfo.arguments)->(defaults:UserDefaults,suiteName:String?) {
-        if let index=arguments.firstIndex(of:"-wire-test-store-suite"),arguments.indices.contains(index+1),!arguments[index+1].isEmpty {
-            let suite=arguments[index+1]
+        if let suite=AuthSessionFixtureLaunchPolicy.defaultsSuiteName(arguments:arguments) {
             return (UserDefaults(suiteName:suite)!,suite)
         }
-        if arguments.contains("-wire-fixture") { return (UserDefaults(suiteName:"mov.wireframe.review")!,"mov.wireframe.review") }
         return (.standard,nil)
     }
 }
@@ -461,6 +459,7 @@ struct WireframeRemoteReadDependencies {
     let sessionLogoutRequester: (any SessionLogoutRequesting)?
     let passwordResetService: (any PasswordResetServing)?
     let authSessionStore: (any AuthSessionStoring)?
+    let authSessionClient: AuthSessionClient?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
 
@@ -476,6 +475,7 @@ struct WireframeRemoteReadDependencies {
         sessionLogoutRequester: (any SessionLogoutRequesting)? = nil,
         passwordResetService: (any PasswordResetServing)? = nil,
         authSessionStore: (any AuthSessionStoring)? = nil,
+        authSessionClient: AuthSessionClient? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
         accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil
     ) {
@@ -490,6 +490,7 @@ struct WireframeRemoteReadDependencies {
         self.sessionLogoutRequester = sessionLogoutRequester
         self.passwordResetService = passwordResetService
         self.authSessionStore = authSessionStore
+        self.authSessionClient = authSessionClient
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
     }
@@ -620,6 +621,7 @@ extension WireframeAccountLinkState {
     private let runningProgressLoader: RunningProgressLoader?
     private let weeklyGoalWriter: (any RunningWeeklyGoalWriting)?
     private let sessionLogoutRequester: (any SessionLogoutRequesting)?
+    private let authSessionStore: (any AuthSessionStoring)?
     private let accountLinkFlow: (any AccountLinkFlowServing)?
     private let accountLinkProviderAuthorizationConfigured: Bool
     private(set) var accountLinkUnavailableFailure: AccountLinkFailure?
@@ -694,6 +696,7 @@ extension WireframeAccountLinkState {
         runningProgressLoader = dependencies?.runningProgressLoader
         weeklyGoalWriter = dependencies?.weeklyGoalWriter
         sessionLogoutRequester = dependencies?.sessionLogoutRequester
+        authSessionStore = dependencies?.authSessionStore
         if let injectedFlow = dependencies?.accountLinkFlow {
             accountLinkFlow = injectedFlow
             accountLinkProviderAuthorizationConfigured = true
@@ -1354,6 +1357,19 @@ extension WireframeAccountLinkState {
         case .failure(.unauthenticated):
             // The API contract treats 401 as an invalid session; the client must leave it.
             sessionLogoutState = .loggedOut
+        case .failure(.sessionChanged):
+            // A concurrent request for this same logout may have already cleared the
+            // shared store. Treat that as the same completed intent, while retaining
+            // the account-change boundary when a newer session is present.
+            if let authSessionStore {
+                do {
+                    sessionLogoutState = try authSessionStore.loadSnapshot() == nil ? .loggedOut : .failed(.sessionChanged)
+                } catch {
+                    sessionLogoutState = .failed(.storageUnavailable)
+                }
+            } else {
+                sessionLogoutState = .failed(.sessionChanged)
+            }
         case .failure(.cancelled):
             sessionLogoutState = .idle
         case .failure(let failure):
@@ -3207,6 +3223,7 @@ struct RootView:View {
     private var resolvedRemoteReadDependencies:WireframeRemoteReadDependencies? {
         if let remoteReadDependencies { return remoteReadDependencies }
         let args = ProcessInfo.processInfo.arguments
+        let authComposition = WireframeAuthSessionComposition.resolve(arguments: args)
         let runFixture = args.contains("-wire-run-records-fixture")
         let runEditFixture = args.contains("-wire-run-records-edit-fixture")
         let runDeleteFixture = args.contains("-wire-run-records-delete-fixture")
@@ -3276,7 +3293,7 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -3304,9 +3321,10 @@ struct RootView:View {
             runRecordsDeleter:runDeleteFixture ? runClient:nil,
             runningProgressLoader:progressLoader,
             weeklyGoalWriter:weeklyGoalWriteFixture ? progressClient:nil,
-            sessionLogoutRequester:logoutFixture,
-            passwordResetService:passwordResetFixture,
-            authSessionStore:passwordResetSessionStore,
+            sessionLogoutRequester:logoutFixture ?? authComposition.client,
+            passwordResetService:passwordResetFixture ?? authComposition.apiClient.map { PasswordResetClient(apiClient: $0) },
+            authSessionStore:passwordResetSessionStore ?? authComposition.store,
+            authSessionClient:authComposition.client,
             accountLinkFlow:accountLinkFixture
         )
     }
@@ -3607,6 +3625,13 @@ struct WireframeRoot:View {
     @State var remoteReads:WireframeRemoteReadBridge
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
+    #if DEBUG
+    @State var authSessionFixtureStore: WireframeAuthSessionFixtureStore?
+    #endif
+    @State var authSessionClient: AuthSessionClient?
+    @State var authLoginBusy = false
+    @State var authLoginInvocationID: UUID?
+    @State var authLoginTask: Task<Void, Never>?
     @State var socialLoginCoordinator: SocialLoginCoordinator?
     @State var socialLoginPendingAttempt: SocialLoginAttempt?
     @State var socialLoginPendingCompletion: SocialLoginCompletionRequest?
@@ -3629,12 +3654,13 @@ struct WireframeRoot:View {
         runUploadDrainer: (any RunUploadDraining)? = nil
     ){
         let args=ProcessInfo.processInfo.arguments
-        let bundledResetService: (any PasswordResetServing)? = {
-            guard let configuration=try? APIClientConfiguration.bundled() else{return nil}
-            return PasswordResetClient(apiClient:APIClient(configuration:configuration))
-        }()
-        _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService ?? bundledResetService)
+        _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
+        #if DEBUG
+        _authSessionFixtureStore=State(initialValue:remoteReadDependencies?.authSessionStore as? WireframeAuthSessionFixtureStore)
+        #endif
+        _authSessionClient=State(initialValue:remoteReadDependencies?.authSessionClient)
+        #if DEBUG
         let socialLoginFixture: SocialLoginCoordinator? = {
             guard WReviewMode.tools, args.contains("-wire-social-login-fixture") else{return nil}
             let service=WireframeSocialLoginServiceFixture(
@@ -3646,8 +3672,11 @@ struct WireframeRoot:View {
                 loseCompletionResponseOnce:args.contains("-wire-social-login-lose-completion-once")
             )
             let credentials=WireframeSocialLoginCredentialFixture(cancelled:args.contains("-wire-social-login-cancel"))
-            return SocialLoginCoordinator(service:service,credentials:credentials)
+            return SocialLoginCoordinator(service:service,credentials:credentials,sessionStore:remoteReadDependencies?.authSessionStore)
         }()
+        #else
+        let socialLoginFixture: SocialLoginCoordinator? = nil
+        #endif
         _socialLoginCoordinator=State(initialValue:socialLoginFixture)
         let defaultsSelection=WWireDefaults.resolve(arguments:args)
         let defaults=defaultsSelection.defaults
@@ -3710,7 +3739,7 @@ struct WireframeRoot:View {
     @FocusState var authInput:String?
     @FocusState var communitySearchFocused:Bool
     @State var splash=true
-    @AppStorage("appearance") var appearance="system"
+    @AppStorage("appearance",store:WWireDefaults.resolve().defaults) var appearance="system"
     @Environment(\.accessibilityReduceMotion) var systemMotion
     var reduceMotion:Bool{systemMotion || ProcessInfo.processInfo.arguments.contains("-wire-reduced")}
     @Namespace var indicator
@@ -3880,6 +3909,17 @@ struct WireframeRoot:View {
     }
     func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
+#if DEBUG
+                if let cleanupService = AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: args),
+                   let fixtureStore = authSessionFixtureStore,
+                   fixtureStore.serviceName == cleanupService {
+                    do { try fixtureStore.clearFixtureSession() }
+                    catch { ui.error="테스트 세션을 정리하지 못했어요." }
+                    ui.setLoggedIn(false);ui.save();ui.authFilled=false
+                    splash=false;ui.screen="A01";ui.rootIndex=2
+                    return
+                }
+#endif
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
                 if WReviewMode.tools && args.contains("-wire-community-not-member"){ui.communityJoinedCrewIDs.removeAll()}
                 if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-crew"),args.indices.contains(i+1){ui.communitySelectedCrewID=args[i+1]}
@@ -3929,7 +3969,20 @@ struct WireframeRoot:View {
                         }
                         if let reward {store.records[index].pointReward=reward;store.persist()}
                     }
-                }else{let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040;try? await Task.sleep(for:.milliseconds(splashMilliseconds));splash=false;if !ui.profile.logged{ui.screen="A01"}else if store.session != nil{ui.screen="H06"}}
+                }else{
+                    let splashMilliseconds=args.contains("-wire-splash-test-hold") ? 3000:1040
+                    try? await Task.sleep(for:.milliseconds(splashMilliseconds))
+                    if reviewTools && !args.contains("-wire-auth-session-flow-fixture") {
+                        // Screen-review fixtures preserve their clearly labeled local
+                        // navigation demo. The ordinary app and session-flow fixture
+                        // always use Keychain as the sign-in authority.
+                        splash=false
+                        if !ui.profile.logged { ui.screen="A01" }
+                        else if store.session != nil { ui.screen="H06" }
+                    } else {
+                        await restoreAuthSessionForLaunch()
+                    }
+                }
     }
     func handleScenePhaseChange(_ phase:ScenePhase){
         if phase != .active{ui.clearAuthSecrets();ui.otpSuccess=false}
@@ -4039,6 +4092,9 @@ struct WireframeRoot:View {
     func prepareSocialLoginNavigation(to route:String)->Bool {
         guard WSocialLoginNavigationPolicy.canNavigateAway(from:ui.screen,completionSubmitted:socialLoginCompletionSubmitted) else{return false}
         guard route != ui.screen else{return true}
+        if ui.screen=="A01",route != "A01",authLoginBusy {
+            authLoginInvocationID=nil;authLoginTask?.cancel();authLoginTask=nil;authLoginBusy=false
+        }
         if ui.screen=="A14" {
             socialLoginInvocationID=nil
             socialLoginTask?.cancel()
@@ -4712,7 +4768,13 @@ private struct WScreenClip:Shape {
 
 // Review controls never appear in a normal launch. Tests can isolate storage while exercising user-facing UI.
 enum WReviewMode {
-    static var tools:Bool{ProcessInfo.processInfo.arguments.contains("-wire-fixture") && !ProcessInfo.processInfo.arguments.contains("-wire-user-flow")}
+    static var tools:Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-wire-fixture") && !ProcessInfo.processInfo.arguments.contains("-wire-user-flow")
+        #else
+        false
+        #endif
+    }
 }
 
 // Storefront outline matches the weight and 24pt grid of the existing navigation icons.

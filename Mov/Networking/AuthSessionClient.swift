@@ -1,5 +1,47 @@
 import Foundation
 
+enum AuthSessionFixtureLaunchPolicy {
+    static let servicePrefix = "com.movtorun.ui-fixture.auth-session."
+
+    static func defaultsSuiteName(arguments: [String]) -> String? {
+        #if DEBUG
+        if let index = arguments.firstIndex(of: "-wire-test-store-suite"),
+           arguments.indices.contains(index + 1), !arguments[index + 1].isEmpty {
+            return arguments[index + 1]
+        }
+        if arguments.contains("-wire-fixture") { return "mov.wireframe.review" }
+        #endif
+        return nil
+    }
+
+    static func isFixtureServiceName(_ service: String) -> Bool {
+        guard service.hasPrefix(servicePrefix) else { return false }
+        return UUID(uuidString: String(service.dropFirst(servicePrefix.count))) != nil
+    }
+
+    static func fixtureServiceName(arguments: [String]) -> String? {
+        #if DEBUG
+        guard arguments.contains("-wire-fixture"),
+              arguments.contains("-wire-auth-session-flow-fixture"),
+              let index = arguments.firstIndex(of: "-wire-auth-session-fixture-service"),
+              arguments.indices.contains(index + 1) else { return nil }
+        let service = arguments[index + 1]
+        return isFixtureServiceName(service) ? service : nil
+        #else
+        nil
+        #endif
+    }
+
+    static func cleanupServiceName(arguments: [String]) -> String? {
+        #if DEBUG
+        guard arguments.contains("-wire-auth-session-fixture-cleanup") else { return nil }
+        return fixtureServiceName(arguments: arguments)
+        #else
+        nil
+        #endif
+    }
+}
+
 protocol SessionLogoutRequesting: Sendable {
     func logout() async throws
 }
@@ -183,6 +225,7 @@ actor AuthSessionMutationCoordinator {
     }
 
     func commitLogin(_ snapshot: AuthSessionSnapshot, lease: UUID, store: any AuthSessionStoring) throws {
+        guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
         guard activeLoginID == lease,
               activeLoginVersion == mutationVersion,
               activeLogoutID == nil else {
@@ -399,6 +442,7 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
     }
 
     func login(email: String, password: String, deviceID: UUID) async throws -> AuthSessionSnapshot {
+        guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
         let store = try requiredStore()
         let body: Data
         do {
@@ -417,6 +461,7 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
             throw AuthSessionFailure.sessionChanged
         }
         do {
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             let response = try await apiClient.sendResponse(
                 path: "auth/login",
                 method: "POST",
@@ -424,9 +469,11 @@ actor AuthSessionClient: SessionLogoutRequesting, AccessTokenProviding {
                 headers: Self.jsonHeaders,
                 queryItems: []
             )
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             guard response.statusCode == 200 else { throw Self.mapResponseFailure(response, isLogin: true) }
 
             let snapshot = try Self.decodeSession(response.data, refreshRequestID: nil)
+            guard !Task.isCancelled else { throw AuthSessionFailure.cancelled }
             try await coordinator.commitLogin(snapshot, lease: lease, store: store)
             return snapshot
         } catch let failure as AuthSessionFailure {

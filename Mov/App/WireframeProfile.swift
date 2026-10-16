@@ -6,12 +6,20 @@ extension WireframeRoot {
     func completeSocialSignup(_ attempt:SocialLoginAttempt){
         guard ui.screen=="A03",socialLoginPendingAttempt==attempt,let coordinator=socialLoginCoordinator else{return}
         guard !socialLoginBusy else{return}
+        let termsConsents: [SocialLoginConsent]
+        #if DEBUG
+        termsConsents = WReviewMode.tools
+            ? WireframeSocialLoginFixtureTerms.catalog.required
+            : WireframeSocialLoginTerms.catalog.required
+        #else
+        termsConsents = WireframeSocialLoginTerms.catalog.required
+        #endif
         let request=socialLoginPendingCompletion ?? SocialLoginCompletionRequest(
             socialSignupProof:attempt.proof.socialSignupProof,
             requestID:socialLoginNextCompletionRequestID ?? attempt.completionRequestID,
             deviceID:attempt.deviceID,
             nickname:WSignupNicknameValidation.normalized(ui.nickname),
-            termsConsents:WireframeSocialLoginFixtureTerms.catalog.required
+            termsConsents:termsConsents
         )
         socialLoginPendingCompletion=request
         socialLoginNextCompletionRequestID=nil
@@ -20,14 +28,14 @@ extension WireframeRoot {
         socialLoginTask=Task { @MainActor in
             defer {socialLoginBusy=false;socialLoginTask=nil}
             do {
-                _=try await coordinator.complete(request)
+                let tokens=try await coordinator.complete(request)
                 guard ui.screen=="A03",socialLoginPendingAttempt==attempt else{return}
+                let snapshot=try loadCommittedSocialSnapshot(tokens)
                 ui.profile.weight=ui.weight
                 ui.profile.photo=ui.photo
                 ui.profile.nickname=request.nickname ?? ""
                 if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)}
-                ui.setLoggedIn(true)
-                ui.save()
+                applyAuthenticatedSnapshot(snapshot)
                 socialLoginPendingAttempt=nil
                 socialLoginPendingCompletion=nil
                 socialLoginNextCompletionRequestID=nil
@@ -314,10 +322,10 @@ extension WireframeRoot {
                 if onboarding,let attempt=socialLoginPendingAttempt {completeSocialSignup(attempt);return}
                 ui.profile.weight=ui.weight
                 if onboarding {
+                    guard reviewTools else {ui.error="회원가입 서버가 연결되지 않아 계정을 만들지 않았어요.";return}
                     ui.profile.photo=ui.photo
                     ui.profile.nickname=WSignupNicknameValidation.normalized(ui.nickname)
                     if !ui.provider.isEmpty && !ui.profile.providers.contains(ui.provider){ui.profile.providers.append(ui.provider)}
-                    ui.setLoggedIn(true)
                     ui.save();go("A15")
                 } else {ui.save();back()}
             }.buttonStyle(WButtonStyle()).disabled((onboarding && socialLoginBusy) || (usesRemoteProfile && (!profileLoaded || remoteReads.isSavingMemberProfile))).accessibilityIdentifier(onboarding ? "signupContinue":"saveWeightProfile")
