@@ -152,6 +152,39 @@ private actor GatedAuthSessionTransport: APIResponseSending {
     func requestCount() -> Int { requests.count }
 }
 
+private actor ConcurrentLogoutTransport: APIResponseSending {
+    private var requests: [CapturedAuthRequest] = []
+    private var continuations: [Int: CheckedContinuation<APIClientResponse, Error>] = [:]
+
+    func sendResponse(
+        path: String,
+        method: String,
+        body: Data?,
+        headers: [String: String],
+        queryItems: [URLQueryItem]
+    ) async throws -> APIClientResponse {
+        let index = requests.count
+        requests.append(CapturedAuthRequest(path: path, method: method, body: body, headers: headers))
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[index] = continuation
+        }
+    }
+
+    func waitForRequestCount(_ count: Int) async {
+        while requests.count < count { await Task.yield() }
+    }
+
+    func respond(at index: Int, with result: Result<APIClientResponse, APIClientError>) {
+        guard let continuation = continuations.removeValue(forKey: index) else { return }
+        switch result {
+        case .success(let response): continuation.resume(returning: response)
+        case .failure(let error): continuation.resume(throwing: error)
+        }
+    }
+
+    func requestCount() -> Int { requests.count }
+}
+
 private struct RefreshRequestBody: Decodable {
     let refreshToken: String
     let requestId: UUID
@@ -465,6 +498,102 @@ final class AuthSessionPersistenceTests: XCTestCase {
             XCTAssertEqual(failure, .storageUnavailable)
         }
         XCTAssertEqual(try store.loadSnapshot(), original)
+    }
+
+    func testConcurrentLogoutFirstSuccessThenSecondTimeoutClearsStoredSession() async throws {
+        let store = makeStore()
+        let original = try snapshot(memberID: "41", access: "fixture-logout-order-a", refresh: "fixture-logout-refresh-order-a")
+        try store.replaceAtomically(with: original)
+        let transport = ConcurrentLogoutTransport()
+        let firstClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let first = Task { try await firstClient.logout() }
+        await transport.waitForRequestCount(1)
+        let second = Task { try await secondClient.logout() }
+        await transport.waitForRequestCount(2)
+
+        await transport.respond(at: 0, with: .success(APIClientResponse(statusCode: 204, data: Data(), requestID: nil)))
+        try await first.value
+        await transport.respond(at: 1, with: .failure(.transport(.timedOut)))
+        do {
+            try await second.value
+            XCTFail("Expected the second logout request to time out")
+        } catch let failure as SessionLogoutFailure {
+            XCTAssertEqual(failure, .transport(.timedOut))
+        }
+
+        let requestCount = await transport.requestCount()
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testConcurrentLogoutFirstTimeoutThenSecondSuccessClearsStoredSession() async throws {
+        let store = makeStore()
+        let original = try snapshot(memberID: "41", access: "fixture-logout-order-b", refresh: "fixture-logout-refresh-order-b")
+        try store.replaceAtomically(with: original)
+        let transport = ConcurrentLogoutTransport()
+        let firstClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let first = Task { try await firstClient.logout() }
+        await transport.waitForRequestCount(1)
+        let second = Task { try await secondClient.logout() }
+        await transport.waitForRequestCount(2)
+
+        await transport.respond(at: 0, with: .failure(.transport(.timedOut)))
+        do {
+            try await first.value
+            XCTFail("Expected the first logout request to time out")
+        } catch let failure as SessionLogoutFailure {
+            XCTAssertEqual(failure, .transport(.timedOut))
+        }
+        XCTAssertEqual(try store.loadSnapshot(), original)
+
+        await transport.respond(at: 1, with: .success(APIClientResponse(statusCode: 204, data: Data(), requestID: nil)))
+        try await second.value
+
+        let requestCount = await transport.requestCount()
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertNil(try store.loadSnapshot())
+    }
+
+    func testLateLogoutSuccessCannotClearNewAccountSession() async throws {
+        let store = makeStore()
+        let original = try snapshot(memberID: "41", access: "fixture-logout-old-account", refresh: "fixture-logout-old-refresh")
+        try store.replaceAtomically(with: original)
+        let transport = ConcurrentLogoutTransport()
+        let firstClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+        let secondClient = AuthSessionClient(apiClient: transport, sessionStore: store)
+
+        let first = Task { try await firstClient.logout() }
+        await transport.waitForRequestCount(1)
+        let second = Task { try await secondClient.logout() }
+        await transport.waitForRequestCount(2)
+
+        do {
+            _ = try await store.mutationCoordinator.beginLogin()
+            XCTFail("A new login must not start while logout requests are pending")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .requestInProgress)
+        }
+
+        await transport.respond(at: 0, with: .success(APIClientResponse(statusCode: 204, data: Data(), requestID: nil)))
+        try await first.value
+
+        let loginLease = try await store.mutationCoordinator.beginLogin()
+        let newAccount = try snapshot(memberID: "99", access: "fixture-logout-new-account", refresh: "fixture-logout-new-refresh")
+        try await store.mutationCoordinator.commitLogin(newAccount, lease: loginLease, store: store)
+
+        await transport.respond(at: 1, with: .success(APIClientResponse(statusCode: 204, data: Data(), requestID: nil)))
+        do {
+            try await second.value
+            XCTFail("A stale logout response must not commit against the new account")
+        } catch let failure as SessionLogoutFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+
+        XCTAssertEqual(try store.loadSnapshot(), newAccount)
     }
 
     func testSocialLoginPersistsOnlyValidatedServerIssuedTokensAndRetainsOldPairOnFailure() async throws {

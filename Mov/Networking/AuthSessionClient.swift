@@ -165,6 +165,7 @@ actor AuthSessionMutationCoordinator {
     private var activeLoginID: UUID?
     private var activeLoginVersion: UInt64?
     private var activeLogoutID: UUID?
+    private var activeLogoutRequestCount = 0
     private var refreshInFlight: (id: UUID, version: UInt64, task: Task<AuthSessionSnapshot, Error>)?
 
     func beginLogin() throws -> UUID {
@@ -205,9 +206,17 @@ actor AuthSessionMutationCoordinator {
     }
 
     func beginLogout() -> UUID {
+        if let activeLogoutID {
+            // Multiple logout calls against the same stored session are one local
+            // mutation intent. Keep the lease active until every in-flight request
+            // finishes, so one timeout cannot invalidate a concurrent 204 response.
+            activeLogoutRequestCount += 1
+            return activeLogoutID
+        }
         mutationVersion &+= 1
         let lease = UUID()
         activeLogoutID = lease
+        activeLogoutRequestCount = 1
         refreshInFlight = nil
         return lease
     }
@@ -227,11 +236,17 @@ actor AuthSessionMutationCoordinator {
             throw SessionLogoutFailure.storageUnavailable
         }
         activeLogoutID = nil
+        activeLogoutRequestCount = 0
         mutationVersion &+= 1
     }
 
     func finishLogout(lease: UUID) {
-        if activeLogoutID == lease { activeLogoutID = nil }
+        guard activeLogoutID == lease else { return }
+        activeLogoutRequestCount -= 1
+        if activeLogoutRequestCount <= 0 {
+            activeLogoutRequestCount = 0
+            activeLogoutID = nil
+        }
     }
 
     func runRefreshSingleFlight(
