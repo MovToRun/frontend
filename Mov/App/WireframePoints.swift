@@ -18,6 +18,22 @@ struct WPointEntry: Identifiable, Codable, Equatable {
 enum WPointCategory: String, CaseIterable, Identifiable, Equatable {
     case image = "러닝 카드 이미지", frame = "프레임", face = "페이스 프레임"
     var id: String { rawValue }
+
+    var storeCategory: CosmeticStoreCategory {
+        switch self {
+        case .image: .runCardBackground
+        case .frame: .runCardFrame
+        case .face: .paceFrame
+        }
+    }
+
+    init(storeCategory: CosmeticStoreCategory) {
+        switch storeCategory {
+        case .runCardBackground: self = .image
+        case .runCardFrame: self = .frame
+        case .paceFrame: self = .face
+        }
+    }
 }
 
 enum WPointArtworkGeometry {
@@ -37,16 +53,33 @@ struct WPointProduct: Identifiable, Equatable {
     let id: String
     let name: String
     let kind: String
-    let description: String
+    let description: String?
     let category: WPointCategory
-    let price: Int
+    let price: Int64
+    let previewData: CosmeticPreviewData
+    let owned: Bool
 
-    static let catalog: [WPointProduct] = [
-        .init(id: "line", name: "모브 라인", kind: "러닝 카드 배경", description: "가볍게 이어지는 선으로 러닝 카드의 분위기를 바꿔 보세요.", category: .image, price: 400),
-        .init(id: "dawn", name: "새벽의 길", kind: "러닝 카드 배경", description: "밝은 여백과 둥근 코스로 표현한 러닝 카드 배경이에요.", category: .image, price: 900),
-        .init(id: "card-frame", name: "라임 라인", kind: "러닝 카드 프레임", description: "러닝 카드 가장자리를 얇은 라임 선으로 꾸며 보세요.", category: .frame, price: 700),
-        .init(id: "frame", name: "페이스 프레임", kind: "프로필 장식", description: "프로필 사진 가장자리에 작은 움직임을 더하는 장식이에요.", category: .face, price: 1_600)
-    ]
+    init(_ product: CosmeticStoreProduct) {
+        id = product.id
+        name = product.displayName
+        kind = WPointCategory(storeCategory: product.category).rawValue
+        description = product.description
+        category = WPointCategory(storeCategory: product.category)
+        price = product.pricePoints
+        previewData = product.previewData
+        owned = product.owned
+    }
+
+    init(_ item: CosmeticStoreInventoryItem) {
+        id = item.productID
+        name = item.displayName
+        kind = WPointCategory(storeCategory: item.category).rawValue
+        description = item.description
+        category = WPointCategory(storeCategory: item.category)
+        price = item.purchasePricePoints
+        previewData = item.previewData
+        owned = true
+    }
 }
 
 @MainActor @Observable final class WPointsStore {
@@ -135,25 +168,6 @@ struct WPointProduct: Identifiable, Equatable {
         }
         if insufficientFixture { balance = 100 }
         if emptyFixture { balance = 0; entries = []; ownedItemIDs = [] }
-    }
-
-    func canPurchase(_ product: WPointProduct) -> Bool {
-        !dataUnavailable && balance >= product.price && !ownedItemIDs.contains(product.id)
-    }
-
-    @discardableResult func purchase(_ product: WPointProduct, at date: Date = Date()) -> Bool {
-        guard canPurchase(product) else { return false }
-        balance -= product.price
-        ownedItemIDs.insert(product.id)
-        entries.insert(WPointEntry(title: product.name, detail: "로컬 구매 예시", amount: -product.price, date: date), at: 0)
-        guard persist() else {
-            balance += product.price
-            ownedItemIDs.remove(product.id)
-            entries.removeFirst()
-            dataUnavailable = true
-            return false
-        }
-        return true
     }
 
     func filteredEntries(_ kind: WPointKind) -> [WPointEntry] {
@@ -274,10 +288,10 @@ extension WireframeRoot {
                 VStack(alignment: .leading, spacing: 24) {
                     if pointsStore.dataUnavailable { pointDataUnavailableNotice }
                     if remoteReads.hasPointsDependency { remotePointsBalancePanel }
-                    if remoteReads.hasPointsDependency { WText(text:"이 기기에 저장된 예시 잔액",small:true) }
+                    WText(text:"화면 검토용 예시 잔액 · 상점 구매에 사용할 수 없어요",small:true)
                     HStack(alignment: .center, spacing: 16) {
                         VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 7) { WPointsMark(size: 18); Text("보유 포인트").font(W.font(15, .medium)).foregroundStyle(W.muted) }
+                            HStack(spacing: 7) { WPointsMark(size: 18); Text("화면 예시 잔액").font(W.font(15, .medium)).foregroundStyle(W.muted) }
                             HStack(alignment: .firstTextBaseline, spacing: 5) {
                                 Text(pointsBalanceDisplay).font(W.font(44, .bold)).monospacedDigit().accessibilityIdentifier("pointBalance")
                                 Text("포인트").font(W.font(17, .semibold)).foregroundStyle(W.muted)
@@ -313,7 +327,16 @@ extension WireframeRoot {
             WHeader(title: "포인트 상점", back: { if ui.path.isEmpty { go("POINTS") } else { back() } })
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    if pointsStore.dataUnavailable { pointDataUnavailableNotice }
+                    if cosmeticStoreFixture {
+                        WNotice(text:"격리된 UI 검증 fixture예요. 실제 계정이나 서버 포인트를 사용하지 않아요.")
+                            .accessibilityIdentifier("cosmeticStoreFixtureBanner")
+                    } else {
+                        WText(text:"상점 잔액과 상품은 로그인한 계정의 서버 조회값이에요. 포인트 화면의 예시 잔액은 구매에 사용하지 않아요.",small:true)
+                            .accessibilityIdentifier("cosmeticStoreServerNotice")
+                    }
+                    if let sessionNotice = cosmeticStoreFlow.sessionNotice {
+                        WNotice(text:sessionNotice,danger:true).accessibilityIdentifier("cosmeticStoreSessionNotice")
+                    }
                     ZStack {
                         W.soft
                         Text("입점 상품 광고 영역").font(W.font(12, .medium)).foregroundStyle(W.muted)
@@ -321,12 +344,24 @@ extension WireframeRoot {
                     }.frame(maxWidth: .infinity, minHeight: 76)
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(W.line, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
                     HStack(spacing: 8) {
-                        Text("보유 포인트").font(W.font(15, .medium))
+                        Text("계정 포인트").font(W.font(15, .medium))
                         Spacer()
                         WPointsMark(size: 22)
-                        Text(pointsBalanceDisplay).font(W.font(25, .semibold)).monospacedDigit()
+                        Group {
+                            if let balance = cosmeticStoreFlow.balancePoints {
+                                Text(balance.formatted()).accessibilityIdentifier("storeBalance")
+                            } else {
+                                Text("—").accessibilityIdentifier("storeBalance")
+                            }
+                        }.font(W.font(25, .semibold)).monospacedDigit()
                     }.padding(.horizontal, 16).frame(minHeight: 60)
                         .background(W.soft, in: RoundedRectangle(cornerRadius: 16))
+                    if case .failed(let failure) = cosmeticStoreFlow.balanceState {
+                        WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreBalanceFailure")
+                    }
+                    if let balanceNotice = cosmeticStoreFlow.balanceNotice {
+                        WText(text:balanceNotice,small:true).accessibilityIdentifier("cosmeticStoreBalanceNotice")
+                    }
                     VStack(alignment: .leading, spacing: 8) { WHeading(text: "나의 러닝에\n작은 변화를") }
                     GeometryReader { geometry in
                         HStack(spacing: 5) {
@@ -343,19 +378,39 @@ extension WireframeRoot {
                         }
                     }
                     .frame(height: 44)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 26) {
-                        ForEach(visiblePointProducts) { product in
-                            Button { ui.selectedPointProductID = product.id; go("B06") } label: {
-                                VStack(alignment: .leading, spacing: 7) {
-                                    WPointProductArtwork(product: product).aspectRatio(WPointArtworkGeometry.listingAspect, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
-                                    Text(product.kind).font(W.font(11)).foregroundStyle(W.muted)
-                                    Text(product.name).font(W.font(16, .semibold)).lineLimit(1)
-                                    HStack(alignment: .firstTextBaseline, spacing: 4) { Text("\(product.price.formatted())").font(W.font(15, .semibold)); Text("포인트").font(W.font(11)) }
-                                    if pointsStore.ownedItemIDs.contains(product.id) { Text("보유 중").font(W.font(11, .medium)).foregroundStyle(W.muted) }
-                                }.frame(maxWidth: .infinity, alignment: .leading)
-                            }.buttonStyle(.plain).accessibilityIdentifier("shop-item-\(product.id)")
+                    if case .loading = cosmeticStoreFlow.catalogState, cosmeticStoreFlow.catalog == nil {
+                        HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"상품을 불러오는 중이에요.",small:true)}
+                            .accessibilityIdentifier("cosmeticStoreCatalogLoading")
+                    }
+                    if case .failed(let failure) = cosmeticStoreFlow.catalogState {
+                        WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreCatalogFailure")
+                        Button("상품 다시 불러오기") {
+                            Task { await cosmeticStoreFlow.refreshShop(category:selectedPointCategory.storeCategory) }
+                        }.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("cosmeticStoreRetry")
+                    }
+                    if cosmeticStoreFlow.catalog != nil {
+                        if visiblePointProducts.isEmpty {
+                            WText(text:"현재 판매 중인 상품이 없어요.",small:true).accessibilityIdentifier("emptyCosmeticStoreCatalog")
+                        } else {
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 26) {
+                                ForEach(visiblePointProducts) { product in
+                                    Button {
+                                        ui.selectedPointProductID = product.id
+                                        go("B06")
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 7) {
+                                            WPointProductArtwork(product: product).aspectRatio(WPointArtworkGeometry.listingAspect, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
+                                            Text(product.kind).font(W.font(11)).foregroundStyle(W.muted)
+                                            Text(product.name).font(W.font(16, .semibold)).lineLimit(1)
+                                            HStack(alignment: .firstTextBaseline, spacing: 4) { Text("\(product.price.formatted())").font(W.font(15, .semibold)); Text("포인트").font(W.font(11)) }
+                                            if cosmeticStoreFlow.isOwned(product.id) { Text("보유 중").font(W.font(11, .medium)).foregroundStyle(W.muted) }
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                    }.buttonStyle(.plain).accessibilityIdentifier("shop-item-\(product.id)")
+                                }
+                            }
                         }
                     }
+                    storeInventorySection
                 }.padding(20).frame(maxWidth: 560).frame(maxWidth: .infinity, alignment: .top)
             }
         }.background(W.paper)
@@ -377,11 +432,79 @@ extension WireframeRoot {
     }
 
     private var visiblePointProducts: [WPointProduct] {
-        WPointProduct.catalog.filter { $0.category == selectedPointCategory }
+        (cosmeticStoreFlow.catalog?.items ?? [])
+            .filter { $0.category == selectedPointCategory.storeCategory }
+            .map(WPointProduct.init)
     }
 
-    private var selectedPointProduct: WPointProduct {
-        WPointProduct.catalog.first(where: { $0.id == ui.selectedPointProductID }) ?? WPointProduct.catalog[0]
+    private var selectedPointProduct: WPointProduct? {
+        cosmeticStoreFlow.product(id:ui.selectedPointProductID).map(WPointProduct.init)
+    }
+
+    @ViewBuilder private var storeInventorySection: some View {
+        VStack(alignment:.leading,spacing:14) {
+            WHeading(text:"나의 보관함")
+            if case .loading = cosmeticStoreFlow.inventoryState, cosmeticStoreFlow.inventory == nil {
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"보관함을 불러오는 중이에요.",small:true)}
+                    .accessibilityIdentifier("cosmeticStoreInventoryLoading")
+            }
+            if case .failed(let failure) = cosmeticStoreFlow.inventoryState {
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreInventoryFailure")
+            }
+            if let equipment = cosmeticStoreFlow.equipment {
+                VStack(spacing:0) {
+                    ForEach(equipment.slots) { slot in
+                        HStack(spacing:10) {
+                            VStack(alignment:.leading,spacing:4) {
+                                Text(WPointCategory(storeCategory:slot.category).rawValue).font(W.font(13,.medium))
+                                let equippedName = cosmeticStoreFlow.inventory?.items.first(where:{$0.productID==slot.productID})?.displayName
+                                Text(slot.usesDefault ? "기본 디자인" : (equippedName ?? "장착 상품")).font(W.font(11)).foregroundStyle(W.muted)
+                            }
+                            Spacer()
+                            if !slot.usesDefault {
+                                Button("기본으로") {
+                                    Task { await cosmeticStoreFlow.unequip(category:slot.category) }
+                                }.font(W.font(12,.medium))
+                                    .disabled(cosmeticStoreFlow.equipmentMutationCategory != nil)
+                                    .accessibilityIdentifier("unequip-\(slot.category.rawValue)")
+                            }
+                        }.frame(minHeight:55).overlay(alignment:.bottom){W.line.frame(height:1)}
+                    }
+                }.accessibilityIdentifier("cosmeticStoreEquipment")
+            } else if case .failed(let failure) = cosmeticStoreFlow.equipmentState {
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreEquipmentFailure")
+            }
+            if let failure = cosmeticStoreFlow.equipmentFailure {
+                WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreEquipmentMutationFailure")
+            }
+            if let inventory = cosmeticStoreFlow.inventory {
+                if inventory.items.isEmpty {
+                    WText(text:"아직 보유한 상품이 없어요.",small:true).accessibilityIdentifier("emptyCosmeticStoreInventory")
+                } else {
+                    LazyVGrid(columns:[GridItem(.flexible(),spacing:16),GridItem(.flexible(),spacing:16)],spacing:20) {
+                        ForEach(inventory.items) { item in
+                            let product = WPointProduct(item)
+                            VStack(alignment:.leading,spacing:8) {
+                                WPointProductArtwork(product:product)
+                                    .aspectRatio(WPointArtworkGeometry.listingAspect,contentMode:.fit)
+                                    .clipShape(RoundedRectangle(cornerRadius:14))
+                                Text(product.kind).font(W.font(11)).foregroundStyle(W.muted)
+                                Text(product.name).font(W.font(15,.semibold)).lineLimit(1)
+                                if cosmeticStoreFlow.isEquipped(item.productID,in:item.category) {
+                                    Text("장착 중").font(W.font(11,.medium)).foregroundStyle(W.muted)
+                                } else {
+                                    Button("장착") {
+                                        Task { await cosmeticStoreFlow.equip(productID:item.productID,to:item.category) }
+                                    }.font(W.font(12,.medium))
+                                        .disabled(cosmeticStoreFlow.equipmentMutationCategory != nil)
+                                        .accessibilityIdentifier("equip-\(item.productID)")
+                                }
+                            }.frame(maxWidth:.infinity,alignment:.leading)
+                        }
+                    }.accessibilityIdentifier("cosmeticStoreInventory")
+                }
+            }
+        }.padding(.top,10).accessibilityIdentifier("cosmeticStoreInventorySection")
     }
 
     private var emptyPointHistory: some View {
@@ -413,6 +536,7 @@ extension WireframeRoot {
         VStack(spacing: 0) {
             WHeader(title: "포인트 내역", back: back)
             if remoteReads.hasPointsDependency { remotePointsLedgerPanel }
+            WText(text:"화면 검토용 예시 내역 · 서버 원장과 별개예요",small:true).padding(.horizontal,20).padding(.top,12)
             if pointsStore.dataUnavailable {
                 ScrollView { VStack(spacing: 14) { pointDataUnavailableNotice }.padding(.horizontal, 24).accessibilityIdentifier("unavailablePointHistoryScreen") }
             } else if empty || pointsStore.entries.isEmpty {
@@ -444,11 +568,11 @@ extension WireframeRoot {
                 Text("포인트로\n나의 러닝을 꾸며요").font(W.font(25, .bold)).lineSpacing(5)
             }.padding(.vertical, 10)
             VStack(alignment: .leading, spacing: 0) {
-                pointGuideRow("어디에 사용할 수 있나요?", "러닝 카드 배경과 프로필 장식 같은 앱 꾸미기 아이템을 검토하고 있어요.")
+                pointGuideRow("어디에 사용할 수 있나요?", "러닝 카드 배경과 프레임 같은 앱 안의 꾸미기 상품에 사용할 수 있어요.")
                 W.line.frame(height: 1)
                 pointGuideRow("어떻게 적립하나요?", "달리기 적립과 광고 보상 방식을 검토 중이에요. 적립 기준과 수량은 아직 정해지지 않았어요.")
                 W.line.frame(height: 1)
-                pointGuideRow("사용 전에 확인해 주세요", "유효기간과 사용 조건, 교환 약관은 확정 후 안내할 예정이에요. 지금 보이는 잔액과 가격은 화면 검토용 예시예요.")
+                pointGuideRow("사용 전에 확인해 주세요", "구매한 꾸미기 상품은 계정에 영구 보유해요. 포인트로만 사용할 수 있고 환불은 제공하지 않아요.")
             }
         } actions: {
             Button("상점 둘러보기") { go("SHOP") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("browsePointShopFromGuide")
@@ -462,74 +586,149 @@ extension WireframeRoot {
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 16)
     }
 
-    private var pointProductDetail: some View {
-        let product = selectedPointProduct
-        let owned = pointsStore.ownedItemIDs.contains(product.id)
-        let enough = pointsStore.canPurchase(product)
+    @ViewBuilder private var pointProductDetail: some View {
+        if let product = selectedPointProduct {
+            pointProductDetail(product)
+        } else {
+            WPage(title:"아이템",back:back) {
+                if case .loading = cosmeticStoreFlow.productState {
+                    HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"상품 정보를 불러오는 중이에요.",small:true)}
+                        .accessibilityIdentifier("cosmeticStoreProductLoading")
+                }
+                if case .failed(let failure) = cosmeticStoreFlow.productState {
+                    WNotice(text:failure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreProductFailure")
+                    Button("상품 다시 불러오기") {
+                        Task { await cosmeticStoreFlow.refreshProduct(id:ui.selectedPointProductID) }
+                    }.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("cosmeticStoreProductRetry")
+                }
+            } actions: { EmptyView() }
+        }
+    }
+
+    private func pointProductDetail(_ product: WPointProduct) -> some View {
+        let serverProduct = cosmeticStoreFlow.selectedProduct?.id == product.id ? cosmeticStoreFlow.selectedProduct : nil
+        let owned = cosmeticStoreFlow.isOwned(product.id) || product.owned
+        let enough = cosmeticStoreFlow.balancePoints.map { $0 >= product.price } ?? false
+        let canPurchase = serverProduct.map(cosmeticStoreFlow.canPurchase) ?? false
+        let failureMessage: String? = {
+            if case .failed(let failure) = cosmeticStoreFlow.purchaseState { return failure.userMessage }
+            if case .failed(let failure) = cosmeticStoreFlow.productState, failure == .productUnavailable || failure == .notFound {
+                return failure.userMessage
+            }
+            return nil
+        }()
+        let purchaseLabel = owned ? "보유 중"
+            : cosmeticStoreFlow.purchaseOutcomeUnknown ? "구매 결과 확인 필요"
+            : cosmeticStoreFlow.isUnavailable(product.id) ? "판매 종료"
+            : cosmeticStoreFlow.balancePoints == nil ? "잔액 확인 필요"
+            : enough ? "구매하기" : "포인트 부족"
+
         return WPage(title: "아이템", back: back) {
-            if pointsStore.dataUnavailable { pointDataUnavailableNotice }
+            if cosmeticStoreFixture {
+                WText(text:"격리된 UI 검증 상품이에요. 실제 구매와 잔액에는 영향이 없어요.",small:true)
+                    .accessibilityIdentifier("cosmeticStoreFixtureBanner")
+            }
+            if let sessionNotice = cosmeticStoreFlow.sessionNotice {
+                WNotice(text:sessionNotice,danger:true).accessibilityIdentifier("cosmeticStoreSessionNotice")
+            }
             WPointProductArtwork(product: product, large: true).aspectRatio(WPointArtworkGeometry.detailAspect, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 14))
                 .accessibilityIdentifier("pointProductArtwork")
             Text(product.name).font(W.font(22, .semibold))
             WText(text: product.kind, small: true)
             HStack(alignment: .firstTextBaseline, spacing: 5) { Text("\(product.price.formatted())").font(W.font(23, .semibold)); Text("포인트").font(W.font(13)) }
-            WText(text: product.description)
-            HStack { Text("보유 포인트"); Spacer(); Text(pointsBalanceDisplay) }
+            if let description = product.description { WText(text:description) }
+            HStack { Text("계정 포인트"); Spacer(); Text(cosmeticStoreFlow.balancePoints?.formatted() ?? "—") }
                 .font(W.font(13)).frame(minHeight:64).frame(maxWidth:.infinity,alignment:.leading)
-                .accessibilityElement(children:.ignore).accessibilityLabel("보유 포인트")
-                .accessibilityValue(pointsStore.dataUnavailable ? "unavailable" : "balance:\(pointsStore.balance)|entries:\(pointsStore.entries.count)")
+                .accessibilityElement(children:.ignore).accessibilityLabel("계정 포인트")
+                .accessibilityValue(cosmeticStoreFlow.balancePoints.map{"balance:\($0)"} ?? "unavailable")
                 .accessibilityIdentifier("detailPointBalance")
+            if let failureMessage {
+                WNotice(text:failureMessage,danger:true).accessibilityIdentifier("cosmeticStorePurchaseFailure")
+            }
+            if case .outcomeUnknown(_,let failure) = cosmeticStoreFlow.purchaseState {
+                WNotice(text:"\(failure.userMessage) 구매 여부를 확인할 때까지 다시 구매하지 않아요. 같은 요청으로 결과를 확인해 주세요.",danger:true)
+                    .accessibilityIdentifier("cosmeticStorePurchaseOutcomeUnknown")
+            }
+            if let equipmentFailure = cosmeticStoreFlow.equipmentFailure {
+                WNotice(text:equipmentFailure.userMessage,danger:true).accessibilityIdentifier("cosmeticStoreEquipmentMutationFailure")
+            }
+            if let balanceNotice = cosmeticStoreFlow.balanceNotice {
+                WText(text:balanceNotice,small:true).accessibilityIdentifier("cosmeticStoreBalanceNotice")
+            }
+            if case .loading = cosmeticStoreFlow.productState {
+                HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"서버 상품 정보를 확인하고 있어요.",small:true)}
+                    .accessibilityIdentifier("cosmeticStoreProductLoading")
+            }
         } actions: {
             HStack(spacing: 10) {
                 Button("미리보기") { go("B10") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("pointPreview")
-                Button(pointsStore.dataUnavailable ? "저장 데이터 확인 불가" : owned ? "보유 중" : enough ? "구매하기" : "포인트 부족") {
+                Button(purchaseLabel) {
                     showingPointPurchaseConfirmation = true
-                }.buttonStyle(WButtonStyle()).disabled(owned || !enough).accessibilityIdentifier("purchaseShopItem")
+                }.buttonStyle(WButtonStyle()).disabled(!canPurchase).accessibilityIdentifier("purchaseShopItem")
             }
-            if !pointsStore.dataUnavailable && !owned && !enough {
+            if cosmeticStoreFlow.purchaseOutcomeUnknown {
+                Button("구매 결과 확인") {
+                    Task { await cosmeticStoreFlow.resolveUnknownPurchase() }
+                }.buttonStyle(WButtonStyle(kind:1)).disabled(cosmeticStoreFlow.purchaseInFlight)
+                    .accessibilityIdentifier("resolveCosmeticStorePurchase")
+            } else if !owned && cosmeticStoreFlow.balancePoints != nil && !enough {
                 Button("포인트 부족 안내") { go("B08") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("pointShortageHelp")
             }
-        }.confirmationDialog("가상 포인트를 사용할까요?", isPresented: $showingPointPurchaseConfirmation, titleVisibility: .visible) {
-            Button("구매 예시 확인", role: .destructive) {
-                if pointsStore.purchase(product) { go("B07") }
-                else { go("B08") }
-            }.accessibilityIdentifier("confirmPointPurchase")
+            if case .failed = cosmeticStoreFlow.productState {
+                Button("상품 다시 불러오기") {
+                    Task { await cosmeticStoreFlow.refreshProduct(id:ui.selectedPointProductID) }
+                }.buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("cosmeticStoreProductRetry")
+            }
+        }.confirmationDialog("구매를 확인할까요?", isPresented: $showingPointPurchaseConfirmation, titleVisibility: .visible) {
+            Button("구매 확정", role: .destructive) {
+                Task { await cosmeticStoreFlow.purchase(productID:product.id) }
+            }.disabled(!canPurchase).accessibilityIdentifier("confirmPointPurchase")
             Button("취소", role: .cancel) {}.accessibilityIdentifier("cancelPointPurchase")
         } message: {
-            Text("\(product.price.formatted())P를 이 기기의 예시 잔액에서 차감합니다. 실제 결제는 없어요.")
+            Text("\(product.price.formatted())P를 사용해요. 상품은 계정에 영구 보유되고 환불할 수 없어요.")
         }
     }
 
     private var pointPurchaseComplete: some View {
         WPage(title: "구매 결과", back: back) {
-            if pointsStore.dataUnavailable {
-                pointDataUnavailableNotice
+            if let receipt = cosmeticStoreFlow.purchaseReceipt {
+                VStack(spacing:14) {
+                    Text("구매 완료").font(W.font(20,.semibold)).multilineTextAlignment(.center)
+                    Text(cosmeticStoreFlow.product(id:receipt.productID)?.displayName ?? selectedPointProduct?.name ?? "꾸미기 상품")
+                        .font(W.font(16,.medium))
+                }.frame(maxWidth:.infinity).padding(.vertical,24)
+                WRow(title:"구매에 사용한 포인트",value:"\(receipt.purchasePricePoints.formatted())P")
+                WRow(title:"구매 당시 잔액",value:"\(receipt.balanceAfterPoints.formatted())P")
+                if let currentBalance = cosmeticStoreFlow.balancePoints, currentBalance != receipt.balanceAfterPoints {
+                    WRow(title:"현재 계정 잔액",value:"\(currentBalance.formatted())P",separator:false)
+                    if let balanceNotice = cosmeticStoreFlow.balanceNotice { WText(text:balanceNotice,small:true) }
+                }
+                if receipt.replayed {
+                    WText(text:"같은 구매 요청의 영수증을 확인했어요. 포인트를 다시 차감하지 않았어요.",small:true)
+                        .accessibilityIdentifier("cosmeticStorePurchaseReplay")
+                }
+            } else if cosmeticStoreFlow.purchaseOutcomeUnknown {
+                WNotice(text:"구매 결과를 아직 확인할 수 없어요. 구매를 다시 보내지 않았어요.",danger:true)
+                    .accessibilityIdentifier("cosmeticStorePurchaseOutcomeUnknown")
             } else {
-            VStack(spacing: 14) {
-                Text("구매 완료 예시").font(W.font(20, .semibold)).multilineTextAlignment(.center)
-                Text(selectedPointProduct.name).font(W.font(16, .medium))
-            }.frame(maxWidth: .infinity).padding(.vertical, 24)
-            WRow(title: "보유 포인트", value: "\((pointsStore.balance + selectedPointProduct.price).formatted())")
-            WRow(title: "필요 포인트 · 예시", value: "\(selectedPointProduct.price.formatted())")
-            WRow(title: "사용 후 잔액 · 예시", value: "\(pointsStore.balance.formatted())", separator: false)
-            WText(text: "샘플 구매 결과예요. 실제 서버 결제나 상품 지급은 없어요.", small: true)
+                WNotice(text:"확인된 구매 결과가 없어요. 상점 정보를 새로 불러와 주세요.",danger:true)
             }
         } actions: {
-            Button("확인") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
+            Button("상점으로") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
         }
     }
 
     private var pointShortage: some View {
         WPage(title: "포인트 부족", back: back) {
-            if pointsStore.dataUnavailable {
-                pointDataUnavailableNotice
-            } else {
+            if let product = selectedPointProduct, let balance = cosmeticStoreFlow.balancePoints {
                 WHeading(text: "포인트가 부족해요")
-                WText(text: "\(selectedPointProduct.name)을 구매하려면 포인트가 더 필요해요.")
-                WRow(title: "보유 포인트", value: "\(pointsStore.balance.formatted())P", separator: false)
-                WRow(title: "필요 포인트", value: "\(selectedPointProduct.price.formatted())P", separator: false)
-                WRow(title: "부족한 포인트", value: "\(max(0, selectedPointProduct.price - pointsStore.balance).formatted())P", separator: false)
+                WText(text: "\(product.name)을 구매하려면 포인트가 더 필요해요.")
+                WRow(title: "계정 포인트", value: "\(balance.formatted())P", separator: false)
+                WRow(title: "필요 포인트", value: "\(product.price.formatted())P", separator: false)
+                WRow(title: "부족한 포인트", value: "\(max(0, product.price - balance).formatted())P", separator: false)
                     .accessibilityIdentifier("pointShortageAmount")
+            } else {
+                WNotice(text:"계정 잔액을 불러올 수 없어 부족한 포인트를 계산하지 못했어요.",danger:true)
             }
         } actions: {
             Button("확인") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("backToShop")
@@ -555,10 +754,14 @@ extension WireframeRoot {
     }
 
     private var pointCardPreview: some View {
-        return WPage(title: "미리보기", back: back) {
-            Text("\(selectedPointProduct.name) 적용 예시").font(W.font(14)).foregroundStyle(W.muted)
-            runnerIdentityCard(decorationID:selectedPointProduct.id)
-            WText(text: "현재 러닝 카드는 바뀌지 않아요", small: true)
+        WPage(title: "미리보기", back: back) {
+            if let product = selectedPointProduct {
+                Text("\(product.name) 적용 예시").font(W.font(14)).foregroundStyle(W.muted)
+                runnerIdentityCard(decorationID:product.id)
+                WText(text: "미리보기예요. 장착하거나 구매해도 현재 러닝 카드에는 적용되지 않아요.", small: true)
+            } else {
+                WNotice(text:"상품 미리보기를 찾을 수 없어요. 상점에서 다시 선택해 주세요.",danger:true)
+            }
         } actions: {
             Button("아이템으로 돌아가기") { back() }.buttonStyle(WButtonStyle()).accessibilityIdentifier("previewBackToShop")
         }
@@ -594,6 +797,16 @@ private struct WPointProductArtwork: View {
             .accessibilityIdentifier("pointArtwork-\(product.id)")
     }
 
+    private var accent: Color {
+        guard let value = product.previewData.accentColor,
+              let rgb = UInt32(value.dropFirst(),radix:16) else { return W.lime }
+        return Color(
+            red:Double((rgb >> 16) & 0xff)/255,
+            green:Double((rgb >> 8) & 0xff)/255,
+            blue:Double(rgb & 0xff)/255
+        )
+    }
+
     private func cardArtwork(width: CGFloat, height: CGFloat) -> some View {
         let cardWidth = max(0, width)
         let cardHeight = max(0, height)
@@ -602,11 +815,11 @@ private struct WPointProductArtwork: View {
         let strokeScale = min(cardWidth / 240, cardHeight / 140)
         return ZStack(alignment: .topLeading) {
             W.paper
-            if product.id == "card-frame" {
-                RoundedRectangle(cornerRadius: radius).stroke(W.lime, lineWidth: 3)
+            if product.category == .frame {
+                RoundedRectangle(cornerRadius: radius).stroke(accent, lineWidth: 3)
             } else {
-                WPointPath(productID: product.id)
-                    .stroke(W.lime.opacity(product.id == "dawn" ? 0.45 : 0.9), style: StrokeStyle(lineWidth: (product.id == "line" ? 11 : 18) * strokeScale, lineCap: .round))
+                WPointPath()
+                    .stroke(accent.opacity(0.78), style: StrokeStyle(lineWidth: 14 * strokeScale, lineCap: .round))
                     .frame(width: cardWidth, height: cardHeight)
             }
             BrandMark(size: markSize).frame(width: markSize, height: markSize).padding(.leading, large ? 16 : 10).padding(.top, large ? 14 : 9)
@@ -619,7 +832,7 @@ private struct WPointProductArtwork: View {
         .frame(width: cardWidth, height: cardHeight)
         .clipShape(RoundedRectangle(cornerRadius: radius))
         .shadow(color: .black.opacity(0.04), radius: 6.5, y: 3.5)
-        .rotationEffect(.degrees(product.id == "line" ? 4 : product.id == "dawn" ? -4 : 0))
+        .rotationEffect(.degrees(product.category == .image ? 4 : 0))
     }
 
     private var profileArtwork: some View {
@@ -630,12 +843,12 @@ private struct WPointProductArtwork: View {
         let dotDiameter: CGFloat = large ? 14 : 9
         let markerDiameter = dotDiameter + 6
         return ZStack {
-            Circle().stroke(W.lime, lineWidth: ringWidth).frame(width: diameter, height: diameter)
+            Circle().stroke(accent, lineWidth: ringWidth).frame(width: diameter, height: diameter)
             Circle().fill(W.paper).frame(width: innerDiameter, height: innerDiameter)
             WPointProfileGlyph().stroke(W.muted, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
                 .frame(width: iconSize, height: iconSize).rotationEffect(.degrees(12))
             ForEach(0..<3) { index in
-                Circle().fill(W.lime).frame(width: dotDiameter, height: dotDiameter)
+                Circle().fill(accent).frame(width: dotDiameter, height: dotDiameter)
                     .overlay(Circle().stroke(W.soft, lineWidth: 3))
                     .position(markerPosition(index, diameter: diameter, markerDiameter: markerDiameter, large: large))
             }
@@ -652,20 +865,12 @@ private struct WPointProductArtwork: View {
 }
 
 private struct WPointPath: Shape {
-    let productID: String
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        if productID == "line" {
-            path.move(to: CGPoint(x: -15, y: 121))
-            path.addCurve(to: CGPoint(x: 91, y: 28), control1: CGPoint(x: 45, y: 121), control2: CGPoint(x: 15, y: 28))
-            path.addCurve(to: CGPoint(x: 218, y: 52), control1: CGPoint(x: 167, y: 28), control2: CGPoint(x: 147, y: 113))
-            path.addCurve(to: CGPoint(x: 265, y: 73), control1: CGPoint(x: 289, y: -9), control2: CGPoint(x: 265, y: 73))
-        } else {
-            path.move(to: CGPoint(x: -10, y: 100))
-            path.addCurve(to: CGPoint(x: 62, y: 59), control1: CGPoint(x: 62, y: 159), control2: CGPoint(x: 103, y: 79))
-            path.addCurve(to: CGPoint(x: 145, y: 37), control1: CGPoint(x: 21, y: 39), control2: CGPoint(x: 72, y: -10))
-            path.addCurve(to: CGPoint(x: 241, y: 112), control1: CGPoint(x: 218, y: 84), control2: CGPoint(x: 134, y: 131))
-        }
+        path.move(to: CGPoint(x: -10, y: 100))
+        path.addCurve(to: CGPoint(x: 62, y: 59), control1: CGPoint(x: 62, y: 159), control2: CGPoint(x: 103, y: 79))
+        path.addCurve(to: CGPoint(x: 145, y: 37), control1: CGPoint(x: 21, y: 39), control2: CGPoint(x: 72, y: -10))
+        path.addCurve(to: CGPoint(x: 241, y: 112), control1: CGPoint(x: 218, y: 84), control2: CGPoint(x: 134, y: 131))
         let scale = min(rect.width / 240, rect.height / 140)
         var transformed = Path()
         transformed.addPath(path, transform: CGAffineTransform(translationX: (rect.width - 240 * scale) / 2, y: (rect.height - 140 * scale) / 2).scaledBy(x: scale, y: scale))
@@ -687,3 +892,161 @@ private struct WPointProfileGlyph: Shape {
         return path.applying(t)
     }
 }
+
+#if DEBUG
+/// In-memory API fixture for focused MovUITestHost runs. The launch policy
+/// creates it only from a review launch with a UUID-scoped defaults suite.
+actor WireframeCosmeticStoreFixture: CosmeticStoreServing, PointsWalletReading, RunUploadSessionProviding {
+    private struct Seed: Sendable {
+        let id: String
+        let name: String
+        let description: String
+        let category: CosmeticStoreCategory
+        let price: Int64
+        let assetID: String
+        let accent: String
+    }
+
+    private let seeds: [Seed] = [
+        Seed(id:"101",name:"모브 라인",description:"가볍게 이어지는 선으로 러닝 카드의 분위기를 바꿔 보세요.",category:.runCardBackground,price:400,assetID:"card_line",accent:"#AABBCC"),
+        Seed(id:"102",name:"새벽의 길",description:"밝은 여백과 둥근 코스로 표현한 러닝 카드 배경이에요.",category:.runCardBackground,price:900,assetID:"card_dawn",accent:"#88AA99"),
+        Seed(id:"201",name:"라임 라인",description:"러닝 카드 가장자리를 얇은 라임 선으로 꾸며 보세요.",category:.runCardFrame,price:700,assetID:"frame_lime",accent:"#AABBCC"),
+        Seed(id:"301",name:"페이스 프레임",description:"페이스 화면에 작은 움직임을 더하는 장식이에요.",category:.paceFrame,price:1_600,assetID:"pace_frame",accent:"#88AA99")
+    ]
+    private let unavailableFirstProduct: Bool
+    private let hideUnavailableFirstProduct: Bool
+    private let loseFirstPurchaseResponse: Bool
+    private let balanceAdjustment: Int64
+    private let changesAccountAfterPurchase: Bool
+    private var lostResponseConsumed = false
+    private var balance: Int64
+    private var ownerID = "fixture-member-101"
+    private var nextPurchaseID: Int64 = 9001
+    private var inventoryItems: [CosmeticStoreInventoryItem] = []
+    private var equipmentByCategory: [CosmeticStoreCategory:String] = [:]
+    private var receiptsByKey: [String:(productID:String,receipt:CosmeticStorePurchaseReceipt)] = [:]
+
+    init(arguments: [String]) {
+        unavailableFirstProduct = arguments.contains("-wire-cosmetic-store-sale-stopped")
+            || arguments.contains("-wire-cosmetic-store-sale-stopped-on-detail")
+        hideUnavailableFirstProduct = arguments.contains("-wire-cosmetic-store-sale-stopped")
+        loseFirstPurchaseResponse = arguments.contains("-wire-cosmetic-store-lost-response-once")
+        balanceAdjustment = arguments.contains("-wire-cosmetic-store-balance-changed") ? 25 : 0
+        changesAccountAfterPurchase = arguments.contains("-wire-cosmetic-store-account-switch-on-purchase")
+        balance = arguments.contains("-wire-cosmetic-store-insufficient") ? 100 : 1_475
+    }
+
+    func currentSession() async throws -> RunUploadSession? {
+        RunUploadSession(ownerID:ownerID,accessToken:"fixture-store-token")
+    }
+
+    func fetchCatalog(category: CosmeticStoreCategory?) async throws -> CosmeticStoreCatalog {
+        let available = seeds.filter { seed in
+            !(hideUnavailableFirstProduct && seed.id=="101")
+                && (category == nil || category == seed.category)
+        }
+        return CosmeticStoreCatalog(items:available.map(makeProduct))
+    }
+
+    func fetchProduct(id: String) async throws -> CosmeticStoreProduct {
+        guard let seed=seed(for:id), !(unavailableFirstProduct && id=="101") else {
+            throw CosmeticStoreFailure.notFound(requestID:"fixture-store-not-found")
+        }
+        return makeProduct(seed)
+    }
+
+    func fetchInventory() async throws -> CosmeticStoreInventory {
+        CosmeticStoreInventory(items:inventoryItems)
+    }
+
+    func fetchBalance() async throws -> PointsBalance {
+        PointsBalance(balancePoints:balance)
+    }
+
+    func fetchEntries(cursor: String?, size: Int) async throws -> PointsLedgerPage {
+        PointsLedgerPage(entries:[],nextCursor:nil)
+    }
+
+    func fetchEquipment() async throws -> CosmeticEquipment {
+        CosmeticEquipment(slots:CosmeticStoreCategory.allCases.map { category in
+            let productID=equipmentByCategory[category]
+            return CosmeticEquipmentSlot(category:category,productID:productID,usesDefault:productID == nil)
+        })
+    }
+
+    func purchase(productID: String, idempotencyKey: String) async throws -> CosmeticStorePurchaseReceipt {
+        if let replay=receiptsByKey[idempotencyKey] {
+            guard replay.productID==productID else {
+                throw CosmeticStoreFailure.idempotencyConflict(requestID:"fixture-store-key-conflict")
+            }
+            let receipt=replay.receipt
+            return CosmeticStorePurchaseReceipt(
+                purchaseID:receipt.purchaseID,productID:receipt.productID,
+                purchasePricePoints:receipt.purchasePricePoints,balanceAfterPoints:receipt.balanceAfterPoints,
+                purchasedAt:receipt.purchasedAt,replayed:true
+            )
+        }
+        guard let seed=seed(for:productID), !(unavailableFirstProduct && productID=="101") else {
+            throw CosmeticStoreFailure.productUnavailable(requestID:"fixture-store-unavailable")
+        }
+        guard !inventoryItems.contains(where:{$0.productID==productID}) else {
+            throw CosmeticStoreFailure.alreadyOwned(requestID:"fixture-store-owned")
+        }
+        guard balance >= seed.price else {
+            throw CosmeticStoreFailure.insufficientPoints(requestID:"fixture-store-insufficient")
+        }
+
+        balance = balance - seed.price + balanceAdjustment
+        let receipt=CosmeticStorePurchaseReceipt(
+            purchaseID:String(nextPurchaseID),productID:productID,purchasePricePoints:seed.price,
+            balanceAfterPoints:balance,purchasedAt:"2026-10-17T08:30:00+09:00",replayed:false
+        )
+        nextPurchaseID += 1
+        inventoryItems.append(CosmeticStoreInventoryItem(
+            purchaseID:receipt.purchaseID,productID:productID,category:seed.category,displayName:seed.name,
+            description:seed.description,purchasePricePoints:seed.price,balanceAfterPoints:balance,
+            previewData:preview(for:seed),purchasedAt:receipt.purchasedAt
+        ))
+        receiptsByKey[idempotencyKey]=(productID,receipt)
+        if loseFirstPurchaseResponse && !lostResponseConsumed {
+            lostResponseConsumed=true
+            throw CosmeticStoreFailure.transport(.networkConnectionLost)
+        }
+        if changesAccountAfterPurchase { ownerID="fixture-member-202" }
+        return receipt
+    }
+
+    func equip(productID: String, to category: CosmeticStoreCategory) async throws -> CosmeticEquipmentChange {
+        guard let item=inventoryItems.first(where:{$0.productID==productID}) else {
+            throw CosmeticStoreFailure.notFound(requestID:"fixture-store-not-owned")
+        }
+        guard item.category==category else {
+            throw CosmeticStoreFailure.categoryMismatch(requestID:"fixture-store-category")
+        }
+        let changed=equipmentByCategory[category] != productID
+        equipmentByCategory[category]=productID
+        return CosmeticEquipmentChange(category:category,productID:productID,usesDefault:false,changed:changed)
+    }
+
+    func unequip(category: CosmeticStoreCategory) async throws -> CosmeticEquipmentChange {
+        let changed=equipmentByCategory.removeValue(forKey:category) != nil
+        return CosmeticEquipmentChange(category:category,productID:nil,usesDefault:true,changed:changed)
+    }
+
+    private func makeProduct(_ seed: Seed) -> CosmeticStoreProduct {
+        CosmeticStoreProduct(
+            id:seed.id,category:seed.category,displayName:seed.name,description:seed.description,
+            pricePoints:seed.price,previewData:preview(for:seed),
+            owned:inventoryItems.contains(where:{$0.productID==seed.id})
+        )
+    }
+
+    private func preview(for seed: Seed) -> CosmeticPreviewData {
+        CosmeticPreviewData(version:1,assetID:seed.assetID,accentColor:seed.accent)
+    }
+
+    private func seed(for id: String) -> Seed? {
+        seeds.first(where:{$0.id==id})
+    }
+}
+#endif

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 enum CosmeticStoreCategory: String, CaseIterable, Equatable, Sendable {
     case runCardBackground = "RUN_CARD_BACKGROUND"
@@ -590,5 +591,486 @@ extension CosmeticPreviewData: Decodable {
         self.version = version
         self.assetID = assetID
         self.accentColor = accentColor
+    }
+}
+
+enum CosmeticStoreLoadState<Value: Equatable & Sendable>: Equatable {
+    case idle
+    case loading
+    case loaded(Value)
+    case failed(CosmeticStoreFailure)
+}
+
+enum CosmeticStoreBalanceState: Equatable {
+    case idle
+    case loading
+    case loaded(Int64)
+    case failed(PointsReadFailure)
+}
+
+enum CosmeticStorePurchaseState: Equatable {
+    case idle
+    case submitting(productID: String)
+    case outcomeUnknown(productID: String, failure: CosmeticStoreFailure)
+    case succeeded(CosmeticStorePurchaseReceipt)
+    case failed(CosmeticStoreFailure)
+}
+
+/// Owns the account-scoped state used by the shop UI. It never mutates a local
+/// points balance; catalog, wallet, ownership, and equipment values come from
+/// their authenticated server readers.
+@MainActor final class CosmeticStoreFlow: ObservableObject {
+    private struct PendingPurchase {
+        let productID: String
+        let idempotencyKey: String
+        let ownerID: String
+    }
+
+    private let store: (any CosmeticStoreServing)?
+    private let wallet: (any PointsWalletReading)?
+    private let sessionProvider: (any RunUploadSessionProviding)?
+
+    @Published private(set) var catalogState: CosmeticStoreLoadState<CosmeticStoreCatalog> = .idle
+    @Published private(set) var productState: CosmeticStoreLoadState<CosmeticStoreProduct> = .idle
+    @Published private(set) var inventoryState: CosmeticStoreLoadState<CosmeticStoreInventory> = .idle
+    @Published private(set) var equipmentState: CosmeticStoreLoadState<CosmeticEquipment> = .idle
+    @Published private(set) var balanceState: CosmeticStoreBalanceState = .idle
+    @Published private(set) var purchaseState: CosmeticStorePurchaseState = .idle
+    @Published private(set) var equipmentMutationCategory: CosmeticStoreCategory?
+    @Published private(set) var equipmentFailure: CosmeticStoreFailure?
+    @Published private(set) var balanceNotice: String?
+    @Published private(set) var sessionNotice: String?
+    @Published private(set) var activeOwnerID: String?
+
+    private var readGeneration: UInt64 = 0
+    private var pendingPurchase: PendingPurchase?
+    private var unavailableProductIDs: Set<String> = []
+
+    init(
+        store: (any CosmeticStoreServing)?,
+        wallet: (any PointsWalletReading)?,
+        sessionProvider: (any RunUploadSessionProviding)?
+    ) {
+        self.store = store
+        self.wallet = wallet
+        self.sessionProvider = sessionProvider
+    }
+
+    var catalog: CosmeticStoreCatalog? {
+        guard case .loaded(let value) = catalogState else { return nil }
+        return value
+    }
+
+    var selectedProduct: CosmeticStoreProduct? {
+        guard case .loaded(let value) = productState else { return nil }
+        return value
+    }
+
+    var inventory: CosmeticStoreInventory? {
+        guard case .loaded(let value) = inventoryState else { return nil }
+        return value
+    }
+
+    var equipment: CosmeticEquipment? {
+        guard case .loaded(let value) = equipmentState else { return nil }
+        return value
+    }
+
+    var balancePoints: Int64? {
+        guard case .loaded(let value) = balanceState else { return nil }
+        return value
+    }
+
+    var purchaseReceipt: CosmeticStorePurchaseReceipt? {
+        guard case .succeeded(let receipt) = purchaseState else { return nil }
+        return receipt
+    }
+
+    var purchaseInFlight: Bool {
+        if case .submitting = purchaseState { return true }
+        return false
+    }
+
+    var purchaseOutcomeUnknown: Bool {
+        if case .outcomeUnknown = purchaseState { return true }
+        return false
+    }
+
+    func product(id: String) -> CosmeticStoreProduct? {
+        if let selectedProduct, selectedProduct.id == id { return selectedProduct }
+        return catalog?.items.first { $0.id == id }
+    }
+
+    func isOwned(_ productID: String) -> Bool {
+        catalog?.items.first { $0.id == productID }?.owned == true
+            || inventory?.items.contains { $0.productID == productID } == true
+            || purchaseReceipt?.productID == productID
+    }
+
+    func isEquipped(_ productID: String, in category: CosmeticStoreCategory) -> Bool {
+        equipment?.slots.first { $0.category == category }?.productID == productID
+    }
+
+    func isUnavailable(_ productID: String) -> Bool {
+        unavailableProductIDs.contains(productID)
+    }
+
+    func canPurchase(_ product: CosmeticStoreProduct) -> Bool {
+        guard let balancePoints,
+              balancePoints >= product.pricePoints,
+              !product.owned,
+              !isOwned(product.id),
+              !unavailableProductIDs.contains(product.id),
+              !purchaseInFlight,
+              !purchaseOutcomeUnknown else { return false }
+        return true
+    }
+
+    func refreshShop(category: CosmeticStoreCategory? = nil) async {
+        guard let store, let wallet else {
+            clearAccountData()
+            catalogState = .failed(.accessTokenUnavailable)
+            inventoryState = .failed(.accessTokenUnavailable)
+            equipmentState = .failed(.accessTokenUnavailable)
+            balanceState = .failed(.accessTokenUnavailable)
+            return
+        }
+
+        let ownerID: String
+        do {
+            ownerID = try await requireCurrentOwnerID()
+        } catch {
+            clearAccountData()
+            catalogState = .failed(error as? CosmeticStoreFailure ?? .accessTokenUnavailable)
+            inventoryState = .failed(error as? CosmeticStoreFailure ?? .accessTokenUnavailable)
+            equipmentState = .failed(error as? CosmeticStoreFailure ?? .accessTokenUnavailable)
+            balanceState = .failed(.accessTokenUnavailable)
+            return
+        }
+
+        adoptOwner(ownerID)
+        readGeneration &+= 1
+        let generation = readGeneration
+        sessionNotice = nil
+        catalogState = .loading
+        inventoryState = .loading
+        equipmentState = .loading
+        balanceState = .loading
+
+        do {
+            let value = try await store.fetchCatalog(category: category)
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            catalogState = .loaded(value)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            catalogState = .failed(failure)
+            if failure == .sessionChanged { invalidateAfterSessionChange() }
+        }
+
+        guard readGeneration == generation else { return }
+        do {
+            let value = try await store.fetchInventory()
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            inventoryState = .loaded(value)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            inventoryState = .failed(failure)
+            if failure == .sessionChanged { invalidateAfterSessionChange(); return }
+        }
+
+        guard readGeneration == generation else { return }
+        do {
+            let value = try await store.fetchEquipment()
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            equipmentState = .loaded(value)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            equipmentState = .failed(failure)
+            if failure == .sessionChanged { invalidateAfterSessionChange(); return }
+        }
+
+        guard readGeneration == generation else { return }
+        do {
+            let value = try await wallet.fetchBalance()
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            balanceState = value.balancePoints >= 0 ? .loaded(value.balancePoints) : .failed(.invalidResponse)
+            if let receipt = purchaseReceipt {
+                balanceNotice = value.balancePoints == receipt.balanceAfterPoints
+                    ? nil
+                    : "구매 이후 포인트 변동을 반영한 현재 서버 잔액이에요."
+            }
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: generation) else { return }
+            let failure = error as? PointsReadFailure ?? .invalidResponse
+            balanceState = .failed(failure)
+        }
+    }
+
+    func refreshProduct(id: String) async {
+        guard let store else {
+            productState = .failed(.accessTokenUnavailable)
+            return
+        }
+        if activeOwnerID == nil { await refreshShop() }
+        guard let ownerID = activeOwnerID else {
+            productState = .failed(.accessTokenUnavailable)
+            return
+        }
+        do {
+            let currentOwnerID = try await requireCurrentOwnerID()
+            guard currentOwnerID == ownerID else {
+                invalidateAfterSessionChange()
+                return
+            }
+        } catch {
+            productState = .failed(error as? CosmeticStoreFailure ?? .accessTokenUnavailable)
+            return
+        }
+
+        productState = .loading
+        do {
+            let value = try await store.fetchProduct(id: id)
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            selectedProductIsAvailable(value)
+            productState = .loaded(value)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            productState = .failed(failure)
+            switch failure {
+            case .productUnavailable, .notFound: unavailableProductIDs.insert(id)
+            default: break
+            }
+            if failure == .sessionChanged { invalidateAfterSessionChange() }
+        }
+    }
+
+    func purchase(productID: String) async {
+        guard !purchaseInFlight, !purchaseOutcomeUnknown,
+              let initialProduct = product(id: productID), canPurchase(initialProduct),
+              let ownerID = activeOwnerID else { return }
+        do {
+            guard try await requireCurrentOwnerID() == ownerID else {
+                invalidateAfterSessionChange()
+                return
+            }
+        } catch {
+            purchaseState = .failed(error as? CosmeticStoreFailure ?? .accessTokenUnavailable)
+            return
+        }
+        guard activeOwnerID == ownerID,
+              !purchaseInFlight,
+              !purchaseOutcomeUnknown,
+              let currentProduct = product(id: productID),
+              canPurchase(currentProduct) else { return }
+
+        let attempt = PendingPurchase(productID: productID, idempotencyKey: UUID().uuidString, ownerID: ownerID)
+        pendingPurchase = attempt
+        await submit(attempt)
+    }
+
+    /// Resolves an ambiguous response only after an explicit user action, reusing
+    /// the original key so the server can replay the original receipt safely.
+    func resolveUnknownPurchase() async {
+        guard purchaseOutcomeUnknown, let attempt = pendingPurchase else { return }
+        do {
+            guard try await requireCurrentOwnerID() == attempt.ownerID else {
+                invalidateAfterSessionChange()
+                return
+            }
+        } catch {
+            purchaseState = .outcomeUnknown(productID: attempt.productID, failure: .accessTokenUnavailable)
+            return
+        }
+        await submit(attempt)
+    }
+
+    func equip(productID: String, to category: CosmeticStoreCategory) async {
+        guard equipmentMutationCategory == nil,
+              inventory?.items.contains(where: { $0.productID == productID && $0.category == category }) == true,
+              let store, let ownerID = activeOwnerID else { return }
+        equipmentMutationCategory = category
+        equipmentFailure = nil
+        defer { equipmentMutationCategory = nil }
+        do {
+            let change = try await store.equip(productID: productID, to: category)
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            apply(change)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            equipmentFailure = failure
+            if failure == .sessionChanged { invalidateAfterSessionChange() }
+        }
+    }
+
+    func unequip(category: CosmeticStoreCategory) async {
+        guard equipmentMutationCategory == nil, let store, let ownerID = activeOwnerID else { return }
+        equipmentMutationCategory = category
+        equipmentFailure = nil
+        defer { equipmentMutationCategory = nil }
+        do {
+            let change = try await store.unequip(category: category)
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            apply(change)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            equipmentFailure = failure
+            if failure == .sessionChanged { invalidateAfterSessionChange() }
+        }
+    }
+
+    func accountContextDidChange() {
+        clearAccountData()
+        sessionNotice = "계정이 변경되어 상점 정보를 다시 불러와야 해요."
+    }
+
+    private func submit(_ attempt: PendingPurchase) async {
+        guard let store, pendingPurchase?.idempotencyKey == attempt.idempotencyKey,
+              !purchaseInFlight else { return }
+        purchaseState = .submitting(productID: attempt.productID)
+        let priorBalance = balancePoints
+        do {
+            let receipt = try await store.purchase(productID: attempt.productID, idempotencyKey: attempt.idempotencyKey)
+            guard receipt.productID == attempt.productID else {
+                pendingPurchase = attempt
+                purchaseState = .outcomeUnknown(productID: attempt.productID, failure: .invalidResponse)
+                return
+            }
+            guard await isCurrent(ownerID: attempt.ownerID, generation: nil) else { return }
+            pendingPurchase = nil
+            unavailableProductIDs.remove(attempt.productID)
+            purchaseState = .succeeded(receipt)
+            balanceState = .loaded(receipt.balanceAfterPoints)
+            if let priorBalance, priorBalance - receipt.purchasePricePoints != receipt.balanceAfterPoints {
+                balanceNotice = "구매 응답 잔액이 직전 조회와 달라 현재 잔액을 새로 확인하고 있어요."
+            }
+            await refreshShop()
+        } catch {
+            let failure = error as? CosmeticStoreFailure ?? .invalidResponse
+            guard await isCurrent(ownerID: attempt.ownerID, generation: nil) else { return }
+            if failure == .sessionChanged {
+                invalidateAfterSessionChange()
+                return
+            }
+            if isAmbiguous(failure) {
+                pendingPurchase = attempt
+                purchaseState = .outcomeUnknown(productID: attempt.productID, failure: failure)
+                return
+            }
+
+            pendingPurchase = nil
+            purchaseState = .failed(failure)
+            switch failure {
+            case .productUnavailable, .alreadyOwned:
+                unavailableProductIDs.insert(attempt.productID)
+                await refreshShop()
+            case .insufficientPoints:
+                await refreshWallet(ownerID: attempt.ownerID)
+            default:
+                break
+            }
+        }
+    }
+
+    private func refreshWallet(ownerID: String) async {
+        guard let wallet else { return }
+        do {
+            let value = try await wallet.fetchBalance()
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            balanceState = value.balancePoints >= 0 ? .loaded(value.balancePoints) : .failed(.invalidResponse)
+        } catch {
+            guard await isCurrent(ownerID: ownerID, generation: nil) else { return }
+            balanceState = .failed(error as? PointsReadFailure ?? .invalidResponse)
+        }
+    }
+
+    private func apply(_ change: CosmeticEquipmentChange) {
+        guard case .loaded(let current) = equipmentState else { return }
+        let updated = CosmeticEquipment(slots: current.slots.map { slot in
+            guard slot.category == change.category else { return slot }
+            return CosmeticEquipmentSlot(category: change.category, productID: change.productID, usesDefault: change.usesDefault)
+        })
+        equipmentState = .loaded(updated)
+    }
+
+    private func selectedProductIsAvailable(_ product: CosmeticStoreProduct) {
+        unavailableProductIDs.remove(product.id)
+    }
+
+    private func isAmbiguous(_ failure: CosmeticStoreFailure) -> Bool {
+        switch failure {
+        case .transport, .cancelled, .invalidResponse, .serviceUnavailable, .serverFailure:
+            true
+        case .accessTokenUnavailable, .unauthenticated, .forbidden, .notFound, .insufficientPoints,
+             .idempotencyConflict, .alreadyOwned, .productUnavailable, .categoryMismatch,
+             .malformedRequest, .conflict, .invalidProductID, .invalidIdempotencyKey, .sessionChanged:
+            false
+        }
+    }
+
+    private func requireCurrentOwnerID() async throws -> String {
+        guard let sessionProvider,
+              let session = try await sessionProvider.currentSession(),
+              !session.ownerID.isEmpty,
+              session.ownerID.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw CosmeticStoreFailure.accessTokenUnavailable
+        }
+        return session.ownerID
+    }
+
+    private func isCurrent(ownerID: String, generation: UInt64?) async -> Bool {
+        if let generation, readGeneration != generation { return false }
+        do {
+            guard try await requireCurrentOwnerID() == ownerID else {
+                invalidateAfterSessionChange()
+                return false
+            }
+            return generation == nil || readGeneration == generation
+        } catch {
+            invalidateAfterSessionChange()
+            return false
+        }
+    }
+
+    private func adoptOwner(_ ownerID: String) {
+        if let activeOwnerID, activeOwnerID != ownerID {
+            clearAccountData()
+            self.activeOwnerID = ownerID
+            sessionNotice = nil
+        } else {
+            self.activeOwnerID = ownerID
+        }
+    }
+
+    private func invalidateAfterSessionChange() {
+        clearAccountData()
+        catalogState = .failed(.sessionChanged)
+        inventoryState = .failed(.sessionChanged)
+        equipmentState = .failed(.sessionChanged)
+        productState = .failed(.sessionChanged)
+        balanceState = .failed(.unauthenticated)
+        purchaseState = .failed(.sessionChanged)
+        sessionNotice = "계정이 변경되어 이전 계정의 상점 결과를 표시하지 않아요. 현재 계정 정보를 다시 불러와 주세요."
+    }
+
+    private func clearAccountData() {
+        readGeneration &+= 1
+        activeOwnerID = nil
+        catalogState = .idle
+        productState = .idle
+        inventoryState = .idle
+        equipmentState = .idle
+        balanceState = .idle
+        purchaseState = .idle
+        equipmentMutationCategory = nil
+        equipmentFailure = nil
+        balanceNotice = nil
+        pendingPurchase = nil
+        unavailableProductIDs.removeAll()
     }
 }

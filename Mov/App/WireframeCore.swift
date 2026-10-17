@@ -476,6 +476,10 @@ struct WireframeRemoteReadDependencies {
     let authSessionStore: (any AuthSessionStoring)?
     let authSessionClient: AuthSessionClient?
     let runUploadAPIClient: (any APIResponseSending)?
+    let cosmeticStoreService: (any CosmeticStoreServing)?
+    let pointsWalletReader: (any PointsWalletReading)?
+    let cosmeticStoreSessionProvider: (any RunUploadSessionProviding)?
+    let cosmeticStoreFixture: Bool
     let mediaUploadClient: MediaUploadClient?
     let communityMediaClient: CommunityMediaClient?
     let communityPostOperationStore: (any CommunityPostOperationPersisting)?
@@ -497,6 +501,10 @@ struct WireframeRemoteReadDependencies {
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
         runUploadAPIClient: (any APIResponseSending)? = nil,
+        cosmeticStoreService: (any CosmeticStoreServing)? = nil,
+        pointsWalletReader: (any PointsWalletReading)? = nil,
+        cosmeticStoreSessionProvider: (any RunUploadSessionProviding)? = nil,
+        cosmeticStoreFixture: Bool = false,
         mediaUploadClient: MediaUploadClient? = nil,
         communityMediaClient: CommunityMediaClient? = nil,
         communityPostOperationStore: (any CommunityPostOperationPersisting)? = nil,
@@ -517,6 +525,10 @@ struct WireframeRemoteReadDependencies {
         self.authSessionStore = authSessionStore
         self.authSessionClient = authSessionClient
         self.runUploadAPIClient = runUploadAPIClient
+        self.cosmeticStoreService = cosmeticStoreService
+        self.pointsWalletReader = pointsWalletReader
+        self.cosmeticStoreSessionProvider = cosmeticStoreSessionProvider
+        self.cosmeticStoreFixture = cosmeticStoreFixture
         self.mediaUploadClient = mediaUploadClient
         self.communityMediaClient = communityMediaClient
         self.communityPostOperationStore = communityPostOperationStore
@@ -3238,7 +3250,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewManageDraft:WCommunityCrewManageDraft?
     var communityCrewManageError=""
     var communityCrewManageFeedback=""
-    var selectedPointProductID="line"
+    var selectedPointProductID="101"
     var provider="Google"
     var pending="T05"
     var pendingBack="T05"
@@ -3673,7 +3685,38 @@ struct RootView:View {
                 conflictNickname:args.contains("-wire-member-profile-nickname-conflict"),
                 delayWrite:args.contains("-wire-member-profile-write-delay")
             ) : nil
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
+        #if DEBUG
+        let cosmeticStoreFixture: WireframeCosmeticStoreFixture? =
+            WReviewMode.tools
+            && args.contains("-wire-cosmetic-store-fixture")
+            && AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: args)
+            ? WireframeCosmeticStoreFixture(arguments: args) : nil
+        #else
+        let cosmeticStoreFixture: (any CosmeticStoreServing)? = nil
+        #endif
+        var cosmeticStoreSessionProvider: (any RunUploadSessionProviding)?
+        var cosmeticStoreService: (any CosmeticStoreServing)? = cosmeticStoreFixture
+        var pointsWalletReader: (any PointsWalletReading)?
+        #if DEBUG
+        if let cosmeticStoreFixture {
+            cosmeticStoreSessionProvider = cosmeticStoreFixture
+            pointsWalletReader = cosmeticStoreFixture
+        }
+        #endif
+        if cosmeticStoreService == nil {
+            if let apiClient = authComposition.apiClient,
+               let authClient = authComposition.client,
+               let sessionStore = authComposition.store {
+                let sessionProvider = WireframeRunUploadSessionProvider(sessionStore: sessionStore, authClient: authClient)
+                cosmeticStoreSessionProvider = sessionProvider
+                cosmeticStoreService = CosmeticStoreClient(apiClient: apiClient, sessionProvider: sessionProvider)
+                pointsWalletReader = (apiClient as? APIClient).map { PointsWalletClient(apiClient: $0, tokenProvider: authClient) }
+            } else {
+                cosmeticStoreSessionProvider = nil
+                pointsWalletReader = nil
+            }
+        }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || cosmeticStoreFixture != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -3736,6 +3779,10 @@ struct RootView:View {
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
             runUploadAPIClient:authComposition.apiClient,
+            cosmeticStoreService:cosmeticStoreService,
+            pointsWalletReader:pointsWalletReader,
+            cosmeticStoreSessionProvider:cosmeticStoreSessionProvider,
+            cosmeticStoreFixture:cosmeticStoreFixture != nil,
             mediaUploadClient: {
                 guard let apiClient = authComposition.apiClient, let authClient = authComposition.client else { return nil }
                 return MediaUploadClient(apiClient: apiClient, tokenProvider: authClient)
@@ -4042,7 +4089,9 @@ struct WireframeRoot:View {
     @State var store:RunStore
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
+    @StateObject var cosmeticStoreFlow:CosmeticStoreFlow
     @State var remoteReads:WireframeRemoteReadBridge
+    let cosmeticStoreFixture: Bool
     let mediaUploadClient: MediaUploadClient?
     let communityMediaClient: CommunityMediaClient?
     let communityPostOperationStore: any CommunityPostOperationPersisting
@@ -4087,6 +4136,12 @@ struct WireframeRoot:View {
         self.mediaUploadClient=remoteReadDependencies?.mediaUploadClient
         self.communityMediaClient=remoteReadDependencies?.communityMediaClient
         self.communityPostOperationStore=remoteReadDependencies?.communityPostOperationStore ?? FileCommunityPostOperationStore()
+        self.cosmeticStoreFixture=remoteReadDependencies?.cosmeticStoreFixture ?? false
+        _cosmeticStoreFlow=StateObject(wrappedValue:CosmeticStoreFlow(
+            store:remoteReadDependencies?.cosmeticStoreService,
+            wallet:remoteReadDependencies?.pointsWalletReader,
+            sessionProvider:remoteReadDependencies?.cosmeticStoreSessionProvider
+        ))
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         #if DEBUG
@@ -4227,6 +4282,7 @@ struct WireframeRoot:View {
         return WireframeRemoteReadFeature.forScreen(ui.screen)
     }
     var remoteReadTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)|\(ui.remoteSelectedRunID ?? "")" }
+    var cosmeticStoreTaskKey:String { "\(ui.screen)|\(ui.remoteAccountScopeID)|\(ui.selectedPointProductID)|\(selectedPointCategory.rawValue)" }
     var remoteDailyProgressRange:BackendDailyProgressRange {
         ui.month ? .month(containing:ui.calendarMonth):.week(containing:WReviewClock.now)
     }
@@ -4269,8 +4325,24 @@ struct WireframeRoot:View {
     var rootRemoteStateUpdates:some View {
         rootTaskViews
             .onChange(of:ui.screen){oldScreen,newScreen in if oldScreen=="T15" && newScreen != "T15"{accountLinkPasswordInput=""}}
-            .onChange(of:scenePhase){_,phase in handleScenePhaseChange(phase)}
-            .onChange(of:ui.remoteAccountScopeID){_,scopeID in handleRemoteAccountScopeChange(scopeID)}
+            .onChange(of:scenePhase){_,phase in
+                handleScenePhaseChange(phase)
+                guard phase == .active, ["SHOP","B06"].contains(ui.screen) else { return }
+                Task {
+                    if ui.screen == "SHOP" {
+                        await cosmeticStoreFlow.refreshShop(category:selectedPointCategory.storeCategory)
+                    } else {
+                        await cosmeticStoreFlow.refreshProduct(id:ui.selectedPointProductID)
+                    }
+                }
+            }
+            .onChange(of:ui.remoteAccountScopeID){_,scopeID in
+                cosmeticStoreFlow.accountContextDidChange()
+                handleRemoteAccountScopeChange(scopeID)
+            }
+            .onChange(of:cosmeticStoreFlow.purchaseState){_,state in
+                if case .succeeded = state, ui.screen=="B06" { go("B07") }
+            }
             .onChange(of:remoteReads.memberProfileState){_,state in handleRemoteMemberProfileStateChange(state)}
             .onChange(of:remoteReads.memberProfileWriteState){_,state in handleRemoteMemberProfileWriteStateChange(state)}
             .onChange(of:remoteReads.weeklyGoalState){_,state in handleRemoteWeeklyGoalStateChange(state)}
@@ -4306,6 +4378,17 @@ struct WireframeRoot:View {
                         ui.screen==screen && ui.remoteAccountScopeID==scopeID && ui.remoteSelectedRunID==runID
                     }
                 )
+            }
+            .task(id:cosmeticStoreTaskKey){
+                let screen=ui.screen
+                let productID=ui.selectedPointProductID
+                let category=selectedPointCategory.storeCategory
+                guard !Task.isCancelled else{return}
+                if screen=="SHOP" {
+                    await cosmeticStoreFlow.refreshShop(category:category)
+                } else if screen=="B06" {
+                    await cosmeticStoreFlow.refreshProduct(id:productID)
+                }
             }
             .task {
                 runUploadNetworkMonitor.onReconnect={Task{@MainActor in _=await store.retryPendingRunUploads()}}
@@ -4425,7 +4508,7 @@ struct WireframeRoot:View {
                 if reviewTools && args.contains("-wire-community-notification-samples"){prepareCommunityNotificationSamples()}
                 if reviewTools && args.contains("-wire-community-notification-missing-target") {ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[WCommunityNotification(id:"missing-post",title:"게시물 알림 예시",text:"삭제되었거나 접근할 수 없는 게시물입니다.",target:.post(postID:"deleted-post"))])}
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
-                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (isCommunityPrimaryTabScreen ? 3:ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
+                    let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (isCommunityPrimaryTabScreen ? 3:ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="101"}
                     if reviewTools,AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments:args),ui.screen=="M02",
                        args.contains("-wire-profile-photo-upload-cancel-fixture") {
                         memberProfilePhotoUploading=true
