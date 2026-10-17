@@ -3,35 +3,36 @@
 ## Scope and source contracts
 
 - Frontend base: `de2ab2995261966e848f744781087bdb7c3f2c46` (PR #90).
-- Backend contract inspected read-only at `f13d07609dac15ccc44fc3d277c7b78847972587`.
-- Existing wireframe screens remain the design basis. Normal app composition binds the crew service to the current authenticated session. Debug UI tests inject an in-process fake `CrewServing` implementation.
-- No live API, user account, credential, infrastructure, deployment, or database change was used. The installed `com.movtorun.mov` product app was not built, installed, overwritten, or removed.
+- Backend controllers and DTOs were inspected read-only at `f13d07609dac15ccc44fc3d277c7b78847972587` (`CrewController`, `CrewBoardController`, and their services).
+- Normal app composition uses the active authenticated session. UI tests use an in-process fake `CrewServing` implementation. No live API, credential, infrastructure, deployment, or database change was used.
+- The installed product app `com.movtorun.mov` was not built, installed, overwritten, or removed. UI tests use only the existing iPhone17Pro UDID `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B` and isolated `MovUITestHost` fixtures.
 
 ## Implemented
 
-- `CrewClient` follows confirmed paths for `GET /crews/me`, crew detail, public recruitment posts, application create/cancel, manager pending-application read and approve/reject, crew board/post list/detail/create. Requests use the active bearer token and `Cache-Control: no-store`; response IDs, roles, and payload relationships are validated.
-- C15 lists the authenticated member's crews and searches the first public recruitment-feed page in memory by crew/post text. Selecting a recruitment post opens C16. C16 displays contract-backed crew information and only offers actions allowed by the returned role/status/capacity. C17/C18 provide application submit, status, and confirmed cancellation; C33 shows pending applications submitted during the current in-memory app run.
-- C21/C40 load the manager queue and C22 posts approve/reject decisions. The UI gates management actions from the server-provided role, and a forbidden API response is shown without exposing the queue. The server remains authoritative for permissions.
-- C32 displays only crew fields actually present in the API response. C19 loads active boards and posts, opens post detail, and creates a post.
-- Account-scope changes clear crew data and application state. Per-request IDs discard stale reads. Busy controls prevent repeated writes; ambiguous create/decision outcomes are not retried automatically and remain blocked. Leaving an application/review screen does not make a late response force navigation.
-- The community-specific bottom navigation remains on C15; the nested/detail flows use the existing wireframe navigation behavior.
+- `CrewClient` uses controller-backed routes for crew create/read, member read/role update/removal, owner rejoin-restriction read/release, ownership transfer, application submit/cancel/review, and crew board create/read/rename/archive/restore. Post list/detail/create remain connected. Payloads and response IDs/relationships are checked; mutations with ambiguous results are not automatically repeated.
+- C15 reads `/crews/me` and the first public recruitment feed page. Its local search filters only the returned 20 posts. The create action enters C20 and posts only the supported name, introduction, and join-guide fields; local photo, region, and grade fields are not sent.
+- C16/C17/C18 and C21/C22/C40 continue to show server-backed crew detail, application submit/cancel, pending review, and approve/reject. The backend remains the authority for capacity, membership, and roles. A 403 is surfaced and does not reveal a manager queue.
+- C19 reads active boards and posts, opens post detail, and creates a post. C21 links to C34 member management and C37 board management. C34/C35 read members; owners can set/remove operator role and permitted managers can remove members. Owners can inspect and release rejoin restrictions. C37/C38 create internal boards, rename active boards, archive them without deleting posts, and restore archived boards subject to the backend's five-active-board limit.
+- C32 displays only fields present in the crew DTO. The member DTO contains only member ID, role, and joined time, so C34/C35 label members by ID rather than inventing profile names. Crew edit, join-guide edit, warnings, announcements, and post edit/delete have no matching route and remain outside this F010 implementation.
+- C33 always explains that the backend has no current-member application-list route, both with and without rows. It shows pending applications submitted in the current app run only. The other confirmed API gap is general crew search/filter; C15's search is local and limited to the first recruitment page.
+- Account-scope changes clear crew data and application state. Per-request IDs discard stale reads, including an old account's late `/crews/me` response. Busy controls prevent repeated writes; ambiguous create/decision/mutation outcomes block automatic repeats. Leaving a screen while a request is in flight does not force late navigation.
+- The community-specific bottom navigation remains on the community root; nested/detail screens retain wireframe navigation behavior.
 
-## Contract boundaries and remaining decisions
+## Contract boundaries
 
-- There is no crew-search endpoint. C15's recruitment search is a local filter over the first 20 public feed items; it does not implement region, level, or multi-page search. A backend search/filter contract is needed for those capabilities.
-- There is no endpoint to list the current member's pending applications. C33 therefore only displays submissions made during the current app run; previously submitted applications cannot be recovered after relaunch or account-scope reset. A member-scoped application-list/status endpoint is needed to complete cross-session C33 and reliable reconciliation after an ambiguous create/cancel.
-- The crew DTO has no region, rank/level, or owner name/ID. C32 intentionally omits those values rather than inventing them. The app does not infer a manager from a local fixture in normal mode.
-- Crew create/edit and settings/member/board-management flows remain local because the checked backend contract does not provide those operations. No notification is fabricated. C19 supports only the post operations the contract exposes; edit/delete and board-management APIs are not inferred.
-- No unapproved eligibility, retry, or 24-hour rejection-cooldown policy was added in the client. The backend's documented error response is surfaced as returned.
+- The backend has no general crew search/filter endpoint and no route to list the signed-in member's pending applications. Those are the two F010 API gaps. No such endpoints or policies were invented.
+- `POST /crews` exists; there is no crew-update route. F010 connects creation only; the separate wireframe edit/settings behavior is not represented as server-backed.
+- The member DTO does not include a profile name. No cross-service profile lookup was introduced.
+- C36 guidance editing, C39 announcements, and post edit/delete remain unconnected because the inspected backend controllers do not define those operations.
 
 ## Verification
 
-- Swift package tests: **211 passed, 0 failures**. Coverage includes API paths/headers, auth scope changes during an in-flight read, explicit read retry, write ambiguity/no duplicate retry, application lifecycle, manager 403, and board/post contract requests.
-- `Mov` shared-scheme `build-for-testing`: **passed**. The actual build-for-testing products include the isolated `MovUITestHost`, unit/UI test bundles, and runner; they contain no `Mov.app` artifact. `scripts/verify-ui-test-isolation.sh` passed immediately before the focused UI run.
-- Focused isolated UI suite on existing iPhone17Pro UDID `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`: **9 passed, 0 failures**. Cases cover application search/submit/cancel/empty state and community tabs, manager approval/rejection and member 403, in-flight double tap/back navigation plus board/post create, explicit read-error retry, and five existing community/profile regressions. Result bundle: `/tmp/MovToRun-F010-VerifiedUITests5/FocusedUITests.xcresult`.
-- The wrapper created separate test-run DerivedData and `.xcresult` paths. Its preflight verified host/runner/test bundle IDs and dependencies, UUID-scoped test stores, and absence of the product app immediately before execution.
-- Product and user data were not touched; no simulator was created, cloned, or reset.
+- Shared `Mov` scheme `build-for-testing`: passed on `/Applications/Xcode.app/Contents/Developer`. It built the isolated host, test bundles, and runner; it did not produce `Mov.app`.
+- Selected UI regression suite: **12 passed, 0 failed** on iPhone17Pro UDID `6EB4A7AD-63C1-471F-BB5F-9147DEEC404B`, through `scripts/run-isolated-ui-tests.sh`. It covers C33 notice with empty and pending rows, application submit/cancel, account switch with late prior-account data, crew creation and leaving during an in-flight write, member role/removal/restrictions, owner/moderator authorization and review, board create/rename/archive/restore and capacity, post navigation, read retry, community-only tab, and adjacent profile/community regressions. Result bundle: `/tmp/MovToRun-F010-FollowupUITestsFinal3/FocusedUITests.xcresult`.
+- F010 client contract tests: **2 passed, 0 failed**. They assert the confirmed route/method/DTO payloads and reject an unsupported role or non-canonical ID before sending. Result bundle: `/tmp/MovToRun-F010-FollowupUnitTestsFinal/ContractUnitTests.xcresult`.
+- Isolation preflight passed before both test runs: no `Mov.app` test artifact or product app dependency path; test host, runner, bundle plists, resolved host executable, and UUID-scoped fixtures were verified. The fixtures use no product app data or Keychain.
+- The tested destination is the existing iPhone17Pro simulator UDID above. No simulator was created, cloned, or reset; product data and Keychain were not used by the fixture flow.
 
-## Scope deferred from F010
+## Remaining review
 
-F010 connects the supported read/write contract as a coherent crew slice. It does not mark every C15–C40 wireframe as server-backed or complete the full community feature set. Cross-session applications, full crew discovery, owner/region/rank presentation, crew management mutations, moderation, notifications, and full pixel/motion comparison remain open as described above or in the broader implementation plan.
+- This is a focused 12-case UI suite plus the 2 new client-contract unit cases; the complete project test suite was not run. Independent final verification and full matched-viewport pixel/motion QA remain separate. Keep the PR draft for that review; do not merge as part of F010 implementation.

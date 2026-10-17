@@ -992,12 +992,14 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
-    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,delayedWrites:Bool=false,crewID:String?="101") {
+    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,delayedWrites:Bool=false,accountSwitchDuringRead:Bool=false,fullBoards:Bool=false,crewID:String?="101") {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-crew-api-fixture","-wire-test-store-suite","remote-crew-\(UUID().uuidString)","-wire-reset","-appearance","light"]
         if manager { app.launchArguments.append("-wire-crew-fixture-manager") }
         if nonMember { app.launchArguments.append("-wire-crew-fixture-non-member") }
         if failMyCrewsOnce { app.launchArguments.append("-wire-crew-fixture-fail-my-crews-once") }
         if delayedWrites { app.launchArguments.append("-wire-crew-fixture-delay-writes") }
+        if accountSwitchDuringRead { app.launchArguments.append("-wire-crew-fixture-account-switch-during-read") }
+        if fullBoards { app.launchArguments.append("-wire-crew-fixture-full-boards") }
         if let crewID { app.launchArguments += ["-wire-community-crew",crewID] }
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10),app.debugDescription)
@@ -1178,7 +1180,116 @@ import UIKit
         app.buttons["communityCrewReturnToApplications"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C33"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["communityCrewApplicationsEmpty"].exists)
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewApplicationsContractNotice"].exists,"C33 explains the missing member-scoped list endpoint in its empty state")
         XCTAssertFalse(app.buttons["community-tab-crew"].exists,"The community tab bar is shown only on community root screens")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewJoin"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        app.buttons["communityCrewSubmitApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewReturnToApplications"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C33"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewApplicationOpen-602"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["communityCrewApplicationsContractNotice"].exists,"The C33 contract notice remains visible when there are pending rows")
+    }
+
+    func testRemoteCrewAccountSwitchDiscardsLateOldAccountListResponse() {
+        openRemoteCrewFixture("C15",accountSwitchDuringRead:true,crewID:nil)
+        XCTAssertTrue(app.descendants(matching:.any)["remoteMyCrewsLoading"].waitForExistence(timeout:5),app.debugDescription)
+        let switchAccount=app.buttons["communityCrewFixtureSwitchAccount"]
+        XCTAssertTrue(switchAccount.waitForExistence(timeout:5),app.debugDescription)
+        switchAccount.tap()
+        XCTAssertTrue(app.buttons["communityCrewOpen-101"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["계정 B 전용 크루"].exists,app.debugDescription)
+        XCTAssertFalse(app.staticTexts["계정 A 전용 크루"].exists,"A late list result from the prior account must not leak into the new account")
+        Thread.sleep(forTimeInterval:7.5)
+        XCTAssertTrue(app.staticTexts["계정 B 전용 크루"].exists,"The earlier account response cannot replace the new account's list after it arrives")
+        XCTAssertFalse(app.staticTexts["계정 A 전용 크루"].exists)
+        XCTAssertTrue(app.buttons["community-tab-crew"].exists,"The community root keeps its community-only bottom navigation")
+    }
+
+    func testRemoteCrewCreateMembersAndBoardManagementUseConfirmedContracts() {
+        openRemoteCrewFixture("C15",manager:true,delayedWrites:true,crewID:nil)
+        app.buttons["communityCrewCreate"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C20"].waitForExistence(timeout:5))
+        replace("함께 달리는 크루",into:app.textFields["communityCrewDraftName"])
+        replace("아침을 여는 러너들이 모여요.",into:app.textViews["communityCrewDraftIntroduction"])
+        replace("처음 오신 분도 환영해요.",into:app.textViews["communityCrewDraftJoinGuide"])
+        XCTAssertTrue(app.staticTexts["communityCrewCreateContractNote"].exists,"Creation form only shows fields supported by POST /crews")
+        let create=app.buttons["communityCrewSave"]
+        create.tap()
+        XCTAssertFalse(create.isEnabled,"A second create tap is blocked while the request is in flight")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewOpen-102"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].exists,"A late create response must not force navigation back into C16")
+        app.buttons["communityCrewOpen-102"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(app.staticTexts["communityCrewDetailName"].label,"함께 달리는 크루")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+
+        app.buttons["communityCrewOpen-101"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewManage"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+        app.buttons["communityCrewMembers"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:5))
+        let member=app.buttons["communityCrewMember-202"]
+        XCTAssertTrue(member.waitForExistence(timeout:8),app.debugDescription)
+        member.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C35"].waitForExistence(timeout:5))
+        let memberRole=app.staticTexts["communityCrewMemberDetailRole"]
+        XCTAssertEqual(memberRole.label,"멤버")
+        app.buttons["communityCrewMemberRoleChange"].tap()
+        XCTAssertTrue(waitForLayout({memberRole.label == "운영자"},timeout:5),app.debugDescription)
+        app.buttons["communityCrewMemberRoleChange"].tap()
+        XCTAssertTrue(waitForLayout({memberRole.label == "멤버"},timeout:5),app.debugDescription)
+        app.buttons["communityCrewMemberKick"].tap()
+        XCTAssertTrue(app.alerts["이 멤버를 내보낼까요?"].waitForExistence(timeout:3))
+        app.alerts.buttons["communityCrewConfirmRemove"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C34"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.buttons["communityCrewRestrictionRelease-202"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["communityCrewRestrictionRelease-202"].tap()
+        XCTAssertTrue(app.staticTexts["communityCrewRestrictionsEmpty"].waitForExistence(timeout:5))
+
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+        app.buttons["communityCrewBoards"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C37"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewBoardRestore-503"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["communityCrewBoardAdd"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C38"].waitForExistence(timeout:5))
+        replace("주말 모임",into:app.textFields["communityCrewBoardName"])
+        app.buttons["communityCrewBoardSave"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C37"].waitForExistence(timeout:8),app.debugDescription)
+        let boardEdit=app.buttons["communityCrewBoardEdit-504"]
+        XCTAssertTrue(boardEdit.waitForExistence(timeout:5),app.debugDescription)
+        boardEdit.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C38"].waitForExistence(timeout:5))
+        replace("주말 러닝",into:app.textFields["communityCrewBoardName"])
+        app.buttons["communityCrewBoardSave"].tap()
+        XCTAssertTrue(app.buttons["communityCrewBoardArchive-504"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewBoardArchive-504"].tap()
+        app.alerts.buttons["communityCrewBoardArchiveConfirm"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["communityCrewBoardRestore-504"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewBoardRestore-503"].tap()
+        XCTAssertTrue(app.buttons["communityCrewBoardArchive-503"].waitForExistence(timeout:5),"Restored board returns to the active list")
+    }
+
+    func testRemoteCrewBoardCapacityPreventsCreateAndRestoreAtFiveActive() {
+        openRemoteCrewFixture("C37",manager:true,fullBoards:true,crewID:"101")
+        let add=app.buttons["communityCrewBoardAdd"]
+        XCTAssertTrue(add.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(add.isEnabled,"The checked contract caps active boards at five")
+        let restore=app.buttons["communityCrewBoardRestore-503"]
+        XCTAssertTrue(restore.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(restore.isEnabled,"An archived board cannot be restored when the five active-board slots are full")
     }
 
     func testRemoteCrewReadFailureCanBeRetried() {

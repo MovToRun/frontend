@@ -3239,6 +3239,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityCrewDraftID:String?
     var communityCrewDraftName=""
     var communityCrewDraftIntroduction=""
+    var communityCrewDraftJoinGuide=""
     var communityCrewDraftRegion="모브시 중앙"
     var communityCrewDraftRank=0
     var communityCrewDraftPhoto:Data?
@@ -4341,6 +4342,7 @@ struct WireframeRoot:View {
             .onChange(of:ui.communityCrewJoinMemo){_,value in let limited=WCommunityTextLimit.apply(value,limit:300);if limited != value{ui.communityCrewJoinMemo=limited}}
             .onChange(of:ui.communityCrewDraftName){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.nameLimit);if limited != value{ui.communityCrewDraftName=limited};ui.communityCrewNameCheck=""}
             .onChange(of:ui.communityCrewDraftIntroduction){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.introductionLimit);if limited != value{ui.communityCrewDraftIntroduction=limited}}
+            .onChange(of:ui.communityCrewDraftJoinGuide){_,value in let limited=WCommunityTextLimit.apply(value,limit:500);if limited != value{ui.communityCrewDraftJoinGuide=limited}}
             .onChange(of:ui.communityCrewMemberWarningDraft){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityCrewPolicy.memberWarningLimit);if limited != value{ui.communityCrewMemberWarningDraft=limited}}
     }
     var rootRemoteStateUpdates:some View {
@@ -5136,16 +5138,16 @@ struct WireframeRoot:View {
         case "C17":if crewFlow.isAvailable{remoteCommunityCrewJoinForm}else{communityCrewJoinForm}
         case "C18":if crewFlow.isAvailable{remoteCommunityCrewApplicationStatus}else{communityCrewApplicationStatus}
         case "C19":if crewFlow.isAvailable{remoteCommunityCrewBoard}else{communityCrewBoard}
-        case "C20":communityCrewEditor
+        case "C20":if crewFlow.isAvailable{remoteCommunityCrewEditor}else{communityCrewEditor}
         case "C21":if crewFlow.isAvailable{remoteCommunityCrewManagement}else{communityCrewManagement}
         case "C22":if crewFlow.isAvailable{remoteCommunityCrewApplicationReview}else{communityCrewApplicationReview}
         case "C36":communityCrewGuidanceSettings
-        case "C37":communityCrewBoardManagement
-        case "C38":communityCrewBoardEditor
+        case "C37":if crewFlow.isAvailable{remoteCommunityCrewBoardManagement}else{communityCrewBoardManagement}
+        case "C38":if crewFlow.isAvailable{remoteCommunityCrewBoardEditor}else{communityCrewBoardEditor}
         case "C39":communityCrewAnnouncementEditor
         case "C40":if crewFlow.isAvailable{remoteCommunityCrewPendingApplications}else{communityCrewPendingApplications}
-        case "C34":communityCrewMemberList
-        case "C35":communityCrewMemberDetail
+        case "C34":if crewFlow.isAvailable{remoteCommunityCrewMembers}else{communityCrewMemberList}
+        case "C35":if crewFlow.isAvailable{remoteCommunityCrewMemberDetail}else{communityCrewMemberDetail}
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections

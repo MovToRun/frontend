@@ -21,6 +21,13 @@ struct BackendCrewMember: Codable, Equatable, Sendable, Identifiable {
     var id: String { memberId }
 }
 
+struct BackendCrewRejoinRestriction: Codable, Equatable, Sendable, Identifiable {
+    let memberId: String
+    let createdAt: String
+
+    var id: String { memberId }
+}
+
 struct BackendCrewApplication: Codable, Equatable, Sendable, Identifiable {
     let applicationId: String
     let crewId: String
@@ -112,15 +119,25 @@ enum CrewClientFailure: Error, Equatable, Sendable {
 }
 
 protocol CrewServing: Sendable {
+    func createCrew(name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew
     func fetchMyCrews() async throws -> [BackendCrew]
     func fetchCrew(id: String) async throws -> BackendCrew
     func fetchMembers(crewID: String) async throws -> [BackendCrewMember]
+    func updateMemberRole(crewID: String, memberID: String, role: String) async throws
+    func removeMember(crewID: String, memberID: String) async throws
+    func fetchRejoinRestrictions(crewID: String) async throws -> [BackendCrewRejoinRestriction]
+    func releaseRejoinRestriction(crewID: String, memberID: String) async throws
+    func transferOwnership(crewID: String, memberID: String) async throws
     func fetchRecruitmentPosts(cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewPost>
     func apply(crewID: String, note: String?, grade: String?) async throws -> BackendCrewApplication
     func fetchPendingApplications(crewID: String) async throws -> [BackendCrewApplication]
     func decide(crewID: String, applicationID: String, approve: Bool) async throws -> BackendCrewApplication
     func cancelApplication(crewID: String, applicationID: String) async throws
     func fetchBoards(crewID: String) async throws -> [BackendCrewBoard]
+    func createBoard(crewID: String, name: String, kind: String) async throws -> BackendCrewBoard
+    func renameBoard(crewID: String, boardID: String, name: String) async throws -> BackendCrewBoard
+    func archiveBoard(crewID: String, boardID: String) async throws
+    func restoreBoard(crewID: String, boardID: String) async throws -> BackendCrewBoard
     func fetchPosts(crewID: String, boardID: String, cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewPost>
     func fetchPost(crewID: String, boardID: String, postID: String) async throws -> BackendCrewPost
     func createPost(crewID: String, boardID: String, title: String, content: String) async throws -> BackendCrewPost
@@ -133,6 +150,33 @@ struct CrewClient: CrewServing, Sendable {
     init(apiClient: any APIResponseSending, sessionProvider: any RunUploadSessionProviding) {
         self.apiClient = apiClient
         self.sessionProvider = sessionProvider
+    }
+
+    func createCrew(name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew {
+        guard !Task.isCancelled else { throw CrewClientFailure.cancelled }
+        let body = try Self.encode(CreateCrewRequest(name: name, introduction: introduction, joinGuide: joinGuide))
+        let response: APIClientResponse
+        do {
+            response = try await send(path: "crews", method: "POST", body: body)
+        } catch let failure as CrewClientFailure {
+            switch failure {
+            case .transport, .invalidResponse, .cancelled: throw CrewClientFailure.mutationResultUnknown
+            default: throw failure
+            }
+        } catch {
+            throw CrewClientFailure.mutationResultUnknown
+        }
+        guard response.statusCode == 201 else {
+            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
+            throw Self.mapFailure(response)
+        }
+        do {
+            let crew = try Self.decode(BackendCrew.self, from: response.data)
+            guard Self.isValid(crew), crew.role == "OWNER" else { throw CrewClientFailure.mutationResultUnknown }
+            return crew
+        } catch {
+            throw CrewClientFailure.mutationResultUnknown
+        }
     }
 
     func fetchMyCrews() async throws -> [BackendCrew] {
@@ -157,6 +201,50 @@ struct CrewClient: CrewServing, Sendable {
         let members = try Self.decode([BackendCrewMember].self, from: response.data)
         guard members.allSatisfy(Self.isValid) else { throw CrewClientFailure.invalidResponse }
         return members
+    }
+
+    func updateMemberRole(crewID: String, memberID: String, role: String) async throws {
+        guard ["OPERATOR", "MEMBER"].contains(role) else { throw CrewClientFailure.invalidRequest }
+        try await sendNoContentMutation(
+            path: "crews/\(crewID)/members/\(memberID)/role",
+            method: "PATCH",
+            crewID: crewID,
+            memberID: memberID,
+            body: try Self.encode(RoleRequest(role: role))
+        )
+    }
+
+    func removeMember(crewID: String, memberID: String) async throws {
+        try await sendNoContentMutation(
+            path: "crews/\(crewID)/members/\(memberID)", method: "DELETE", crewID: crewID, memberID: memberID
+        )
+    }
+
+    func fetchRejoinRestrictions(crewID: String) async throws -> [BackendCrewRejoinRestriction] {
+        guard Self.isResourceID(crewID) else { throw CrewClientFailure.invalidRequest }
+        let response = try await send(path: "crews/\(crewID)/rejoin-restrictions", method: "GET")
+        guard response.statusCode == 200 else { throw Self.mapFailure(response) }
+        let restrictions = try Self.decode([BackendCrewRejoinRestriction].self, from: response.data)
+        guard restrictions.allSatisfy({ Self.isResourceID($0.memberId) && !$0.createdAt.isEmpty }) else {
+            throw CrewClientFailure.invalidResponse
+        }
+        return restrictions
+    }
+
+    func releaseRejoinRestriction(crewID: String, memberID: String) async throws {
+        try await sendNoContentMutation(
+            path: "crews/\(crewID)/members/\(memberID)/rejoin-restriction",
+            method: "DELETE", crewID: crewID, memberID: memberID
+        )
+    }
+
+    func transferOwnership(crewID: String, memberID: String) async throws {
+        guard Self.isResourceID(memberID), let numericID = Int64(memberID) else { throw CrewClientFailure.invalidRequest }
+        try await sendNoContentMutation(
+            path: "crews/\(crewID)/ownership-transfer",
+            method: "POST", crewID: crewID, memberID: memberID,
+            body: try Self.encode(TransferRequest(memberId: numericID))
+        )
     }
 
     func fetchRecruitmentPosts(cursor: String? = nil, size: Int = 20) async throws -> BackendCrewPage<BackendCrewPost> {
@@ -273,6 +361,35 @@ struct CrewClient: CrewServing, Sendable {
         return boards
     }
 
+    func createBoard(crewID: String, name: String, kind: String = "INTERNAL") async throws -> BackendCrewBoard {
+        guard Self.isResourceID(crewID), ["INTERNAL", "RECRUITMENT"].contains(kind) else { throw CrewClientFailure.invalidRequest }
+        let board: BackendCrewBoard = try await sendDecodedMutation(
+            path: "crews/\(crewID)/boards", method: "POST", expectedStatus: 201,
+            body: try Self.encode(CreateBoardRequest(name: name, kind: kind)), crewID: crewID
+        )
+        return board
+    }
+
+    func renameBoard(crewID: String, boardID: String, name: String) async throws -> BackendCrewBoard {
+        guard Self.isResourceID(boardID) else { throw CrewClientFailure.invalidRequest }
+        return try await sendDecodedMutation(
+            path: "crews/\(crewID)/boards/\(boardID)", method: "PATCH", expectedStatus: 200,
+            body: try Self.encode(RenameBoardRequest(name: name)), crewID: crewID, boardID: boardID
+        )
+    }
+
+    func archiveBoard(crewID: String, boardID: String) async throws {
+        try await sendNoContentMutation(path: "crews/\(crewID)/boards/\(boardID)", method: "DELETE", crewID: crewID, boardID: boardID)
+    }
+
+    func restoreBoard(crewID: String, boardID: String) async throws -> BackendCrewBoard {
+        guard Self.isResourceID(boardID) else { throw CrewClientFailure.invalidRequest }
+        return try await sendDecodedMutation(
+            path: "crews/\(crewID)/boards/\(boardID)/restore", method: "POST", expectedStatus: 200,
+            crewID: crewID, boardID: boardID
+        )
+    }
+
     func fetchPosts(crewID: String, boardID: String, cursor: String? = nil, size: Int = 20) async throws -> BackendCrewPage<BackendCrewPost> {
         guard Self.isResourceID(crewID), Self.isResourceID(boardID), Self.isValidPage(cursor: cursor, size: size) else {
             throw CrewClientFailure.invalidRequest
@@ -326,6 +443,64 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
+    }
+
+    private func sendNoContentMutation(
+        path: String,
+        method: String,
+        crewID: String,
+        memberID: String? = nil,
+        boardID: String? = nil,
+        body: Data? = nil
+    ) async throws {
+        guard !Task.isCancelled,
+              Self.isResourceID(crewID),
+              memberID.map(Self.isResourceID) ?? true,
+              boardID.map(Self.isResourceID) ?? true else { throw CrewClientFailure.invalidRequest }
+        let response: APIClientResponse
+        do { response = try await send(path: path, method: method, body: body) }
+        catch let failure as CrewClientFailure {
+            switch failure {
+            case .transport, .invalidResponse, .cancelled: throw CrewClientFailure.mutationResultUnknown
+            default: throw failure
+            }
+        } catch { throw CrewClientFailure.mutationResultUnknown }
+        guard response.statusCode == 204 else {
+            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
+            throw Self.mapFailure(response)
+        }
+    }
+
+    private func sendDecodedMutation<T: Decodable & Sendable>(
+        path: String,
+        method: String,
+        expectedStatus: Int,
+        body: Data? = nil,
+        crewID: String,
+        boardID: String? = nil
+    ) async throws -> T {
+        guard !Task.isCancelled, Self.isResourceID(crewID), boardID.map(Self.isResourceID) ?? true else {
+            throw CrewClientFailure.invalidRequest
+        }
+        let response: APIClientResponse
+        do { response = try await send(path: path, method: method, body: body) }
+        catch let failure as CrewClientFailure {
+            switch failure {
+            case .transport, .invalidResponse, .cancelled: throw CrewClientFailure.mutationResultUnknown
+            default: throw failure
+            }
+        } catch { throw CrewClientFailure.mutationResultUnknown }
+        guard response.statusCode == expectedStatus else {
+            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
+            throw Self.mapFailure(response)
+        }
+        do {
+            let value = try Self.decode(T.self, from: response.data)
+            guard let board = value as? BackendCrewBoard,
+                  Self.isValid(board), board.crewId == crewID,
+                  boardID.map({ board.boardId == $0 }) ?? true else { throw CrewClientFailure.mutationResultUnknown }
+            return value
+        } catch { throw CrewClientFailure.mutationResultUnknown }
     }
 
     private func send(
@@ -482,6 +657,12 @@ struct CrewClient: CrewServing, Sendable {
         let note: String?
         let grade: String?
     }
+
+    private struct CreateCrewRequest: Encodable { let name: String; let introduction: String?; let joinGuide: String? }
+    private struct RoleRequest: Encodable { let role: String }
+    private struct TransferRequest: Encodable { let memberId: Int64 }
+    private struct CreateBoardRequest: Encodable { let name: String; let kind: String }
+    private struct RenameBoardRequest: Encodable { let name: String }
 
     private struct PostRequest: Encodable {
         let title: String
