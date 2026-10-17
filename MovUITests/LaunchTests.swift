@@ -40,18 +40,21 @@ import UIKit
         }
     }
     private func confirmPointStorePurchase() {
-        let message=app.descendants(matching:.any)["pointPurchaseConfirmationMessage"]
-        XCTAssertTrue(message.waitForExistence(timeout:5),"The purchase confirmation must be presented before its action is tapped.\n\(app.debugDescription)")
-        XCTAssertTrue(message.label.contains("영구 보유"),message.label)
+        let confirmationButton=app.buttons["confirmPointPurchase"]
+        XCTAssertTrue(confirmationButton.waitForExistence(timeout:5),"The purchase confirmation action must appear before the purchase is submitted.\n\(app.debugDescription)")
+        let ready=XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+            confirmationButton.exists && confirmationButton.isEnabled && confirmationButton.isHittable
+        },object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"The purchase confirmation action must be enabled and hittable.\n\(app.debugDescription)")
+        XCTAssertEqual(confirmationButton.label,"구매 확정")
 
-        let identifiedAction=app.buttons["confirmPointPurchase"]
-        if waitHittable(identifiedAction,timeout:1) {
-            identifiedAction.tap()
-            return
-        }
-        let labelledAction=app.buttons["구매 확정"]
-        XCTAssertTrue(waitHittable(labelledAction,timeout:1),"Confirmation message appeared, but the confirmation action was not hittable.\n\(app.debugDescription)")
-        labelledAction.tap()
+        let purchaseTerms=app.descendants(matching:.any).matching(
+            NSPredicate(format:"label CONTAINS %@","영구 보유되고 환불할 수 없어요")
+        ).firstMatch
+        XCTAssertTrue(purchaseTerms.waitForExistence(timeout:5),"The confirmation must show the permanent ownership and no-refund terms.\n\(app.debugDescription)")
+        XCTAssertTrue(purchaseTerms.label.contains("영구 보유되고 환불할 수 없어요"),purchaseTerms.label)
+
+        confirmationButton.tap()
     }
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openSocialLoginFixture(_ extraArguments:[String]=[]){let suite=makeFixtureStoreSuite("mov.wire.social-login");socialLoginFixtureSuitesForCleanup.append(suite);app.launchArguments=["-wire-screen","A01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-social-login-fixture","-appearance","light"]+extraArguments;app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:15))}
