@@ -94,6 +94,27 @@ private actor RunStoreUploadSessionFake: RunUploadSessionProviding {
     func currentSession() async throws -> RunUploadSession? { session }
 }
 
+private actor CrewContractTransport: APIResponseSending {
+    struct Request: Sendable {
+        let path: String
+        let method: String
+        let body: Data?
+        let headers: [String: String]
+    }
+    private var responses: [APIClientResponse]
+    private var captured: [Request] = []
+
+    init(responses: [APIClientResponse]) { self.responses = responses }
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        captured.append(Request(path: path, method: method, body: body, headers: headers))
+        guard !responses.isEmpty else { throw APIClientError.unexpectedResponse }
+        return responses.removeFirst()
+    }
+
+    func requests() -> [Request] { captured }
+}
+
 private actor RunStoreUploadSenderFake: RunUploading {
     private var uploaded: [RunUploadPayload] = []
     private let delivery: RunUploadDelivery
@@ -6186,6 +6207,76 @@ extension ThemeTests {
         let postsAfterCancel=await service.capturedPosts()
         XCTAssertTrue(postsAfterCancel.isEmpty)
         XCTAssertNotNil(try store.loadSnapshot())
+    }
+
+    func testCrewManagementClientUsesOnlyConfirmedControllerRoutesAndDTOs() async throws {
+        let createdCrew = BackendCrew(crewId:"101",name:"새벽 러너",introduction:"함께 달려요",joinGuide:"인사해 주세요",capacity:20,memberCount:1,status:"ACTIVE",role:"OWNER")
+        let createdBoard = BackendCrewBoard(boardId:"501",crewId:"101",name:"일정",kind:"INTERNAL",status:"ACTIVE",createdAt:"2026-10-17T10:00:00Z")
+        let renamedBoard = BackendCrewBoard(boardId:"501",crewId:"101",name:"주말 일정",kind:"INTERNAL",status:"ACTIVE",createdAt:"2026-10-17T10:00:00Z")
+        func response<T: Encodable>(_ status: Int, _ value: T?) throws -> APIClientResponse {
+            APIClientResponse(statusCode:status,data:try value.map{try JSONEncoder().encode($0)} ?? Data(),requestID:"crew-contract-fixture")
+        }
+        let restrictions = [BackendCrewRejoinRestriction(memberId:"202",createdAt:"2026-10-17T11:00:00Z")]
+        let transport = CrewContractTransport(responses:[
+            try response(201,createdCrew), try response(204,Optional<BackendCrew>.none),
+            try response(204,Optional<BackendCrew>.none),
+            APIClientResponse(statusCode:200,data:try JSONEncoder().encode(restrictions),requestID:nil),
+            try response(204,Optional<BackendCrew>.none), try response(204,Optional<BackendCrew>.none),
+            try response(201,createdBoard), try response(200,renamedBoard), try response(204,Optional<BackendCrew>.none),
+            try response(200,createdBoard)
+        ])
+        let client = CrewClient(apiClient:transport,sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"201",accessToken:"crew-test-token")))
+
+        let returnedCrew = try await client.createCrew(name:"새벽 러너",introduction:"함께 달려요",joinGuide:"인사해 주세요")
+        XCTAssertEqual(returnedCrew,createdCrew)
+        try await client.updateMemberRole(crewID:"101",memberID:"202",role:"OPERATOR")
+        try await client.removeMember(crewID:"101",memberID:"202")
+        let returnedRestrictions = try await client.fetchRejoinRestrictions(crewID:"101")
+        XCTAssertEqual(returnedRestrictions,restrictions)
+        try await client.releaseRejoinRestriction(crewID:"101",memberID:"202")
+        try await client.transferOwnership(crewID:"101",memberID:"202")
+        let returnedCreatedBoard = try await client.createBoard(crewID:"101",name:"일정")
+        XCTAssertEqual(returnedCreatedBoard,createdBoard)
+        let returnedRenamedBoard = try await client.renameBoard(crewID:"101",boardID:"501",name:"주말 일정")
+        XCTAssertEqual(returnedRenamedBoard,renamedBoard)
+        try await client.archiveBoard(crewID:"101",boardID:"501")
+        let returnedRestoredBoard = try await client.restoreBoard(crewID:"101",boardID:"501")
+        XCTAssertEqual(returnedRestoredBoard,createdBoard)
+
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.map(\.path),[
+            "crews", "crews/101/members/202/role", "crews/101/members/202",
+            "crews/101/rejoin-restrictions", "crews/101/members/202/rejoin-restriction",
+            "crews/101/ownership-transfer", "crews/101/boards", "crews/101/boards/501",
+            "crews/101/boards/501", "crews/101/boards/501/restore"
+        ])
+        XCTAssertEqual(requests.map(\.method),["POST","PATCH","DELETE","GET","DELETE","POST","POST","PATCH","DELETE","POST"])
+        XCTAssertEqual(requests[0].headers["Authorization"],"Bearer crew-test-token")
+        XCTAssertEqual(requests[0].headers["Cache-Control"],"no-store")
+        XCTAssertEqual(try XCTUnwrap(requests[0].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})["joinGuide"] as? String,"인사해 주세요")
+        XCTAssertEqual(try XCTUnwrap(requests[1].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})["role"] as? String,"OPERATOR")
+        XCTAssertEqual(try XCTUnwrap(requests[5].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})["memberId"] as? Int,202)
+        XCTAssertEqual(try XCTUnwrap(requests[6].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})["kind"] as? String,"INTERNAL")
+        XCTAssertEqual(try XCTUnwrap(requests[7].body.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]})["name"] as? String,"주말 일정")
+    }
+
+    func testCrewManagementClientRejectsUnconfirmedRoleAndNonNumericIDsBeforeSending() async throws {
+        let transport = CrewContractTransport(responses:[])
+        let client = CrewClient(apiClient:transport,sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"201",accessToken:"crew-test-token")))
+        do {
+            try await client.updateMemberRole(crewID:"101",memberID:"202",role:"OWNER")
+            XCTFail("The role request only accepts OPERATOR or MEMBER")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure,.invalidRequest)
+        }
+        do {
+            try await client.removeMember(crewID:"101",memberID:"../202")
+            XCTFail("The path ID must be numeric and canonical")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure,.invalidRequest)
+        }
+        let requests = await transport.requests()
+        XCTAssertTrue(requests.isEmpty)
     }
 
     @MainActor func testConfirmedWithdrawalClearsOnlyThatMembersLocalRunsAndSession() async throws {

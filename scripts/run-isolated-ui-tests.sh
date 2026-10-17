@@ -77,4 +77,11 @@ printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data
     -only-testing:MovUITests/LaunchTests/testProfilePhotoFailureIsVisibleAndLeavesEditorAvailable \
     -only-testing:MovUITests/LaunchTests/testShareOutputPNGCanBeAttachedToCommunityDraft \
     -only-testing:MovUITests/LaunchTests/testCommunityPublishBusyPreventsReturningToEditableComposer \
-    -only-testing:MovUITests/LaunchTests/testCommunityAmbiguousCreateRemainsBlockedInPreview
+    -only-testing:MovUITests/LaunchTests/testCommunityAmbiguousCreateRemainsBlockedInPreview \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewSearchApplyCancelEmptyStateAndCommunityTab \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewAccountSwitchDiscardsLateOldAccountListResponse \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewCreateMembersAndBoardManagementUseConfirmedContracts \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewBoardCapacityPreventsCreateAndRestoreAtFiveActive \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewManagerCanApproveAndRejectAndMemberCannotReadQueue \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewRequestStaysOnceWhenLeavingWhileInFlightAndBoardPostFlow \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewReadFailureCanBeRetried

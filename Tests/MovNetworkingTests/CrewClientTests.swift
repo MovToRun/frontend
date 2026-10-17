@@ -1,0 +1,247 @@
+import Foundation
+import XCTest
+@testable import MovNetworking
+
+private struct CrewSessionStub: RunUploadSessionProviding {
+    let value: RunUploadSession?
+    func currentSession() async throws -> RunUploadSession? { value }
+}
+
+private actor MutableCrewSession: RunUploadSessionProviding {
+    private var value: RunUploadSession?
+    init(_ value: RunUploadSession?) { self.value = value }
+    func currentSession() async throws -> RunUploadSession? { value }
+    func set(_ value: RunUploadSession?) { self.value = value }
+}
+
+private struct CrewRecordedRequest: Sendable {
+    let path: String
+    let method: String
+    let body: Data?
+    let headers: [String: String]
+    let queryItems: [URLQueryItem]
+}
+
+private actor CrewRecordingTransport: APIResponseSending {
+    private var responses: [APIClientResponse]
+    private var requests: [CrewRecordedRequest] = []
+
+    init(_ responses: [APIClientResponse]) { self.responses = responses }
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        requests.append(CrewRecordedRequest(path: path, method: method, body: body, headers: headers, queryItems: queryItems))
+        guard !responses.isEmpty else { throw APIClientError.unexpectedResponse }
+        return responses.removeFirst()
+    }
+
+    func capturedRequests() -> [CrewRecordedRequest] { requests }
+}
+
+private actor CrewSwitchingTransport: APIResponseSending {
+    private let session: MutableCrewSession
+    private let response: APIClientResponse
+    private var requests: [CrewRecordedRequest] = []
+
+    init(session: MutableCrewSession, response: APIClientResponse) {
+        self.session = session
+        self.response = response
+    }
+
+    func sendResponse(path: String, method: String, body: Data?, headers: [String: String], queryItems: [URLQueryItem]) async throws -> APIClientResponse {
+        requests.append(CrewRecordedRequest(path: path, method: method, body: body, headers: headers, queryItems: queryItems))
+        await session.set(RunUploadSession(ownerID: "202", accessToken: "member-b-token"))
+        return response
+    }
+
+    func capturedRequests() -> [CrewRecordedRequest] { requests }
+}
+
+final class CrewClientTests: XCTestCase {
+    private let crew = #"{"crewId":"101","name":"모브 새벽 크루","introduction":"아침 러닝","joinGuide":"편하게 인사해요","capacity":20,"memberCount":3,"status":"ACTIVE","role":"MEMBER"}"#
+    private let application = #"{"applicationId":"301","crewId":"101","memberId":"202","note":"같이 달리고 싶어요","grade":null,"status":"PENDING","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}"#
+    private let post = #"{"postId":"401","crewId":"101","crewName":"모브 새벽 크루","boardId":"501","boardName":"러닝 일정","boardKind":"INTERNAL","authorMemberId":"202","authorNickname":"RunMate","title":"토요일 일정","content":"오전 8시에 만나요.","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}"#
+
+    private func makeClient(_ token: String? = "member-a-token", ownerID: String = "202") throws -> CrewClient {
+        let configuration = try APIClientConfiguration(environment: .development,
+                                                        baseURLString: "https://api-dev.example.invalid/api/v1/",
+                                                        requestTimeout: 4, resourceTimeout: 9)
+        let urlConfiguration = URLSessionConfiguration.ephemeral
+        urlConfiguration.protocolClasses = [MockURLProtocol.self]
+        let api = APIClient(configuration: configuration, session: URLSession(configuration: urlConfiguration))
+        let session = token.map { RunUploadSession(ownerID: ownerID, accessToken: $0) }
+        return CrewClient(apiClient: api, sessionProvider: CrewSessionStub(value: session))
+    }
+
+    func testMyCrewsUsesAuthenticatedNoStoreAndDecodesServerRole() async throws {
+        MockURLProtocol.respond(statusCode: 200, data: Data("[\(crew)]".utf8))
+
+        let result = try await makeClient().fetchMyCrews()
+
+        XCTAssertEqual(result.map(\.id), ["101"])
+        XCTAssertEqual(result.first?.role, "MEMBER")
+        let request = try XCTUnwrap(MockURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.path, "/api/v1/crews/me")
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer member-a-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+    }
+
+    func testRecruitmentSearchUsesOnlyTheContractedPublicFeedAndOpaqueCursor() async throws {
+        let body = #"{"items":[{"postId":"401","crewId":"101","crewName":"모브 새벽 크루","boardId":"501","boardName":"모집","boardKind":"RECRUITMENT","authorMemberId":"202","authorNickname":"RunMate","title":"새 멤버 모집","content":"함께 달려요.","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}],"nextCursor":"opaque-cursor"}"#
+        MockURLProtocol.respond(statusCode: 200, data: Data(body.utf8))
+
+        let page = try await makeClient().fetchRecruitmentPosts(cursor: "opaque-cursor/2?", size: 7)
+
+        XCTAssertEqual(page.items.map(\.crewId), ["101"])
+        XCTAssertEqual(page.nextCursor, "opaque-cursor")
+        let request = try XCTUnwrap(MockURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.path, "/api/v1/community/boards/crew-recruitment/posts")
+        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertEqual(query?.first(where: { $0.name == "size" })?.value, "7")
+        XCTAssertEqual(query?.first(where: { $0.name == "cursor" })?.value, "opaque-cursor/2?")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+    }
+
+    func testApplicationSubmissionUsesContractBodyAndOneAttemptOnUnknownOutcome() async throws {
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 201, data: Data(application.utf8))])
+        let submitted = try await makeRecordingClient(transport).apply(crewID: "101", note: "같이 달리고 싶어요", grade: nil)
+        XCTAssertEqual(submitted.id, "301")
+
+        let successfulRequests = await transport.capturedRequests()
+        let request = try XCTUnwrap(successfulRequests.first)
+        XCTAssertEqual(request.path, "crews/101/applications")
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.headers["Authorization"], "Bearer member-a-token")
+        XCTAssertEqual(request.headers["Content-Type"], "application/json")
+        let requestBody = try XCTUnwrap(request.body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: requestBody) as? [String: Any])
+        XCTAssertEqual(json["note"] as? String, "같이 달리고 싶어요")
+        XCTAssertNil(json["grade"] as? String)
+
+        MockURLProtocol.reset()
+        MockURLProtocol.fail(with: .timedOut)
+        do {
+            _ = try await makeClient().apply(crewID: "101", note: nil, grade: nil)
+            XCTFail("A create with an ambiguous transport failure must not be retried or reported as rejected")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .applicationResultUnknown)
+        }
+        XCTAssertEqual(MockURLProtocol.requests.count, 1)
+    }
+
+    func testPendingApprovalAndCancellationUseOnlyContractedRoutes() async throws {
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data("[\(application)]".utf8)),
+            APIClientResponse(statusCode: 200, data: Data(application.replacingOccurrences(of: "PENDING", with: "APPROVED").utf8)),
+            APIClientResponse(statusCode: 200, data: Data(application.replacingOccurrences(of: "PENDING", with: "REJECTED").utf8)),
+            APIClientResponse(statusCode: 204, data: Data())
+        ])
+        let client = try makeRecordingClient(transport)
+
+        let pending = try await client.fetchPendingApplications(crewID: "101")
+        let approved = try await client.decide(crewID: "101", applicationID: "301", approve: true)
+        let rejected = try await client.decide(crewID: "101", applicationID: "301", approve: false)
+        XCTAssertEqual(pending.map(\.id), ["301"])
+        XCTAssertEqual(approved.status, "APPROVED")
+        XCTAssertEqual(rejected.status, "REJECTED")
+        try await client.cancelApplication(crewID: "101", applicationID: "301")
+
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.map(\.path), [
+            "crews/101/applications",
+            "crews/101/applications/301/approve",
+            "crews/101/applications/301/reject",
+            "crews/101/applications/301"
+        ])
+        XCTAssertEqual(requests.map(\.method), ["GET", "POST", "POST", "DELETE"])
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" && $0.headers["Authorization"] == "Bearer member-a-token" })
+        XCTAssertTrue(requests.dropFirst().allSatisfy { $0.body == nil })
+    }
+
+    func testCrewBoardListAndPostsKeepStableCrewAndBoardIDs() async throws {
+        let board = #"{"boardId":"501","crewId":"101","name":"러닝 일정","kind":"INTERNAL","status":"ACTIVE","createdAt":"2026-10-17T10:00:00Z"}"#
+        let page = #"{"items":[{"postId":"401","crewId":"101","crewName":"모브 새벽 크루","boardId":"501","boardName":"러닝 일정","boardKind":"INTERNAL","authorMemberId":"202","authorNickname":"RunMate","title":"토요일 일정","content":"오전 8시에 만나요.","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}],"nextCursor":null}"#
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data("[\(board)]".utf8)),
+            APIClientResponse(statusCode: 200, data: Data(page.utf8)),
+            APIClientResponse(statusCode: 200, data: Data(post.utf8))
+        ])
+        let client = try makeRecordingClient(transport)
+
+        let boards = try await client.fetchBoards(crewID: "101")
+        let posts = try await client.fetchPosts(crewID: "101", boardID: "501", size: 10)
+        let detail = try await client.fetchPost(crewID: "101", boardID: "501", postID: "401")
+        XCTAssertEqual(boards.first?.id, "501")
+        XCTAssertEqual(posts.items.first?.id, "401")
+        XCTAssertEqual(detail.title, "토요일 일정")
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.map(\.path), [
+            "crews/101/boards",
+            "crews/101/boards/501/posts",
+            "crews/101/boards/501/posts/401"
+        ])
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
+    }
+
+    func testSessionChangeWhileResponseIsInFlightDiscardsOldAccountData() async throws {
+        let session = MutableCrewSession(RunUploadSession(ownerID: "101", accessToken: "member-a-token"))
+        let transport = CrewSwitchingTransport(session: session, response: APIClientResponse(statusCode: 200, data: Data("[\(crew)]".utf8)))
+        let client = CrewClient(apiClient: transport, sessionProvider: session)
+
+        do {
+            _ = try await client.fetchMyCrews()
+            XCTFail("A response captured under a previous member must be discarded")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .sessionChanged)
+        }
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.headers["Authorization"], "Bearer member-a-token")
+    }
+
+    func testForbiddenResponseAndInvalidIDsFailClosedWithoutSending() async throws {
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 403, data: Data(#"{"code":"FORBIDDEN"}"#.utf8))])
+        let client = try makeRecordingClient(transport)
+        do {
+            _ = try await client.fetchPendingApplications(crewID: "101")
+            XCTFail("A non-manager must not receive the protected queue")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .forbidden)
+        }
+        do {
+            _ = try await client.fetchCrew(id: "../me")
+            XCTFail("Path components must not be interpolated into endpoint IDs")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testFailedReadCanBeRetriedExplicitlyWithoutAutomaticDuplicateRequest() async throws {
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 503, data: Data(#"{"code":"SERVICE_UNAVAILABLE"}"#.utf8)),
+            APIClientResponse(statusCode: 200, data: Data("[\(crew)]".utf8))
+        ])
+        let client = try makeRecordingClient(transport)
+
+        do {
+            _ = try await client.fetchMyCrews()
+            XCTFail("The unavailable response should be surfaced to the caller")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .serviceUnavailable(code: "SERVICE_UNAVAILABLE"))
+        }
+
+        let retry = try await client.fetchMyCrews()
+        XCTAssertEqual(retry.map(\.id), ["101"])
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.count, 2, "Only the explicit second call should issue another read")
+        XCTAssertTrue(requests.allSatisfy { $0.method == "GET" && $0.path == "crews/me" })
+    }
+
+    private func makeRecordingClient(_ transport: any APIResponseSending) throws -> CrewClient {
+        CrewClient(apiClient: transport,
+                   sessionProvider: CrewSessionStub(value: RunUploadSession(ownerID: "202", accessToken: "member-a-token")))
+    }
+}
