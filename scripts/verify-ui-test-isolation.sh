@@ -210,6 +210,14 @@ if ! /usr/bin/perl -0e '
     }
     die "Fixture suite helper must append a UUID\n"
         unless $source =~ /func\s+makeFixtureStoreSuite[\s\S]{0,160}UUID\(\)\.uuidString/;
+    die "Publish-busy fixture suite must end in a standalone UUID component\n"
+        unless index($source, q{let suite="mov.wireframe.test.publish-busy.\(UUID().uuidString)"}) >= 0;
+    die "Ambiguous-create fixture suite must end in a standalone UUID component\n"
+        unless index($source, q{let suite="mov.wireframe.test.create-unknown.\(UUID().uuidString)"}) >= 0;
+    die "Profile-cancel fixture suite must end in a standalone UUID component\n"
+        unless index($source, q{let suite="mov.wireframe.test.profile-photo-cancel.\(UUID().uuidString)"}) >= 0;
+    die "Profile-failure fixture suite must end in a standalone UUID component\n"
+        unless index($source, q{let suite="mov.wireframe.test.profile-photo-failure.\(UUID().uuidString)"}) >= 0;
     die "Auth fixture Keychain service helper must append a UUID\n"
         unless $source =~ /let\s+service\s*=\s*"com\.movtorun\.ui-fixture\.auth-session\.[^\"]*UUID\(\)\.uuidString[^\"]*"/;
     die "Auth fixture launch must pass its UUID suite and Keychain service\n"

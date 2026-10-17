@@ -4503,7 +4503,7 @@ extension LaunchTests {
     }
 
     func testCommunityPublishBusyPreventsReturningToEditableComposer() {
-        let suite="mov.wireframe.test.publish-busy-\(UUID().uuidString)"
+        let suite="mov.wireframe.test.publish-busy.\(UUID().uuidString)"
         defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         app.launchArguments=["-wire-screen","C09","-wire-fixture","-wire-test-store-suite",suite,
             "-wire-reset","-wire-community-publish-busy-fixture","-appearance","light"]
@@ -4519,7 +4519,7 @@ extension LaunchTests {
     }
 
     func testCommunityAmbiguousCreateRemainsBlockedInPreview() {
-        let suite="mov.wireframe.test.create-unknown-\(UUID().uuidString)"
+        let suite="mov.wireframe.test.create-unknown.\(UUID().uuidString)"
         defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         app.launchArguments=["-wire-screen","C09","-wire-fixture","-wire-test-store-suite",suite,
             "-wire-reset","-wire-community-create-unknown-fixture","-appearance","light"]
@@ -4532,7 +4532,7 @@ extension LaunchTests {
     }
 
     func testProfilePhotoUploadCanBeCancelledWithoutApplyingLateResult() {
-        let suite="mov.wireframe.test.profile-photo-cancel-\(UUID().uuidString)"
+        let suite="mov.wireframe.test.profile-photo-cancel.\(UUID().uuidString)"
         defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         app.launchArguments=["-wire-screen","M02","-wire-fixture","-wire-test-store-suite",suite,
             "-wire-reset","-wire-profile-photo-upload-cancel-fixture","-appearance","light"]
@@ -4546,7 +4546,7 @@ extension LaunchTests {
     }
 
     func testProfilePhotoFailureIsVisibleAndLeavesEditorAvailable() {
-        let suite="mov.wireframe.test.profile-photo-failure-\(UUID().uuidString)"
+        let suite="mov.wireframe.test.profile-photo-failure.\(UUID().uuidString)"
         defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         app.launchArguments=["-wire-screen","M02","-wire-fixture","-wire-test-store-suite",suite,
             "-wire-reset","-wire-profile-photo-failure-fixture","-appearance","light"]

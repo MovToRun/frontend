@@ -253,6 +253,30 @@ final class AuthSessionPersistenceTests: XCTestCase {
         #endif
     }
 
+    func testFocusedUITestFixtureSuitesEndWithAStandaloneUUIDComponent() {
+        let uuid = UUID().uuidString
+        let prefixes = [
+            "publish-busy",
+            "create-unknown",
+            "profile-photo-cancel",
+            "profile-photo-failure"
+        ]
+
+        for prefix in prefixes {
+            let validSuite = "mov.wireframe.test.\(prefix).\(uuid)"
+            let invalidSuite = "mov.wireframe.test.\(prefix)-\(uuid)"
+            let validArguments = ["-wire-fixture", "-wire-test-store-suite", validSuite]
+            let invalidArguments = ["-wire-fixture", "-wire-test-store-suite", invalidSuite]
+            #if DEBUG
+            XCTAssertTrue(AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: validArguments), validSuite)
+            XCTAssertFalse(AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: invalidArguments), invalidSuite)
+            #else
+            XCTAssertFalse(AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: validArguments), validSuite)
+            XCTAssertFalse(AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments: invalidArguments), invalidSuite)
+            #endif
+        }
+    }
+
 #if !DEBUG
     func testReleaseIgnoresAuthFixtureCleanupArguments() {
         let service = AuthSessionFixtureLaunchPolicy.servicePrefix + UUID().uuidString

@@ -39,7 +39,7 @@ TEST_HOST="$test_host" \
 PRODUCT_BUNDLE_IDENTIFIER='local.mov.prototype.MovTests' \
     "$repo_root/scripts/verify-ui-test-isolation.sh"
 
-"$xcodebuild" -project "$project" -target Mov -configuration "$configuration" -sdk "$sdk" \
+"$xcodebuild" -project "$project" -target MovUITestHost -configuration "$configuration" -sdk "$sdk" \
     -showBuildSettings "PRODUCT_BUNDLE_IDENTIFIER=$override" > "$settings" 2>/dev/null
 resolved_override=$(awk -F ' = ' '$1 ~ /^[[:space:]]*PRODUCT_BUNDLE_IDENTIFIER$/ { value=$2 } END { print value }' "$settings")
 test "$resolved_override" = "$override" || {
@@ -52,8 +52,7 @@ products_dir_name=$(basename "$products_dir")
 tmp_products_root="$tmp_dir/Products"
 tmp_products_dir="$tmp_products_root/$products_dir_name"
 mkdir -p "$tmp_products_dir"
-cp -R "$products_dir/Mov.app" "$tmp_products_dir/Mov.app"
-ln -s "$products_dir/MovUITestHost.app" "$tmp_products_dir/MovUITestHost.app"
+cp -R "$products_dir/MovUITestHost.app" "$tmp_products_dir/MovUITestHost.app"
 ln -s "$products_dir/MovUITests-Runner.app" "$tmp_products_dir/MovUITests-Runner.app"
 set -- "$products_root"/Mov_*.xctestrun
 test -f "$1" || {
@@ -65,14 +64,22 @@ test "$#" -eq 1 || {
     exit 1
 }
 cp "$1" "$tmp_products_root/$(basename "$1")"
-/usr/bin/plutil -replace CFBundleIdentifier -string "$resolved_override" "$tmp_products_dir/Mov.app/Info.plist"
+/usr/bin/plutil -replace CFBundleIdentifier -string "$resolved_override" \
+    "$tmp_products_dir/MovUITestHost.app/Info.plist"
 
 if BUILT_PRODUCTS_DIR="$tmp_products_dir" \
     TEST_HOST="$tmp_products_dir/MovUITestHost.app/MovUITestHost" \
     PRODUCT_BUNDLE_IDENTIFIER='local.mov.prototype.MovTests' \
-    "$repo_root/scripts/verify-ui-test-isolation.sh"; then
+    "$repo_root/scripts/verify-ui-test-isolation.sh" >"$tmp_dir/isolation-output.txt" 2>&1; then
+    cat "$tmp_dir/isolation-output.txt" >&2
     printf 'Isolation gate accepted a command-line PRODUCT_BUNDLE_IDENTIFIER override.\n' >&2
     exit 1
 fi
 
-printf 'Negative check passed: xcodebuild resolved the command-line PRODUCT_BUNDLE_IDENTIFIER override and the isolation gate rejected it.\n'
+if ! /usr/bin/grep -Fq "test host built CFBundleIdentifier is '$resolved_override'" "$tmp_dir/isolation-output.txt"; then
+    cat "$tmp_dir/isolation-output.txt" >&2
+    printf 'Isolation gate rejected the command-line override for an unexpected reason.\n' >&2
+    exit 1
+fi
+
+printf 'Negative check passed: host-only artifacts reject an xcodebuild PRODUCT_BUNDLE_IDENTIFIER override without a Mov.app product.\n'
