@@ -49,6 +49,51 @@ enum WPointArtworkGeometry {
     }
 }
 
+enum WPointPreviewTreatment: Equatable {
+    case runCardBackground
+    case runCardFrame
+    case paceFrame
+}
+
+struct WPointPreviewPresentation: Equatable {
+    let treatment: WPointPreviewTreatment
+    let categoryLabel: String
+    let accentColorHex: String?
+
+    var accentColorLabel: String { accentColorHex ?? "기본 색상" }
+}
+
+enum WPointPreviewAdapter {
+    static func presentation(for product: WPointProduct) -> WPointPreviewPresentation {
+        let treatment: WPointPreviewTreatment
+        switch product.category {
+        case .image: treatment = .runCardBackground
+        case .frame: treatment = .runCardFrame
+        case .face: treatment = .paceFrame
+        }
+
+        // API v1 supplies an opaque assetId but no asset URL or client asset mapping.
+        // Render only the supported category and accentColor metadata.
+        return WPointPreviewPresentation(
+            treatment: treatment,
+            categoryLabel: product.category.rawValue,
+            accentColorHex: product.previewData.accentColor
+        )
+    }
+}
+
+enum WPointPreviewColor {
+    static func fromHex(_ value: String?) -> Color {
+        guard let value, value.count == 7, value.first == "#",
+              let rgb = UInt32(value.dropFirst(), radix: 16) else { return W.lime }
+        return Color(
+            red: Double((rgb >> 16) & 0xff) / 255,
+            green: Double((rgb >> 8) & 0xff) / 255,
+            blue: Double(rgb & 0xff) / 255
+        )
+    }
+}
+
 struct WPointProduct: Identifiable, Equatable {
     let id: String
     let name: String
@@ -689,6 +734,7 @@ extension WireframeRoot {
             Button("취소", role: .cancel) {}.accessibilityIdentifier("cancelPointPurchase")
         } message: {
             Text("\(product.price.formatted())P를 사용해요. 상품은 계정에 영구 보유되고 환불할 수 없어요.")
+                .accessibilityIdentifier("pointPurchaseConfirmationMessage")
         }
     }
 
@@ -759,9 +805,14 @@ extension WireframeRoot {
     private var pointCardPreview: some View {
         WPage(title: "미리보기", back: back) {
             if let product = selectedPointProduct {
+                let presentation = WPointPreviewAdapter.presentation(for: product)
                 Text("\(product.name) 적용 예시").font(W.font(14)).foregroundStyle(W.muted)
-                runnerIdentityCard(decorationID:product.id)
-                WText(text: "미리보기예요. 장착하거나 구매해도 현재 러닝 카드에는 적용되지 않아요.", small: true)
+                runnerIdentityCard(previewDecoration:presentation)
+                Text("\(presentation.categoryLabel) · \(presentation.accentColorLabel)")
+                    .font(W.font(12,.medium)).foregroundStyle(W.muted)
+                    .accessibilityIdentifier("cosmeticPreviewTreatment")
+                WText(text: "실제 상품 그림은 아직 연결되지 않았어요. 선택한 상품의 종류와 \(presentation.accentColorHex == nil ? "기본 색상" : "서버 색상")으로 그린 예시이며 실제 모양과 다를 수 있어요. 구매·장착과 별개이고 현재 러닝 카드에는 적용되지 않아요.", small: true)
+                    .accessibilityIdentifier("cosmeticPreviewAssetNotice")
             } else {
                 WNotice(text:"상품 미리보기를 찾을 수 없어요. 상점에서 다시 선택해 주세요.",danger:true)
             }
@@ -801,13 +852,7 @@ private struct WPointProductArtwork: View {
     }
 
     private var accent: Color {
-        guard let value = product.previewData.accentColor,
-              let rgb = UInt32(value.dropFirst(),radix:16) else { return W.lime }
-        return Color(
-            red:Double((rgb >> 16) & 0xff)/255,
-            green:Double((rgb >> 8) & 0xff)/255,
-            blue:Double(rgb & 0xff)/255
-        )
+        WPointPreviewColor.fromHex(product.previewData.accentColor)
     }
 
     private func cardArtwork(width: CGFloat, height: CGFloat) -> some View {

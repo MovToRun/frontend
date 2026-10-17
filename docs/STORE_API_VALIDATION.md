@@ -42,3 +42,11 @@
 - 최적화된 Release `xcodebuild build-for-testing` — `ENABLE_TESTABILITY=YES` 명령행 재정의로 성공. 테스트 타깃이 `@testable import MovUITestHost`를 사용하므로 해당 설정이 필요하며 프로젝트 설정은 변경하지 않았습니다.
 - Debug 및 Release 제품 경로에서 `scripts/verify-ui-test-isolation.sh` — 모두 성공. MovUITestHost/runner와 UUID 격리 fixture 구성을 확인했고, Mov 제품 앱 산출물 및 `DependentProductPaths` 참조가 없음을 확인했습니다.
 - UI 테스트 실행, 실제 앱 설치/실행, 실제 서버 호출은 하지 않았습니다. 첫 검증 기록의 Command Line Tools/XCTest 제한은 Xcode developer directory를 지정한 이번 재검증으로 해소됐습니다.
+
+### 독립 UI 검토 후속
+
+- POINTS overview에서는 상점 fixture 배너를 기대하지 않고, 상점/상세 화면에서는 배너를 기대하도록 LaunchTests helper의 화면별 기대값을 분리했습니다. 포인트 화면의 예시 잔액과 상점 fixture 잔액 구분은 그대로 유지합니다.
+- 판매 종료 상세 테스트는 카탈로그 상품이 선택된 상태에서 실제 상세 화면에 표시되는 `cosmeticStorePurchaseFailure`와 `판매 종료` 비활성 버튼을 검증합니다. 상세 조회의 not-found 상태를 확인하며 구매 요청을 보내지 않습니다.
+- 구매 확인 대화상자 메시지에 접근성 식별자를 추가했습니다. 결과 유실 테스트는 대화상자 메시지가 보이는 것을 먼저 확인한 뒤 확인 action을 식별자/사용자 표시명으로 조회하고, fixture의 첫 구매 커밋 후 전송 응답 유실 → 상세의 결과 불명 상태 → 동일 idempotency key 재확인 → 재생 영수증 흐름을 검증합니다. 응답 유실 fixture는 메모리 내 서비스이며 실제 API를 호출하지 않습니다.
+- 미리보기는 서버 상품 ID를 legacy artwork key로 넘기지 않습니다. API 계약이 제공하는 카테고리와 선택적 `accentColor`로 러닝 카드 배경/프레임/페이스 프레임의 예시 장식을 그리며, 실제 상품 이미지가 아직 연결되지 않았고 현재 러닝 카드에 적용되지 않는다는 안내를 표시합니다. 불투명 `assetId`는 계속 URL이나 리소스 이름으로 추정하지 않습니다.
+- 추가 검증: 전체 pure `swift test` 203 통과, `MovTests/ThemeTests/testCosmeticPreviewAdapterUsesSupportedCategoryAndAccentMetadata` 1 통과, Debug 및 Release build-for-testing 성공, 두 설정의 UI 격리 gate 성공. UI 테스트는 독립 검증자에게 남겼습니다.

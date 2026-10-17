@@ -27,12 +27,31 @@ import UIKit
         "\(prefix).\(UUID().uuidString)"
     }
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
-    private func openCosmeticStoreFixture(_ screen:String="SHOP",extraArguments:[String]=[]) {
+    private func openCosmeticStoreFixture(_ screen:String="SHOP",expectStoreFixtureBanner:Bool=true,extraArguments:[String]=[]) {
         let suite=makeFixtureStoreSuite("mov.ui.cosmetic-store")
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-cosmetic-store-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]+extraArguments
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15),app.debugDescription)
-        XCTAssertTrue(app.descendants(matching:.any)["cosmeticStoreFixtureBanner"].waitForExistence(timeout:8),app.debugDescription)
+        let fixtureBanner=app.descendants(matching:.any)["cosmeticStoreFixtureBanner"]
+        if expectStoreFixtureBanner {
+            XCTAssertTrue(fixtureBanner.waitForExistence(timeout:8),app.debugDescription)
+        } else {
+            XCTAssertFalse(fixtureBanner.exists,"The points overview shows sample data, not the store fixture banner.\n\(app.debugDescription)")
+        }
+    }
+    private func confirmPointStorePurchase() {
+        let message=app.descendants(matching:.any)["pointPurchaseConfirmationMessage"]
+        XCTAssertTrue(message.waitForExistence(timeout:5),"The purchase confirmation must be presented before its action is tapped.\n\(app.debugDescription)")
+        XCTAssertTrue(message.label.contains("영구 보유"),message.label)
+
+        let identifiedAction=app.buttons["confirmPointPurchase"]
+        if waitHittable(identifiedAction,timeout:1) {
+            identifiedAction.tap()
+            return
+        }
+        let labelledAction=app.buttons["구매 확정"]
+        XCTAssertTrue(waitHittable(labelledAction,timeout:1),"Confirmation message appeared, but the confirmation action was not hittable.\n\(app.debugDescription)")
+        labelledAction.tap()
     }
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openSocialLoginFixture(_ extraArguments:[String]=[]){let suite=makeFixtureStoreSuite("mov.wire.social-login");socialLoginFixtureSuitesForCleanup.append(suite);app.launchArguments=["-wire-screen","A01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-social-login-fixture","-appearance","light"]+extraArguments;app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:15))}
@@ -5165,16 +5184,19 @@ extension LaunchTests {
         replace(text,into:field)
     }
     func testPointsShopAndHeaderRoutes(){
-        openCosmeticStoreFixture("POINTS")
+        openCosmeticStoreFixture("POINTS",expectStoreFixtureBanner:false)
         XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts["pointBalance"].label,"1,250","Overview balance remains explicitly labelled sample data")
         tap("browsePointShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5))
         XCTAssertEqual(app.staticTexts["storeBalance"].label,"1,475","Shop uses the isolated server wallet fixture")
         capture("Shop-fixture-catalog")
         tap("shop-item-101");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));capture("Shop-item-detail")
-        tap("pointPreview");XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5));tap("previewBackToShop")
-        let confirm=app.buttons["confirmPointPurchase"]
-        tap("purchaseShopItem");XCTAssertTrue(waitHittable(confirm,timeout:5));confirm.tap()
+        tap("pointPreview")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["cosmeticPreviewTreatment"].label,"러닝 카드 이미지 · #AABBCC")
+        XCTAssertTrue(app.descendants(matching:.any)["cosmeticPreviewAssetNotice"].label.contains("실제 상품 그림은 아직 연결되지 않았어요."))
+        tap("previewBackToShop")
+        tap("purchaseShopItem");confirmPointStorePurchase()
         XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-fixture-receipt")
         tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["purchaseShopItem"].isEnabled)
@@ -5197,8 +5219,7 @@ extension LaunchTests {
     func testCosmeticStoreLostResponseOnlyReplaysOnExplicitSameRequestAction(){
         openCosmeticStoreFixture("SHOP",extraArguments:["-wire-cosmetic-store-lost-response-once"])
         tap("shop-item-101");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
-        let confirm=app.buttons["confirmPointPurchase"]
-        tap("purchaseShopItem");XCTAssertTrue(waitHittable(confirm,timeout:5));confirm.tap()
+        tap("purchaseShopItem");confirmPointStorePurchase()
         let unknown=app.descendants(matching:.any)["cosmeticStorePurchaseOutcomeUnknown"]
         XCTAssertTrue(unknown.waitForExistence(timeout:8),app.debugDescription)
         XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].exists,"An ambiguous response must not be presented as a successful purchase")
@@ -5214,7 +5235,11 @@ extension LaunchTests {
         XCTAssertTrue(purchase.waitForExistence(timeout:5),app.debugDescription)
         XCTAssertFalse(purchase.isEnabled)
         XCTAssertEqual(purchase.label,"판매 종료")
-        XCTAssertTrue(app.descendants(matching:.any)["cosmeticStoreProductFailure"].waitForExistence(timeout:5))
+        let detailFailure=app.descendants(matching:.any)["cosmeticStorePurchaseFailure"]
+        XCTAssertTrue(detailFailure.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(detailFailure.label.contains("상품을 찾을 수 없어요"),detailFailure.label)
+        XCTAssertFalse(app.descendants(matching:.any)["cosmeticStoreProductFailure"].exists,
+                       "The catalog product remains selected, so the detail view shows its actual detail failure state.")
     }
     func testIndependentInlineRecordEditing(){
         userOpen("L04");XCTAssertFalse(visible("기록 편집"));tap("editTitle")

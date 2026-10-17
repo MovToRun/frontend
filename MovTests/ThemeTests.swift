@@ -1239,6 +1239,35 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(detail.height, 266 / 1.65, accuracy: 0.001, "The source detail card keeps a 1.65 ratio")
     }
 
+    func testCosmeticPreviewAdapterUsesSupportedCategoryAndAccentMetadata() {
+        func product(id: String, category: CosmeticStoreCategory, assetID: String, accent: String?) -> WPointProduct {
+            WPointProduct(CosmeticStoreProduct(
+                id:id,category:category,displayName:"예시 상품",description:nil,pricePoints:100,
+                previewData:CosmeticPreviewData(version:1,assetID:assetID,accentColor:accent),owned:false
+            ))
+        }
+
+        let background = WPointPreviewAdapter.presentation(
+            for:product(id:"101",category:.runCardBackground,assetID:"opaque-card-asset",accent:"#AABBCC")
+        )
+        XCTAssertEqual(background.treatment,.runCardBackground)
+        XCTAssertEqual(background.categoryLabel,"러닝 카드 이미지")
+        XCTAssertEqual(background.accentColorHex,"#AABBCC")
+
+        let frame = WPointPreviewAdapter.presentation(
+            for:product(id:"201",category:.runCardFrame,assetID:"opaque-frame-asset",accent:nil)
+        )
+        XCTAssertEqual(frame.treatment,.runCardFrame)
+        XCTAssertEqual(frame.accentColorLabel,"기본 색상")
+
+        let paceFrame = WPointPreviewAdapter.presentation(
+            for:product(id:"301",category:.paceFrame,assetID:"opaque-pace-asset",accent:"#88AA99")
+        )
+        XCTAssertEqual(paceFrame.treatment,.paceFrame)
+        XCTAssertEqual(paceFrame.categoryLabel,"페이스 프레임")
+        XCTAssertEqual(paceFrame.accentColorHex,"#88AA99")
+    }
+
     func testProfilePhotoImportGuardRejectsLateCompletionAfterReselection() {
         var guardState=WProfilePhotoImportGuard()
         let first=guardState.begin()
