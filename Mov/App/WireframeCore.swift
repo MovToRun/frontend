@@ -476,6 +476,9 @@ struct WireframeRemoteReadDependencies {
     let authSessionStore: (any AuthSessionStoring)?
     let authSessionClient: AuthSessionClient?
     let runUploadAPIClient: (any APIResponseSending)?
+    let mediaUploadClient: MediaUploadClient?
+    let communityMediaClient: CommunityMediaClient?
+    let communityPostOperationStore: (any CommunityPostOperationPersisting)?
     let accountLinkFlow: (any AccountLinkFlowServing)?
     let accountLinkCredentialProvider: (any AccountLinkCredentialProviding)?
     let memberWithdrawalService: (any MemberWithdrawalServing)?
@@ -494,6 +497,9 @@ struct WireframeRemoteReadDependencies {
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
         runUploadAPIClient: (any APIResponseSending)? = nil,
+        mediaUploadClient: MediaUploadClient? = nil,
+        communityMediaClient: CommunityMediaClient? = nil,
+        communityPostOperationStore: (any CommunityPostOperationPersisting)? = nil,
         accountLinkFlow: (any AccountLinkFlowServing)? = nil,
         accountLinkCredentialProvider: (any AccountLinkCredentialProviding)? = nil,
         memberWithdrawalService: (any MemberWithdrawalServing)? = nil
@@ -511,6 +517,9 @@ struct WireframeRemoteReadDependencies {
         self.authSessionStore = authSessionStore
         self.authSessionClient = authSessionClient
         self.runUploadAPIClient = runUploadAPIClient
+        self.mediaUploadClient = mediaUploadClient
+        self.communityMediaClient = communityMediaClient
+        self.communityPostOperationStore = communityPostOperationStore
         self.accountLinkFlow = accountLinkFlow
         self.accountLinkCredentialProvider = accountLinkCredentialProvider
         self.memberWithdrawalService = memberWithdrawalService
@@ -3141,6 +3150,7 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityMediaImportCoordinator=WCommunityMediaImportCoordinator()
     var communityMediaImporting=false
     var communityDraftSessionID=UUID().uuidString
+    var communityDraftAccountBinding:CommunityPostDraftAccountBinding?
     var communityVideoPlayback=WCommunityVideoPlaybackController()
     var communityImageViewerIndex=0
     var communityImageViewerIsDraft=false
@@ -3170,6 +3180,16 @@ struct WCommunityVerificationState:Codable,Equatable {
     var communityDraftBoard="러닝 인증"
     var communityDraftCrewID:String?
     var communityDraftPostID:String?
+    var communityRemotePosts:[String:WCommunityRemotePostMetadata]=[:]
+    var communityRemoteDraftPostID:String?
+    var communityRemoteDraftAttachmentVersion:Int64?
+    var communityRemoteDraftAssetIDs:[String:String]=[:]
+    var communityRemoteDraftOperationID:UUID?
+    var communityRemoteDraftCreateResultUnknown=false
+    var communityRemoteRecoveryBlocked=false
+    var communityRemotePublishBusy=false
+    var communityRemotePublishNeedsRetry=false
+    var communityRemotePublishStatus=""
     var communityDraftTitle=""
     var communityDraftBody=""
     var communityComment=""
@@ -3716,6 +3736,14 @@ struct RootView:View {
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
             runUploadAPIClient:authComposition.apiClient,
+            mediaUploadClient: {
+                guard let apiClient = authComposition.apiClient, let authClient = authComposition.client else { return nil }
+                return MediaUploadClient(apiClient: apiClient, tokenProvider: authClient)
+            }(),
+            communityMediaClient: {
+                guard let apiClient = authComposition.apiClient, let authClient = authComposition.client else { return nil }
+                return CommunityMediaClient(apiClient: apiClient, tokenProvider: authClient)
+            }(),
             accountLinkFlow:accountLinkFlow,
             memberWithdrawalService:memberWithdrawalService
         )
@@ -4015,6 +4043,9 @@ struct WireframeRoot:View {
     @State var shareWorkspace=ShareWorkspace()
     @State var pointsStore:WPointsStore
     @State var remoteReads:WireframeRemoteReadBridge
+    let mediaUploadClient: MediaUploadClient?
+    let communityMediaClient: CommunityMediaClient?
+    let communityPostOperationStore: any CommunityPostOperationPersisting
     @State var runUploadNetworkMonitor=RunUploadNetworkMonitor()
     @State var passwordResetService: (any PasswordResetServing)?
     @State var authSessionStore: (any AuthSessionStoring)?
@@ -4040,6 +4071,12 @@ struct WireframeRoot:View {
     @State var weeklyTimeDraftInvalid=false
     @State var memberProfileDraftBaseline:MemberProfile?
     @State var memberProfileDraftScopeID:String?
+    @State var memberProfilePhotoDraftBaseline:Data?
+    @State var memberProfilePhotoUploadedDraft:Data?
+    @State var memberProfilePhotoUploading=false
+    @State var memberProfilePhotoUploadTask:Task<Void,Never>?
+    @State var memberProfilePhotoUploadOperationID:UUID?
+    @State var communityRemotePublishTask:Task<Void,Never>?
     init(
         remoteReadDependencies: WireframeRemoteReadDependencies? = nil,
         runUploadIdentityProvider: (any RunUploadMemberIdentityProviding)? = nil,
@@ -4047,6 +4084,9 @@ struct WireframeRoot:View {
         runUploadDrainer: (any RunUploadDraining)? = nil
     ){
         let args=ProcessInfo.processInfo.arguments
+        self.mediaUploadClient=remoteReadDependencies?.mediaUploadClient
+        self.communityMediaClient=remoteReadDependencies?.communityMediaClient
+        self.communityPostOperationStore=remoteReadDependencies?.communityPostOperationStore ?? FileCommunityPostOperationStore()
         _passwordResetService=State(initialValue:remoteReadDependencies?.passwordResetService)
         _authSessionStore=State(initialValue:remoteReadDependencies?.authSessionStore)
         #if DEBUG
@@ -4386,11 +4426,35 @@ struct WireframeRoot:View {
                 if reviewTools && args.contains("-wire-community-notification-missing-target") {ui.communityNotificationCenter=WCommunityNotificationCenter(notifications:[WCommunityNotification(id:"missing-post",title:"게시물 알림 예시",text:"삭제되었거나 접근할 수 없는 게시물입니다.",target:.post(postID:"deleted-post"))])}
                 if let i=args.firstIndex(of:"-wire-screen"),args.indices.contains(i+1){
                     let requestedScreen=args[i+1];ui.screen=requestedScreen=="B01" ? "POINTS":requestedScreen;ui.rootIndex=["H02":1,"H05":1][ui.screen] ?? roots.firstIndex(of:ui.screen) ?? (isCommunityPrimaryTabScreen ? 3:ui.screen.hasPrefix("L") ? 1:2);ui.testing=true;splash=false;prepare(ui.screen);if requestedScreen=="B08"{ui.selectedPointProductID="frame"}
+                    if reviewTools,AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments:args),ui.screen=="M02",
+                       args.contains("-wire-profile-photo-upload-cancel-fixture") {
+                        memberProfilePhotoUploading=true
+                    }
+                    if reviewTools,AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments:args),ui.screen=="M02",
+                       args.contains("-wire-profile-photo-failure-fixture") {
+                        ui.error=MediaUploadFailure.mediaUnavailable.userMessage
+                    }
                     if args.contains("-wire-community-course-two-records"),let date=ISO8601DateFormatter().date(from:"2026-10-02T07:12:00+09:00") {store.records.append(RunRecord(date:date,title:"저녁 공원 러닝",seconds:900,kilometers:3.4,segments:[RunSegment(distance:3.4,seconds:900)],isExample:true));store.persist()}
                     if args.contains("-wire-community-anonymous-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}) {let original=ui.communityPosts[index];ui.communityPosts[index]=WCommunityPost(id:original.id,authorMemberID:original.authorMemberID,author:"노출되면 안 되는 실명",rank:original.rank,board:"익명게시판",title:original.title,text:original.text,date:original.date,likes:original.likes,views:original.views,comments:[WCommunityComment(id:"c1",author:"노출되면 안 되는 실명",authorMemberID:original.authorMemberID,text:"익명 댓글",date:"10.05 08:42")],imageName:original.imageName,hot:original.hot,crewID:original.crewID)}
                     if reviewTools && args.contains("-wire-community-crew-post"),let index=ui.communityPosts.firstIndex(where:{$0.id=="p1"}){ui.communityPosts[index].crewID="dawn";ui.communityPosts[index].crewBoardID="dawn-board-2";ui.communityPosts[index].isCrewOnly=true;ui.communityPosts[index].comments.append(WCommunityComment(id:"c1-reply",author:"가온러너",authorMemberID:"fixture-member-ga-on",text:"네, 다음에 함께 달려요.",date:"10.05 08:50",parentID:"c1"))}
                     if reviewTools && args.contains("-wire-community-empty-hot") {for index in ui.communityPosts.indices{ui.communityPosts[index].hot=false}}
                     if reviewTools{ui.seedCommunityPhotoFixtures(draft:args.contains("-wire-community-photo-draft-fixture"),post:args.contains("-wire-community-photo-post-fixture"),videoPost:args.contains("-wire-community-video-post-fixture"),videoDraft:args.contains("-wire-community-video-draft-fixture"))}
+                    if reviewTools,AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments:args),ui.screen=="C09",
+                       args.contains("-wire-community-publish-busy-fixture") {
+                        ui.communityDraftBoard="자유게시판"
+                        ui.communityDraftTitle="게시 중인 초안"
+                        ui.communityDraftBody="저장 완료를 기다리는 예시 초안이에요."
+                        ui.communityRemotePublishBusy=true
+                        ui.communityRemotePublishStatus="게시글과 사진을 저장하고 있어요."
+                    }
+                    if reviewTools,AuthSessionFixtureLaunchPolicy.hasUUIDDefaultsSuite(arguments:args),ui.screen=="C09",
+                       args.contains("-wire-community-create-unknown-fixture") {
+                        ui.communityDraftBoard="자유게시판"
+                        ui.communityDraftTitle="응답 확인이 필요한 초안"
+                        ui.communityDraftBody="중복 게시를 막기 위해 확인을 기다려요."
+                        ui.communityRemoteDraftOperationID=UUID()
+                        ui.communityRemoteDraftCreateResultUnknown=true
+                    }
                     if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-verification-status"),args.indices.contains(i+1),let status=WCommunityVerificationStatus(rawValue:args[i+1]) {ui.communityVerification.status=status}
                     if ["Q01","Q02","Q03"].contains(ui.screen),let valid=store.records.first(where:{$0.isValid}){ui.selected=valid.id}
                     if WireState.otpScreens.contains(ui.screen){let age:TimeInterval=ui.screen=="A21" ? 301:args.contains("-wire-otp-resend-ready") ? 60:0;ui.challengeIssued=Date().addingTimeInterval(-age);ui.challengeCode=ui.screen=="A23" ? "731204":"482619";ui.otpCodeIssuer.seed(ui.challengeCode);ui.authEmail="runner@example.test";ui.codeAttempts=ui.screen=="A22" ? 5:ui.screen=="A20" ? 1:0;if ui.screen=="A20"{ui.error="코드가 일치하지 않아요. 4번 더 시도할 수 있어요."}}
@@ -4449,7 +4513,11 @@ struct WireframeRoot:View {
         }
     }
     func handleRemoteAccountScopeChange(_ scopeID:String){
+        cancelCommunityRemotePublishForAccountScopeChange()
         store.cancelPendingRunUploadDrain()
+        cancelMemberProfilePhotoUpload()
+        memberProfilePhotoUploadedDraft=nil
+        memberProfilePhotoDraftBaseline=nil
         remoteReads.accountDidChange(to:scopeID)
         memberProfileDraftBaseline=nil
         memberProfileDraftScopeID=scopeID
@@ -4572,6 +4640,7 @@ struct WireframeRoot:View {
         return true
     }
     func go(_ id:String){
+        guard !blockCommunityNavigationDuringPublish() else{return}
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         let route=id=="B01" ? "POINTS":id
         guard prepareSocialLoginNavigation(to:route) else{return}
@@ -4583,10 +4652,12 @@ struct WireframeRoot:View {
         performNavigation(route)
     }
     func performNavigation(_ route:String){
+        guard !blockCommunityNavigationDuringPublish() else{return}
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight,
               prepareSocialLoginNavigation(to:route) else{return}
         if ui.screen=="L07",route != "L07"{remoteReads.cancelRunRecordDeletion()}
         if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()}
+        if ui.screen=="M02",route != ui.screen{cancelMemberProfilePhotoUpload()}
         if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
         if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}}
         if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()}
@@ -4596,6 +4667,7 @@ struct WireframeRoot:View {
         withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:duration)){ui.go(route)}
     }
     func back(){
+        guard !blockCommunityNavigationDuringPublish() else{return}
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return}
         if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return}
@@ -4604,6 +4676,7 @@ struct WireframeRoot:View {
         performBack()
     }
     func performBack(){
+        guard !blockCommunityNavigationDuringPublish() else{return}
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight else{return}
         let source=ui.screen
         if source=="T11" {
@@ -4623,10 +4696,12 @@ struct WireframeRoot:View {
         guard prepareSocialLoginNavigation(to:destination) else{return}
         if source=="L07"{remoteReads.cancelRunRecordDeletion()}
         if ["H04","H10"].contains(source){remoteReads.cancelWeeklyGoalMutation()}
+        if source=="M02"{cancelMemberProfilePhotoUpload()}
         if ["M02","T02"].contains(source){remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
         withAnimation(reduceMotion ? nil:.timingCurve(0.2,0.8,0.2,1,duration:0.24)){ui.back()}
     }
     func selectRootTab(_ route:String){
+        guard !blockCommunityNavigationDuringPublish() else{return}
         guard !remoteReads.isAccountLinkMutationInFlight, !remoteReads.isMemberWithdrawalMutationInFlight,
               prepareSocialLoginNavigation(to:route) else{return}
         if ui.communityProfileEditing{requestCommunityProfileExit(destination:"tab:\(route)");return}
@@ -4636,6 +4711,11 @@ struct WireframeRoot:View {
         ui.path=[]
         if ["C02","C08","C15"].contains(route),ui.rootIndex != 3{ui.forward=3>ui.rootIndex;ui.previousRootIndex=ui.rootIndex;ui.rootIndex=3}
         go(route)
+    }
+    func blockCommunityNavigationDuringPublish()->Bool{
+        guard ui.communityRemotePublishBusy,["C05","C09","C13"].contains(ui.screen) else{return false}
+        ui.communityError="게시글과 사진을 저장하고 있어요. 완료될 때까지 기다려 주세요."
+        return true
     }
     func clearCommunityDiscardDestinations(){communityProfileExitDestination=nil;communityCrewExitDestination=nil;communityCrewManageExitDestination=nil;communityComposerExitDestination=nil;communityDiscardContext=nil}
     func communityComposerSnapshot(for screen:String)->WCommunityComposerSnapshot {
@@ -4652,14 +4732,20 @@ struct WireframeRoot:View {
         return communityComposerOriginal != communityComposerSnapshot(for:ui.screen)
     }
     func requestCommunityComposerExit(destination:String){
+        guard !ui.communityRemotePublishBusy else{ui.communityError="게시글과 사진을 저장하고 있어요. 완료될 때까지 기다려 주세요.";return}
         guard ["C05","C13"].contains(ui.screen) else{completeCommunityComposerExit(destination);return}
         guard communityComposerHasChanges() else{resetCommunityComposerDraft();communityComposerOriginal=nil;completeCommunityComposerExit(destination);return}
         communityComposerExitDestination=destination;communityDiscardContext=ui.screen=="C13" ? .courseComposer:.postComposer;showingCommunityDiscardConfirmation=true
     }
     func resetCommunityComposerDraft(){
+        communityRemotePublishTask?.cancel();communityRemotePublishTask=nil
         ui.communityMediaImportCoordinator.invalidate();ui.communityMediaImporting=false;ui.communityDraftSessionID=UUID().uuidString
+        ui.communityDraftAccountBinding=nil
         ui.communityAttachmentStore.discardDraft(ui.communityDraftAttachments);ui.communityDraftAttachments=[]
         ui.communityDraftTitle="";ui.communityDraftBody="";ui.communityError="";ui.communityDraftCrewID=nil;ui.communityDraftPostID=nil
+        ui.communityRemoteDraftPostID=nil;ui.communityRemoteDraftAttachmentVersion=nil;ui.communityRemoteDraftAssetIDs=[:]
+        ui.communityRemoteDraftOperationID=nil;ui.communityRemoteDraftCreateResultUnknown=false;ui.communityRemoteRecoveryBlocked=false;ui.communityRemotePublishBusy=false
+        ui.communityRemotePublishNeedsRetry=false;ui.communityRemotePublishStatus=""
         ui.communityCourseDraft=false;ui.communityCourseError="";ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true
     }
     func discardCommunityComposerAndExit(){
@@ -4918,7 +5004,7 @@ struct WireframeRoot:View {
         case "L05":splits
         case "L06":recordEdit
         case "Q01":ShareImageEditor(record:current,workspace:shareWorkspace,back:{back()},openOutput:{go("Q02")})
-        case "Q02":ShareOutputView(record:current,workspace:shareWorkspace,back:{back()},gallery:{go("Q03")})
+        case "Q02":ShareOutputView(record:current,workspace:shareWorkspace,back:{back()},gallery:{go("Q03")},attachToCommunity:{beginCommunityComposeWithShareImage($0)})
         case "Q03":ShareGallery(record:current,workspace:shareWorkspace,back:{back()},create:{go("Q01")},open:{id in shareWorkspace.selectedOutputID=id;go("Q02")})
         case "S01","S02","S03","S04","S05":completion
         case "T01":settings

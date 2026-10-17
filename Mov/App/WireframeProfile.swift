@@ -68,6 +68,10 @@ extension WireframeRoot {
     func beginMemberProfileDraft(_ profile:MemberProfile,for screen:String){
         memberProfileDraftBaseline=profile
         memberProfileDraftScopeID=ui.remoteAccountScopeID
+        if screen=="M02" {
+            memberProfilePhotoDraftBaseline=WProfilePhotoPolicy.sanitizeStored(ui.profile.photo)
+            memberProfilePhotoUploadedDraft=nil
+        }
         ui.error=""
         if screen=="M02" {
             ui.nickname=profile.nickname
@@ -78,6 +82,14 @@ extension WireframeRoot {
             ui.weight=WMemberProfileValidation.weightText(profile.weightKg)
             ui.profile.weight=ui.weight
         }
+    }
+
+    func cancelMemberProfilePhotoUpload(){
+        guard memberProfilePhotoUploading else{return}
+        memberProfilePhotoUploadTask?.cancel()
+        memberProfilePhotoUploadTask=nil
+        memberProfilePhotoUploadOperationID=nil
+        memberProfilePhotoUploading=false
     }
 
     func applyMemberProfilePublicFields(_ profile:MemberProfile){
@@ -130,6 +142,74 @@ extension WireframeRoot {
         if let error=WMemberProfileValidation.introductionError(for:ui.introduction){ui.error=error;return}
         if let error=WMemberProfileValidation.regionError(for:ui.region){ui.error=error;return}
         let patch=WMemberProfileValidation.profilePatch(baseline:baseline,nickname:ui.nickname,introduction:ui.introduction,region:ui.region)
+        let photoChanged=ui.photo != memberProfilePhotoDraftBaseline
+        if photoChanged && ui.photo == nil {
+            ui.error="프로필 사진 삭제 API가 아직 제공되지 않아 계정 사진은 삭제할 수 없어요. 사진을 다시 선택해 주세요."
+            return
+        }
+        if let photo=ui.photo,photoChanged,photo != memberProfilePhotoUploadedDraft,let mediaUploadClient {
+            guard !memberProfilePhotoUploading else{return}
+            guard let authSessionStore,
+                  let memberID=try? authSessionStore.loadSnapshot()?.memberID,
+                  AuthSessionSnapshot.isCanonicalMemberID(memberID) else {
+                ui.error="로그인 상태를 확인한 뒤 다시 시도해 주세요."
+                return
+            }
+            let accountScopeID=ui.remoteAccountScopeID
+            let binding=ProfilePhotoUploadSessionBinding(memberID:memberID,generationID:accountScopeID)
+            let state=ui
+            let reads=remoteReads
+            let isBindingCurrent:ProfilePhotoUploadBindingValidator = { expectedBinding in
+                await MainActor.run {
+                    guard expectedBinding==binding,
+                          !Task.isCancelled,
+                          state.remoteAccountScopeID==expectedBinding.generationID,
+                          state.screen=="M02",
+                          memberProfileDraftScopeID==expectedBinding.generationID,
+                          reads.accountScopeID==expectedBinding.generationID else{return false}
+                    do { return try authSessionStore.loadSnapshot()?.memberID==expectedBinding.memberID }
+                    catch { return false }
+                }
+            }
+            let operationID=UUID()
+            memberProfilePhotoUploadOperationID=operationID
+            memberProfilePhotoUploading=true
+            ui.error=""
+            memberProfilePhotoUploadTask=Task { @MainActor [photo, patch, baseline] in
+                defer {
+                    if memberProfilePhotoUploadOperationID==operationID {
+                        memberProfilePhotoUploading=false
+                        memberProfilePhotoUploadTask=nil
+                        memberProfilePhotoUploadOperationID=nil
+                    }
+                }
+                do {
+                    let service=ProfilePhotoUploadService(mediaClient:mediaUploadClient,sessionStore:authSessionStore)
+                    let confirmed=try await service.uploadAndFetchPhoto(photo,binding:binding,isBindingCurrent:isBindingCurrent)
+                    guard await isBindingCurrent(binding),memberProfilePhotoUploadOperationID==operationID else{return}
+                    memberProfilePhotoUploadedDraft=confirmed
+                    ui.photo=confirmed
+                    ui.profile.photo=confirmed
+                    if patch.hasChanges {
+                        remoteReads.saveMemberProfile(patch,accountScopeID:accountScopeID,screen:"M02")
+                    } else {
+                        applyMemberProfilePublicFields(baseline)
+                        ui.save();back()
+                    }
+                } catch is ProfilePhotoUploadFailure {
+                    return
+                } catch let failure as MediaUploadFailure {
+                    guard !Task.isCancelled,await isBindingCurrent(binding),
+                          memberProfilePhotoUploadOperationID==operationID else{return}
+                    ui.error=failure.userMessage
+                } catch {
+                    guard !Task.isCancelled,await isBindingCurrent(binding),
+                          memberProfilePhotoUploadOperationID==operationID else{return}
+                    ui.error=MediaUploadFailure.invalidResponse.userMessage
+                }
+            }
+            return
+        }
         guard patch.hasChanges else {
             applyMemberProfilePublicFields(baseline)
             ui.profile.photo=ui.photo
@@ -228,22 +308,23 @@ extension WireframeRoot {
                     WText(text:"계정 프로필을 준비하고 있어요.",small:true)
                 }
             } else {
-                WAvatarEditor(data:$ui.photo).padding(.bottom,9).disabled(remoteReads.isSavingMemberProfile)
+                WAvatarEditor(data:$ui.photo).padding(.bottom,9).disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 WField(label:"닉네임",text:$ui.nickname,limit:12,textSize:14,labelSize:13,secondaryLabel:"필수",accessibilityID:"memberProfileEditNickname").padding(.top,5)
-                    .disabled(remoteReads.isSavingMemberProfile)
+                    .disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 Text(remote ? "2–12자 · 한글·영문·숫자·밑줄 · 중복 여부 확인": "최대 20자 · 중복 여부는 확인하지 않아요")
                     .font(W.font(11)).kerning(-0.165).foregroundStyle(W.muted).frame(height:17.6,alignment:.leading).padding(.top,-11)
                 WField(label:"한 줄 소개",text:$ui.introduction,placeholder:"어떤 러너인지 소개해 주세요",limit:60,multiline:true,multilineHeight:86,textSize:14,labelSize:13,secondaryLabel:"선택",accessibilityID:"memberProfileEditIntroduction").padding(.top,4)
-                    .disabled(remoteReads.isSavingMemberProfile)
+                    .disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 (Text("활동 지역").font(W.font(13))+Text("  선택").font(W.font(10)).foregroundColor(W.muted))
-                WRegionPicker(selection:$ui.region).disabled(remoteReads.isSavingMemberProfile)
+                WRegionPicker(selection:$ui.region).disabled(remoteReads.isSavingMemberProfile || memberProfilePhotoUploading)
                 WText(text:"활동 지역은 선택하지 않아도 괜찮아요.",small:true)
+                if memberProfilePhotoUploading{HStack(spacing:8){ProgressView().controlSize(.small);WText(text:"프로필 사진을 업로드하고 있어요.",small:true)}.accessibilityIdentifier("memberProfilePhotoUploadProgress")}
                 if !ui.error.isEmpty{WNotice(text:ui.error,danger:true).accessibilityIdentifier("memberProfileEditFailure")}
             }
         }actions:{
-            Button(remoteReads.isSavingMemberProfile ? "저장 중…":"저장하기") {
+            Button(memberProfilePhotoUploading ? "사진 업로드 중…":remoteReads.isSavingMemberProfile ? "저장 중…":"저장하기") {
                 saveMemberProfileEdit()
-            }.buttonStyle(WButtonStyle()).disabled(remoteReads.isSavingMemberProfile || (remote && !profileLoaded)).accessibilityIdentifier("memberProfileEditSave")
+            }.buttonStyle(WButtonStyle()).disabled(memberProfilePhotoUploading || remoteReads.isSavingMemberProfile || (remote && !profileLoaded)).accessibilityIdentifier("memberProfileEditSave")
             Button("취소",action:back).buttonStyle(WButtonStyle(kind:1)).accessibilityIdentifier("memberProfileEditCancel")
         }
     }
@@ -385,7 +466,7 @@ struct WAvatarEditor:View {
             guard isCurrent(request) else{return}
             guard let image=UIImage(data:imported.data),let decoded=image.cgImage,WProfilePhotoPolicy.accepts(width:decoded.width,height:decoded.height) else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return}
             draft=image;message=""
-        } catch {if isCurrent(request){message=error.localizedDescription}}
+        } catch {if isCurrent(request) && !Task.isCancelled{message=WPhotoPickerFailureMessage.userFacing(error)}}
     }
     private func isCurrent(_ request:UUID)->Bool{!Task.isCancelled && importGuard.accepts(request)}
 }
@@ -415,7 +496,7 @@ struct WCommunityCrewPhotoPicker:View {
             guard isCurrent(request) else{return}
             guard let decoded=UIImage(data:imported.data),let cgImage=decoded.cgImage,WProfilePhotoPolicy.accepts(width:cgImage.width,height:cgImage.height) else{message="지원되는 사진 원본을 20 MB 이하로 선택해 주세요.";return}
             data=imported.data;image=decoded;message=""
-        } catch {if isCurrent(request){message=error.localizedDescription}}
+        } catch {if isCurrent(request) && !Task.isCancelled{message=WPhotoPickerFailureMessage.userFacing(error)}}
     }
     private func isCurrent(_ request:UUID)->Bool{!Task.isCancelled && importGuard.accepts(request)}
 }
@@ -425,6 +506,17 @@ struct WProfilePhotoImportGuard {
     mutating func begin()->UUID{let request=UUID();current=request;return request}
     mutating func invalidate(){current=nil}
     func accepts(_ request:UUID)->Bool{current==request}
+}
+
+enum WPhotoPickerFailureMessage {
+    static func userFacing(_ error:Error)->String {
+        let value=error as NSError
+        let description=value.localizedDescription.lowercased()
+        if value.code==NSFileReadNoPermissionError || value.code==257 || description.contains("permission denied") || description.contains("access denied") || description.contains("권한") || description.contains("접근 거부") {
+            return "사진 접근 권한이 거부됐어요. 설정에서 사진 접근을 허용한 뒤 다시 시도해 주세요."
+        }
+        return error.localizedDescription
+    }
 }
 struct WPhotoCrop:View {
     var image:UIImage

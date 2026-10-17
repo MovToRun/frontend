@@ -4,7 +4,7 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 import ImageIO
-@testable import Mov
+@testable import MovUITestHost
 
 private struct V1PointEntryFixture: Codable {
     var id: UUID
