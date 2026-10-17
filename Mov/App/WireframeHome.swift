@@ -57,6 +57,419 @@ private struct WCommunityCourseMap:View {
     }
 }
 
+extension WireframeRoot {
+    @ViewBuilder
+    func remoteCrewLoadState(_ state: WireframeCrewLoadState, identifier: String, retry: @escaping () -> Void) -> some View {
+        switch state {
+        case .idle, .loading:
+            ProgressView().frame(maxWidth: .infinity, minHeight: 70).accessibilityIdentifier(identifier + "Loading")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                WNotice(text: message, danger: true).accessibilityIdentifier(identifier + "Error")
+                Button("다시 불러오기", action: retry).buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier(identifier + "Retry")
+            }
+        case .loaded:
+            EmptyView()
+        }
+    }
+
+    func remoteCommunityCrewOverview() -> some View {
+        VStack(spacing: 0) {
+            WCommunityCrewHeader(onSearch: { ui.communityCrewTab = "find" })
+            ScrollView {
+                WCommunityScrollOffsetProbe(coordinateSpace: "community-crew-scroll")
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        Text("크루").font(W.font(19, .semibold)).accessibilityIdentifier("communityCrewTitle")
+                        Spacer()
+                        Button("새로고침") { Task { await crewFlow.loadOverview() } }
+                            .font(W.font(12, .medium)).accessibilityIdentifier("remoteCrewRefresh")
+                    }
+                    communityCrewTabs
+                    if ui.communityCrewTab == "my" {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("나의 크루").font(W.font(18, .semibold))
+                                Text("\(crewFlow.myCrews.count)").font(W.font(12, .medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewCount")
+                                Spacer()
+                                Button { go("C33") } label: {
+                                    Text("신청중 \(crewFlow.pendingApplicationCount)").font(W.font(12, .medium)).foregroundStyle(W.ink)
+                                        .padding(.horizontal, 12).frame(height: 34).background(W.soft, in: Capsule())
+                                }.buttonStyle(.plain).accessibilityIdentifier("communityCrewPending")
+                            }
+                            remoteCrewLoadState(crewFlow.myCrewsState, identifier: "remoteMyCrews") { Task { await crewFlow.loadMyCrews() } }
+                            if crewFlow.myCrewsState == .loaded {
+                                if crewFlow.myCrews.isEmpty {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("첫 크루를 찾아보세요").font(W.font(16, .semibold))
+                                        WText(text: "함께 달릴 러너를 둘러보세요", small: true)
+                                        Button("모집 중인 크루 찾아보기") { ui.communityCrewTab = "find" }
+                                            .font(W.font(13, .medium)).padding(.top, 4).accessibilityIdentifier("communityCrewFindFromEmpty")
+                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(W.soft, in: RoundedRectangle(cornerRadius: 14))
+                                } else {
+                                    ForEach(crewFlow.myCrews) { crew in
+                                        remoteCrewRow(crew.name, subtitle: "멤버 \(crew.memberCount)/\(crew.capacity)명 · \(crew.role ?? "멤버")", detail: crew.introduction ?? "", id: crew.id, joined: true)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("모집글에서 크루 찾기").font(W.font(18, .semibold))
+                            TextField("크루 이름이나 모집글 검색", text: $crewFlow.searchText)
+                                .font(W.font(14)).padding(13).background(W.soft, in: RoundedRectangle(cornerRadius: 10))
+                                .accessibilityIdentifier("remoteCrewSearchField")
+                            Text("공개 모집 게시글 20개 안에서 검색해요.").font(W.font(11)).foregroundStyle(W.muted)
+                            remoteCrewLoadState(crewFlow.recruitmentState, identifier: "remoteCrewRecruitment") { Task { await crewFlow.loadRecruitmentPosts() } }
+                            if crewFlow.recruitmentState == .loaded {
+                                let needle = crewFlow.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                                let results = crewFlow.recruitmentPosts.filter { post in
+                                    needle.isEmpty || "\(post.crewName) \(post.title) \(post.content)".lowercased().contains(needle)
+                                }
+                                if results.isEmpty {
+                                    Text(needle.isEmpty ? "모집 중인 글이 아직 없어요" : "검색 결과가 없어요")
+                                        .font(W.font(14, .medium)).foregroundStyle(W.muted).frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 20).accessibilityIdentifier("remoteCrewRecruitmentEmpty")
+                                } else {
+                                    ForEach(results) { post in
+                                        Button {
+                                            crewFlow.selectCrew(post.crewId)
+                                            go("C16")
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 5) {
+                                                Text(post.crewName).font(W.font(14, .semibold)).foregroundStyle(W.ink)
+                                                Text(post.title).font(W.font(13, .medium)).foregroundStyle(W.ink)
+                                                Text(post.content).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)
+                                            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12).contentShape(Rectangle())
+                                        }.buttonStyle(.plain).overlay(alignment: .bottom) { W.line.frame(height: 1) }
+                                            .accessibilityIdentifier("remoteCrewRecruitment-\(post.id)")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.top, 16).padding(.bottom, WCommunityBottomTab.barHeight + 24)
+            }.coordinateSpace(name: "community-crew-scroll").wObserveCommunityScrollOffset(handleCommunityScrollOffset)
+                .scrollDismissesKeyboard(.interactively).accessibilityIdentifier("communityCrewOverview")
+        }.background(W.paper)
+            .task(id: ui.remoteAccountScopeID) { crewFlow.setAccountScope(ui.remoteAccountScopeID); await crewFlow.loadOverview() }
+    }
+
+    func remoteCrewRow(_ title: String, subtitle: String, detail: String, id: String, joined: Bool) -> some View {
+        Button {
+            crewFlow.selectCrew(id)
+            go("C16")
+        } label: {
+            HStack(spacing: 13) {
+                ZStack { RoundedRectangle(cornerRadius: 15).fill(W.soft).frame(width: 54, height: 54); Image(systemName: "figure.run").font(.system(size: 21, weight: .medium)).foregroundStyle(W.ink) }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(W.font(15, .semibold)).foregroundStyle(W.ink)
+                    Text(subtitle).font(W.font(11)).foregroundStyle(W.muted)
+                    if !detail.isEmpty { Text(detail).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2) }
+                }
+                Spacer(minLength: 6)
+                if joined { Text("가입 중").font(W.font(10, .medium)).foregroundStyle(W.muted) }
+                else { WChevron().stroke(W.muted, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)).frame(width: 9, height: 15) }
+            }.padding(.vertical, 12).contentShape(Rectangle())
+        }.buttonStyle(.plain).overlay(alignment: .bottom) { W.line.frame(height: 1) }
+            .accessibilityIdentifier("communityCrewOpen-\(id)")
+    }
+
+    var remoteCommunityCrewDetail: some View {
+        WPage(title: "크루 소개", back: back,
+              trailing: AnyView(Button { go("C32") } label: { Image(systemName: "info.circle").font(.system(size: 19)).frame(width: 44, height: 44).contentShape(Rectangle()) }.buttonStyle(.plain).accessibilityLabel("크루 정보").accessibilityIdentifier("communityCrewInformation"))) {
+            remoteCrewLoadState(crewFlow.detailState, identifier: "remoteCrewDetail") { Task { await crewFlow.loadCrewDetail() } }
+            if let crew = crewFlow.selectedCrew {
+                Text(crew.name).font(W.font(23, .semibold)).accessibilityIdentifier("communityCrewDetailName")
+                if let intro = crew.introduction, !intro.isEmpty { Text(intro).font(W.font(14)).lineSpacing(5) }
+                Text("멤버 \(crew.memberCount)/\(crew.capacity)명").font(W.font(12)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewMemberCount")
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("가입 안내").font(W.font(15, .semibold))
+                    Text(crew.joinGuide?.isEmpty == false ? crew.joinGuide! : "등록된 가입 안내가 없어요.").font(W.font(13)).foregroundStyle(W.muted).lineSpacing(4)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(15).background(W.soft, in: RoundedRectangle(cornerRadius: 12))
+                if crewFlow.selectedApplicationForCrew != nil {
+                    Button("가입 신청 확인") { go("C18") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewCheckApplication")
+                }
+                if crew.role != nil {
+                    Button("크루 게시판 들어가기") { go("C19") }.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewEnterBoard")
+                    if crewFlow.isManager { Button("크루 관리") { go("C21") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewManage") }
+                } else if crew.status == "ACTIVE" && crew.memberCount < crew.capacity && crewFlow.selectedApplicationForCrew == nil {
+                    Button("가입 신청") { ui.communityCrewJoinMemo = ""; go("C17") }.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewJoin")
+                } else {
+                    Text(crew.status != "ACTIVE" ? "현재 가입 신청을 받고 있지 않아요." : "정원이 찼어요.").font(W.font(13)).foregroundStyle(W.muted)
+                }
+            }
+        } actions: { }
+            .task(id: crewFlow.selectedCrewID) { await crewFlow.loadCrewDetail() }
+    }
+
+    var remoteCommunityCrewJoinForm: some View {
+        WPage(title: "가입 신청", back: back) {
+            if let crew = crewFlow.selectedCrew {
+                Text(crew.name).font(W.font(21, .semibold)).accessibilityIdentifier("communityCrewJoinName")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("가입 안내").font(W.font(15, .semibold))
+                    Text(crew.joinGuide?.isEmpty == false ? crew.joinGuide! : "등록된 가입 안내가 없어요.").font(W.font(13)).foregroundStyle(W.muted).lineSpacing(4)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(15).background(W.soft, in: RoundedRectangle(cornerRadius: 12))
+            }
+            Text("신청 메모는 크루 운영자에게 보여요.").font(W.font(12)).foregroundStyle(W.muted)
+            WField(label: "가입 메모 (선택)", text: $ui.communityCrewJoinMemo, limit: 300, multiline: true, multilineHeight: 110, textSize: 14, labelSize: 13, accessibilityID: "communityCrewJoinMemo")
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("remoteCrewMutationMessage") }
+            if crewFlow.isWriteBlocked("apply|\(crewFlow.selectedCrewID ?? "")") { WNotice(text: "신청 결과를 확인하지 못했어요. 이 신청은 다시 보내지 않도록 잠겨 있어요.", danger: true) }
+        } actions: {
+            Button(crewFlow.isMutating ? "신청 중…" : "신청 보내기") {
+                let origin = ui.screen
+                Task { if await crewFlow.submitApplication(note: ui.communityCrewJoinMemo), ui.screen == origin { ui.communityCrewJoinMemo = ""; go("C18") } }
+            }.buttonStyle(WButtonStyle()).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("apply|\(crewFlow.selectedCrewID ?? "")") || crewFlow.selectedCrew?.status != "ACTIVE")
+                .accessibilityIdentifier("communityCrewSubmitApplication")
+            Button("취소", action: back).buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewCancelApplication")
+        }
+    }
+
+    var remoteCommunityCrewApplicationStatus: some View {
+        let application = crewFlow.selectedApplicationForCrew
+        return WPage(title: "가입 신청", back: back) {
+            VStack(alignment: .leading, spacing: 9) {
+                Text(application?.status == "PENDING" ? "가입 승인을 기다리고 있어요" : "현재 신청 상태를 확인할 수 없어요")
+                    .font(W.font(19, .semibold)).accessibilityIdentifier("communityCrewApplicationHeading")
+                if let crew = crewFlow.selectedCrew { Text(crew.name).font(W.font(13, .medium)).padding(.top, 4).accessibilityIdentifier("communityCrewApplicationName") }
+                if let application, let note = application.note, !note.isEmpty { Text(note).font(W.font(13)).foregroundStyle(W.muted) }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(17).background(W.soft, in: RoundedRectangle(cornerRadius: 14))
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("remoteCrewMutationMessage") }
+        } actions: {
+            if let application, application.status == "PENDING" {
+                Button(crewFlow.isMutating ? "취소 중…" : "가입 신청 취소") {
+                    pendingRemoteCrewCancellation = application; showingRemoteCrewCancellation = true
+                }.buttonStyle(WButtonStyle(kind: 1)).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("cancel|\(application.id)"))
+                    .accessibilityIdentifier("communityCrewCancelPending")
+            }
+            Button("내 신청 목록") { go("C33") }.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewReturnToApplications")
+        }
+        .alert("가입 신청을 취소할까요?", isPresented: $showingRemoteCrewCancellation) {
+            Button("유지", role: .cancel) { pendingRemoteCrewCancellation = nil }
+            Button("신청 취소", role: .destructive) {
+                guard let application = pendingRemoteCrewCancellation else { return }
+                Task { _ = await crewFlow.cancelApplication(application); pendingRemoteCrewCancellation = nil }
+            }.accessibilityIdentifier("communityCrewApplicationCancelConfirm")
+        } message: { Text("이 신청을 취소할지 서버에 확인해요.") }
+    }
+
+    var remoteCommunityCrewApplicationList: some View {
+        let applications = crewFlow.submittedApplications.filter { $0.status == "PENDING" }
+        return WPage(title: "신청 중인 크루", back: back) {
+            if applications.isEmpty {
+                Text("현재 실행에서 보낸 신청이 없어요.").font(W.font(14)).foregroundStyle(W.muted)
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .center).accessibilityIdentifier("communityCrewApplicationsEmpty")
+                WNotice(text: "신청 목록 API가 없어 이전 실행에서 보낸 신청은 이 화면에 표시되지 않아요.")
+            } else {
+                ForEach(applications) { application in
+                    HStack(spacing: 10) {
+                        Button {
+                            crewFlow.selectCrew(application.crewId)
+                            go("C18")
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(crewFlow.myCrews.first(where: { $0.id == application.crewId })?.name ?? "크루 \(application.crewId)").font(W.font(14, .medium)).foregroundStyle(W.ink)
+                                Text("승인 대기 중").font(W.font(11)).foregroundStyle(W.muted)
+                            }.frame(maxWidth: .infinity, minHeight: 60, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityIdentifier("communityCrewApplicationOpen-\(application.id)")
+                        Button("신청 취소") { pendingRemoteCrewCancellation = application; showingRemoteCrewCancellation = true }
+                            .font(W.font(12, .medium)).foregroundStyle(Color.wire(0xA92D32, 0xFF9CA3)).frame(minWidth: 68, minHeight: 44)
+                            .buttonStyle(.plain).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("cancel|\(application.id)"))
+                            .accessibilityIdentifier("communityCrewApplicationCancel-\(application.id)")
+                    }.accessibilityElement(children: .contain).accessibilityIdentifier("communityCrewApplicationRow-\(application.id)")
+                    W.line.frame(height: 1)
+                }
+            }
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError) }
+        } actions: { }
+            .alert("가입 신청을 취소할까요?", isPresented: $showingRemoteCrewCancellation) {
+                Button("유지", role: .cancel) { pendingRemoteCrewCancellation = nil }
+                Button("신청 취소", role: .destructive) {
+                    guard let application = pendingRemoteCrewCancellation else { return }
+                    Task { _ = await crewFlow.cancelApplication(application); pendingRemoteCrewCancellation = nil }
+                }.accessibilityIdentifier("communityCrewApplicationCancelConfirm")
+            } message: { Text("이 신청을 취소할지 서버에 확인해요.") }
+    }
+
+    var remoteCommunityCrewInformation: some View {
+        WPage(title: "크루 정보", back: back) {
+            if let crew = crewFlow.selectedCrew {
+                Text(crew.name).font(W.font(22, .semibold)).accessibilityIdentifier("communityCrewInfoName")
+                Text(crew.introduction ?? "").font(W.font(14)).foregroundStyle(W.muted).lineSpacing(5).accessibilityIdentifier("communityCrewInfoIntroduction")
+                remoteCrewInfoRow("멤버", value: "\(crew.memberCount)/\(crew.capacity)명", identifier: "communityCrewInfoMembers")
+                remoteCrewInfoRow("내 역할", value: crew.role ?? "미가입", identifier: "communityCrewInfoRole")
+                remoteCrewInfoRow("상태", value: crew.status == "ACTIVE" ? "모집 중" : crew.status, identifier: "communityCrewInfoStatus")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("가입 안내").font(W.font(14, .medium))
+                    Text(crew.joinGuide?.isEmpty == false ? crew.joinGuide! : "등록된 안내가 없어요.").font(W.font(14)).foregroundStyle(W.muted).lineSpacing(6)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+            } else { remoteCrewLoadState(crewFlow.detailState, identifier: "remoteCrewInfo") { Task { await crewFlow.loadCrewDetail() } } }
+        } actions: {
+            if crewFlow.selectedCrew?.role != nil { Button("게시판 보기") { go("C19") }.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewInfoBoard") }
+            if crewFlow.isManager { Button("크루 관리") { go("C21") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewInfoManage") }
+        }.task(id: crewFlow.selectedCrewID) { if crewFlow.selectedCrew == nil { await crewFlow.loadCrewDetail() } }
+    }
+
+    func remoteCrewInfoRow(_ title: String, value: String, identifier: String) -> some View {
+        HStack { Text(title).font(W.font(13)).foregroundStyle(W.muted); Spacer(); Text(value).font(W.font(13)).foregroundStyle(W.ink) }
+            .padding(.vertical, 14).overlay(alignment: .bottom) { W.line.frame(height: 1) }.accessibilityElement(children: .combine).accessibilityIdentifier(identifier)
+    }
+
+    var remoteCommunityCrewManagement: some View {
+        WPage(title: "크루 관리", back: back) {
+            if let crew = crewFlow.selectedCrew, crewFlow.isManager {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(crew.name).font(W.font(21, .semibold)).accessibilityIdentifier("communityCrewManagementName")
+                    Text("멤버 \(crew.memberCount)/\(crew.capacity)명 · \(crew.role == "OWNER" ? "크루장" : "운영자")").font(W.font(12)).foregroundStyle(W.muted)
+                }
+                Button { go("C40") } label: {
+                    HStack { Text("가입 신청 검토"); Spacer(); Text("\(crewFlow.pendingApplications.count)건").font(W.font(11)).foregroundStyle(W.muted); WChevron().stroke(W.muted, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)).frame(width: 9, height: 15) }
+                        .font(W.font(14)).frame(maxWidth: .infinity, minHeight: 56, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("communityCrewPendingApplications")
+                Button("멤버 게시판 열기") { go("C19") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewManageBoard")
+            } else {
+                WNotice(text: "크루장·운영자 권한이 확인되지 않아 관리 화면을 열 수 없어요.", danger: true).accessibilityIdentifier("communityCrewManageRestricted")
+            }
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError) }
+        } actions: { }
+            .task(id: crewFlow.selectedCrewID) {
+                await crewFlow.loadCrewDetail()
+                if crewFlow.isManager { await crewFlow.loadPendingApplications() }
+            }
+    }
+
+    var remoteCommunityCrewPendingApplications: some View {
+        WPage(title: "가입 신청", back: back) {
+            remoteCrewLoadState(crewFlow.pendingState, identifier: "remoteCrewPending") { Task { await crewFlow.loadPendingApplications() } }
+            if crewFlow.pendingState == .loaded {
+                if crewFlow.pendingApplications.isEmpty {
+                    Text("대기 중인 신청이 없어요").font(W.font(14)).foregroundStyle(W.muted).frame(maxWidth: .infinity, minHeight: 120, alignment: .center).accessibilityIdentifier("communityCrewPendingApplicationsEmpty")
+                } else {
+                    ForEach(crewFlow.pendingApplications) { application in
+                        Button {
+                            crewFlow.selectedApplication = application
+                            go("C22")
+                        } label: {
+                            HStack { VStack(alignment: .leading, spacing: 4) { Text("회원 \(application.memberId)").font(W.font(14, .semibold)); Text(application.note?.isEmpty == false ? application.note! : "메모 없음").font(W.font(12)).foregroundStyle(W.muted).lineLimit(2) }; Spacer(); WChevron().stroke(W.muted, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)).frame(width: 9, height: 15) }
+                                .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityIdentifier("communityCrewPendingRequest-\(application.id)")
+                        W.line.frame(height: 1)
+                    }
+                }
+            }
+        } actions: { }
+            .task(id: crewFlow.selectedCrewID) { await crewFlow.loadPendingApplications() }
+    }
+
+    var remoteCommunityCrewApplicationReview: some View {
+        let application = crewFlow.selectedApplication
+        return WPage(title: "가입 신청", back: back) {
+            if let application, crewFlow.isManager {
+                Text("회원 \(application.memberId)").font(W.font(16, .semibold)).accessibilityIdentifier("communityCrewApplicantName")
+                VStack(alignment: .leading, spacing: 9) {
+                    Text("가입 메모").font(W.font(14, .semibold))
+                    Text(application.note?.isEmpty == false ? application.note! : "작성한 메모가 없어요.").font(W.font(14)).lineSpacing(6).accessibilityIdentifier("communityCrewReviewMemo")
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(16).background(W.soft, in: RoundedRectangle(cornerRadius: 12))
+                if application.status != "PENDING" { Text(application.status == "APPROVED" ? "승인 완료" : "거절 완료").font(W.font(13)).foregroundStyle(W.muted) }
+                if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("communityCrewReviewError") }
+            } else { WNotice(text: "이 크루의 가입 신청을 볼 수 없어요.", danger: true).accessibilityIdentifier("communityCrewReviewRestricted") }
+        } actions: {
+            if let application, application.status == "PENDING", crewFlow.isManager {
+                HStack(spacing: 10) {
+                    Button(crewFlow.isMutating ? "처리 중…" : "거절") { let origin = ui.screen; Task { if await crewFlow.reviewApplication(approve: false), ui.screen == origin { performBack() } } }
+                        .buttonStyle(WButtonStyle(kind: 1)).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("review|\(application.id)"))
+                        .accessibilityIdentifier("communityCrewRejectApplication")
+                    Button(crewFlow.isMutating ? "처리 중…" : "승인") { let origin = ui.screen; Task { if await crewFlow.reviewApplication(approve: true), ui.screen == origin { performBack() } } }
+                        .buttonStyle(WButtonStyle()).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("review|\(application.id)"))
+                        .accessibilityIdentifier("communityCrewApproveApplication")
+                }
+            }
+            if application?.status != "PENDING" { Button("신청 목록", action: back).buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewReviewBackToRequests") }
+        }
+    }
+
+    var remoteCommunityCrewBoard: some View {
+        let crewName = crewFlow.selectedCrew?.name ?? "크루 게시판"
+        return WPage(title: crewName, back: back,
+            trailing: AnyView(Button { go("C32") } label: { Image(systemName: "info.circle").font(.system(size: 19)).frame(width: 44, height: 44).contentShape(Rectangle()) }.buttonStyle(.plain).accessibilityLabel("크루 정보").accessibilityIdentifier("communityCrewInformationFromBoard"))) {
+            if crewFlow.selectedCrew?.role == nil {
+                WNotice(text: "크루 멤버에게만 공개돼요.", danger: true).accessibilityIdentifier("communityCrewBoardRestricted")
+            } else {
+                remoteCrewLoadState(crewFlow.boardsState, identifier: "remoteCrewBoards") { Task { await crewFlow.loadBoards() } }
+            }
+            if crewFlow.selectedCrew?.role != nil && crewFlow.boardsState == .loaded {
+                if crewFlow.boards.isEmpty {
+                    Text("활성 게시판이 없어요.").font(W.font(14)).foregroundStyle(W.muted).accessibilityIdentifier("communityCrewBoardNoActiveBoards")
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(crewFlow.boards) { board in
+                                Button { crewFlow.selectedBoardID = board.id } label: {
+                                    Text(board.name).font(W.font(12, .medium)).foregroundStyle(crewFlow.selectedBoardID == board.id ? Color(red: 32/255, green: 41/255, blue: 37/255) : W.ink)
+                                        .padding(.horizontal, 14).frame(height: 38).background(crewFlow.selectedBoardID == board.id ? W.lime : W.soft, in: Capsule())
+                                }.buttonStyle(.plain).accessibilityIdentifier("communityCrewBoardTab-\(board.id)")
+                            }
+                        }
+                    }
+                    remoteCrewLoadState(crewFlow.postsState, identifier: "remoteCrewPosts") { Task { await crewFlow.loadPosts() } }
+                    if crewFlow.postsState == .loaded {
+                        if crewFlow.posts.isEmpty {
+                            Text("아직 등록된 글이 없어요").font(W.font(14, .medium)).foregroundStyle(W.muted).padding(.vertical, 18).accessibilityIdentifier("communityCrewBoardEmpty")
+                        } else {
+                            ForEach(crewFlow.posts) { post in
+                                Button { crewFlow.selectedPost = post } label: {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack { Text(post.authorNickname).font(W.font(12, .medium)); Spacer(); Text(post.createdAt).font(W.font(10)).foregroundStyle(W.muted) }
+                                        Text(post.title).font(W.font(16, .semibold)).foregroundStyle(W.ink)
+                                        Text(post.content).font(W.font(13)).foregroundStyle(W.muted).lineSpacing(4).lineLimit(3)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 13).contentShape(Rectangle())
+                                }.buttonStyle(.plain).overlay(alignment: .bottom) { W.line.frame(height: 1) }.accessibilityIdentifier("communityCrewPost-\(post.id)")
+                            }
+                        }
+                    }
+                }
+            }
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("communityCrewBoardMutationMessage") }
+        } actions: {
+            if crewFlow.selectedCrew?.role != nil, crewFlow.selectedBoard != nil {
+                Button("글쓰기") { crewFlow.postDraftTitle = ""; crewFlow.postDraftContent = ""; crewFlow.showingPostComposer = true }
+                    .buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewComposePost")
+            }
+            if crewFlow.isManager { Button("크루 관리") { go("C21") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewManageFromBoard") }
+        }
+        .task(id: crewFlow.selectedCrewID) { await crewFlow.loadBoards() }
+        .task(id: "\(crewFlow.selectedCrewID ?? "")|\(crewFlow.selectedBoardID ?? "")") { await crewFlow.loadPosts() }
+        .sheet(isPresented: Binding(get: { crewFlow.showingPostComposer }, set: { crewFlow.showingPostComposer = $0 })) { remoteCrewPostComposer }
+        .sheet(item: Binding(get: { crewFlow.selectedPost }, set: { crewFlow.selectedPost = $0 })) { post in remoteCrewPostDetail(post) }
+    }
+
+    var remoteCrewPostComposer: some View {
+        WPage(title: "크루 글쓰기", back: { crewFlow.showingPostComposer = false }) {
+            TextField("제목", text: $crewFlow.postDraftTitle).font(W.font(15)).padding(14).frame(minHeight: 54)
+                .background(W.paper, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(W.controlBorder)).accessibilityIdentifier("remoteCrewPostTitle")
+            TextEditor(text: $crewFlow.postDraftContent).font(W.font(14)).frame(minHeight: 150).padding(6)
+                .background(W.paper, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(W.controlBorder)).accessibilityIdentifier("remoteCrewPostContent")
+            if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError) }
+            if crewFlow.isWriteBlocked("post|\(crewFlow.selectedBoardID ?? "")") { WNotice(text: "게시 결과가 확인되지 않아 다시 보내지 않도록 잠겨 있어요.", danger: true) }
+        } actions: {
+            Button(crewFlow.isMutating ? "게시 중…" : "게시하기") {
+                Task { if await crewFlow.createPost(title: crewFlow.postDraftTitle, content: crewFlow.postDraftContent) { crewFlow.postDraftTitle = ""; crewFlow.postDraftContent = "" } }
+            }.buttonStyle(WButtonStyle()).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("post|\(crewFlow.selectedBoardID ?? "")") || crewFlow.postDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || crewFlow.postDraftContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("remoteCrewPostSubmit")
+            Button("취소") { crewFlow.showingPostComposer = false }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("remoteCrewPostCancel")
+        }
+    }
+
+    func remoteCrewPostDetail(_ post: BackendCrewPost) -> some View {
+        WPage(title: post.boardName, back: { crewFlow.selectedPost = nil }, backIdentifier: "remoteCrewPostDetailBack") {
+            Text(post.title).font(W.font(22, .semibold)).accessibilityIdentifier("remoteCrewPostDetailTitle")
+            HStack { Text(post.authorNickname).font(W.font(12, .medium)); Spacer(); Text(post.createdAt).font(W.font(10)).foregroundStyle(W.muted) }
+            Text(post.content).font(W.font(14)).lineSpacing(6).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("remoteCrewPostDetailBody")
+        } actions: { }
+    }
+}
+
 private struct WCommunityCourseToggleStyle:ToggleStyle {
     func makeBody(configuration:Configuration)->some View {
         Button{configuration.isOn.toggle()}label:{

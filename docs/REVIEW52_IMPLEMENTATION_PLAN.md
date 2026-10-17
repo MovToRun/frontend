@@ -33,7 +33,9 @@
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C15–C23 크루 탐색·가입·관리·심사 흐름, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C32–C43 크루 정보·신청·멤버·관리·인기글·차단 해제·최근 활동, C10–C14 인증·코스 흐름을 로컬로 구현했습니다. 크루 상태·콘텐츠와 검색 인덱스는 로컬 fixture이며 백엔드 연결이 아닙니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C15–C23 크루 탐색·가입·관리·심사 흐름, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C32–C43 크루 정보·신청·멤버·관리·인기글·차단 해제·최근 활동, C10–C14 인증·코스 흐름을 로컬로 구현했습니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+
+**2026-10-17 F010 update:** C15–C19, C21–C22, C32–C33, and C40 now use the contract-backed crew service when it is available. This replaces the earlier “crew data is all local” status for the supported slice only. Recruitment search is a local filter over the first feed page, and C33 only retains applications submitted in the current app run because the backend has no member application-list endpoint. Crew create/edit and other management screens remain local. See [F010 crew progress](F010_CREW_PROGRESS.md) for endpoint coverage, verified results, and remaining API decisions.
 
 ## 현재 구조 요약
 
@@ -229,14 +231,14 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C12` | 공유 코스 | `communityCourseDetail` — 코스 요약·작성자·경로·따라달리기 |
 | [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — 승인 로컬 계정·유효 기기 기록 선택·끝 위치 숨김·게시 미리보기 |
 | [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 60배속 로컬 시간축, 재생/정지/처음부터/끝 위치 설정 |
-| [x] | `C15` | 크루 탐색 | `communityCrewOverview` — 나의 크루/찾기, 지역·입문·주말 필터, 신청 상태 진입; 로컬 목록 예시 |
-| [x] | `C16` | 크루 소개 | `communityCrewDetail` — 안내·정원·등급 조건, 가입/게시판 진입; 로컬 fixture |
-| [x] | `C17` | 크루 가입 신청 | `communityCrewJoinForm` — 안내 확인, 선택 메모 300자, 취소/뒤로; 신청은 기기 내 예시 |
-| [x] | `C18` | 가입 신청 상태 | `communityCrewApplicationStatus` — 로컬 대기·취소 상태 및 취소/복귀 전이; 실제 승인 결과 아님 |
-| [x] | `C19` | 크루 게시판 | `communityCrewBoard` — 멤버 전용 진입, 활성 게시판별 공유 `WCommunityPost` 목록, C04 상세/수정/삭제 왕복, 안정된 크루·게시판 ID로 이름 변경·보관/복원 뒤 상태 유지 |
+| [x] | `C15` | 크루 탐색 | `communityCrewOverview` — F010: `/crews/me`와 공개 모집 게시글 첫 페이지; 모집 검색은 받은 결과 안에서 로컬 필터 |
+| [x] | `C16` | 크루 소개 | `communityCrewDetail` — F010: 서버 소개·정원·역할을 읽고 가입/게시판 진입; 지역·등급은 API 미제공 |
+| [x] | `C17` | 크루 가입 신청 | `communityCrewJoinForm` — F010: 선택 메모로 가입 신청; 중복 전송 잠금과 알 수 없는 결과 보존 |
+| [x] | `C18` | 가입 신청 상태 | `communityCrewApplicationStatus` — F010: 이번 앱 실행에서 제출한 신청 상태 및 확인 뒤 취소 |
+| [x] | `C19` | 크루 게시판 | `communityCrewBoard` — F010: 서버 게시판·목록·상세·작성; 글 수정/삭제와 게시판 관리는 별도 API 없음 |
 | [x] | `C20` | 크루 만들기·수정 | `communityCrewEditor` — 사진 로컬 선택, 이름 중복 확인, 소개·지역·등급 설정; 저장은 로컬 fixture |
-| [x] | `C21` | 크루 관리 | `communityCrewManagement` — 크루·멤버 요약, 가입 안내·게시판·알림·대기 신청 관리 진입; 로컬 fixture |
-| [x] | `C22` | 가입 신청 검토 | `communityCrewApplicationReview` — 신청 메모·정원·등급 확인, 로컬 승인/거절; 실제 가입·통지 아님 |
+| [x] | `C21` | 크루 관리 | `communityCrewManagement` — F010: 서버 역할에 따른 운영 권한과 대기 신청 진입; 변경 API 미제공 |
+| [x] | `C22` | 가입 신청 검토 | `communityCrewApplicationReview` — F010: 서버 승인/거절, 권한 오류는 서버 응답으로 처리 |
 | [x] | `C23` | 신고 | 네 가지 사유와 선택 상세(최대 300자), 로컬 접수 |
 | [x] | `C24` | 커뮤니티 알림 | `communityNotifications` — C08 전용 진입, 로컬 읽음 표시, C01/C04/C11/C18/C19 목적지 검증 및 접근 불가 대상 안내; 푸시·서버 미연동 |
 | [x] | `C25` | 신고 접수 | 접수 완료와 작성자 차단 선택 모달 |
@@ -246,15 +248,15 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C29` | 커뮤니티 검색 | `communitySearch` — 공개 게시물·프로필·크루별 결과, NFC·공백 정리·한국어 locale 대소문자 비교, 차단 사용자/크루 제외, 뒤로·상세/프로필/크루 복귀 때 검색어 유지; 로컬 fixture |
 | [x] | `C30` | 팔로워·팔로잉 | `communityConnections` — 로컬 관계 목록과 카드 미리보기 |
 | [x] | `C31` | 프로필 사진 | `communityPhotoViewer` — 등록 사진 확대 또는 빈 사진 안내 |
-| [x] | `C32` | 크루 정보 | `communityCrewInformation` — 선택 크루의 이름·소개·레벨·크루장·활성 게시판 수를 모델에서 표시; C16/C19 진입, 화면 내 로컬 데모 안내 제거; Review55 예시 값은 격리된 검토 fixture에만 사용; 상태 데이터는 서버 미연결, matched-viewport pixel/motion QA 남음 |
-| [x] | `C33` | 신청 중인 크루 | `communityCrewApplicationList` — 현재 사용자 대기 신청 목록, C18 상세 이동, 확인 후 로컬 취소; Review55 빈 상태 문구 유지, 화면 내 로컬 데모 안내 제거; 상태 데이터는 서버 미연결, matched-viewport pixel/motion QA 남음 |
+| [x] | `C32` | 크루 정보 | `communityCrewInformation` — F010: 서버가 제공하는 이름·소개·가입 안내·멤버 수·역할·상태; 지역·레벨·크루장 이름은 미표시 |
+| [x] | `C33` | 신청 중인 크루 | `communityCrewApplicationList` — F010: 현재 앱 실행 중 제출한 신청만 표시; 서버에 내 신청 목록 API 없음 |
 | [x] | `C34` | 멤버 관리 | `communityCrewMemberList` — 역할별 멤버 목록, 크루장·운영자 접근 확인; 로컬 fixture |
 | [x] | `C35` | 멤버 상세 관리 | `communityCrewMemberDetail` — 크루장만 운영자 지정/해제, 허용된 관리자만 주의 기록·멤버 내보내기; 로컬 fixture |
 | [x] | `C36` | 가입 안내 설정 | `communityCrewGuidanceSettings` — 크루장·운영자 권한, 500자 제한, 저장/취소와 변경 폐기 확인; 로컬 fixture |
 | [x] | `C37` | 게시판 관리 | `communityCrewBoardManagement` — 활성 5개 상한, 보관 목록과 복원; 글은 보존, 정원 재검사 |
 | [x] | `C38` | 게시판 편집 | `communityCrewBoardEditor` — 생성·이름 수정·보관·복원; 로컬 fixture |
 | [x] | `C39` | 크루 알림 관리 | `communityCrewAnnouncementEditor` — 제목 60자/내용 300자 제한, 회원 게시판에 로컬 예시로 표시; 실제 푸시 없음 |
-| [x] | `C40` | 가입 신청 관리 | `communityCrewPendingApplications` — 대기 목록에서 C22 심사 후 복귀; 로컬 fixture |
+| [x] | `C40` | 가입 신청 관리 | `communityCrewPendingApplications` — F010: 서버 대기 목록에서 C22 승인/거절 후 복귀; 403 권한 오류 표시 |
 | [x] | `C41` | 인기글 | `communityHotPosts` — 명시 `hot` fixture 게시물만 원래 피드 순서로 표시, 빈 상태·C04 왕복; 서버 집계 없음 |
 | [x] | `C42` | 차단한 사용자 | 차단 목록 표시, 익명 차단 신원 가림, 로컬 차단 해제 |
 | [x] | `C43` | 내 활동 기록 | `communityActivity` — 본인 로컬 열람 기록, 90일·최대 100개·중복 최신순; 차단 글은 숨김 |

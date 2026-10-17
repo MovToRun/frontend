@@ -476,6 +476,7 @@ struct WireframeRemoteReadDependencies {
     let authSessionStore: (any AuthSessionStoring)?
     let authSessionClient: AuthSessionClient?
     let runUploadAPIClient: (any APIResponseSending)?
+    let crewService: (any CrewServing)?
     let cosmeticStoreService: (any CosmeticStoreServing)?
     let pointsWalletReader: (any PointsWalletReading)?
     let cosmeticStoreSessionProvider: (any RunUploadSessionProviding)?
@@ -501,6 +502,7 @@ struct WireframeRemoteReadDependencies {
         authSessionStore: (any AuthSessionStoring)? = nil,
         authSessionClient: AuthSessionClient? = nil,
         runUploadAPIClient: (any APIResponseSending)? = nil,
+        crewService: (any CrewServing)? = nil,
         cosmeticStoreService: (any CosmeticStoreServing)? = nil,
         pointsWalletReader: (any PointsWalletReading)? = nil,
         cosmeticStoreSessionProvider: (any RunUploadSessionProviding)? = nil,
@@ -525,6 +527,7 @@ struct WireframeRemoteReadDependencies {
         self.authSessionStore = authSessionStore
         self.authSessionClient = authSessionClient
         self.runUploadAPIClient = runUploadAPIClient
+        self.crewService = crewService
         self.cosmeticStoreService = cosmeticStoreService
         self.pointsWalletReader = pointsWalletReader
         self.cosmeticStoreSessionProvider = cosmeticStoreSessionProvider
@@ -3602,6 +3605,12 @@ struct RootView:View {
         if let remoteReadDependencies { return remoteReadDependencies }
         let args = ProcessInfo.processInfo.arguments
         let authComposition = WireframeAuthSessionComposition.resolve(arguments: args)
+        #if DEBUG
+        let crewFixtureService: (any CrewServing)? = WReviewMode.tools && args.contains("-wire-crew-api-fixture")
+            ? WireframeCrewServiceFixture(arguments: args) : nil
+        #else
+        let crewFixtureService: (any CrewServing)? = nil
+        #endif
         let runFixture = args.contains("-wire-run-records-fixture")
         let runEditFixture = args.contains("-wire-run-records-edit-fixture")
         let runDeleteFixture = args.contains("-wire-run-records-delete-fixture")
@@ -3716,7 +3725,7 @@ struct RootView:View {
                 pointsWalletReader = nil
             }
         }
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || cosmeticStoreFixture != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || cosmeticStoreFixture != nil || crewFixtureService != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -3779,6 +3788,7 @@ struct RootView:View {
             authSessionStore:passwordResetSessionStore ?? authComposition.store,
             authSessionClient:authComposition.client,
             runUploadAPIClient:authComposition.apiClient,
+            crewService:crewFixtureService,
             cosmeticStoreService:cosmeticStoreService,
             pointsWalletReader:pointsWalletReader,
             cosmeticStoreSessionProvider:cosmeticStoreSessionProvider,
@@ -4091,6 +4101,9 @@ struct WireframeRoot:View {
     @State var pointsStore:WPointsStore
     @StateObject var cosmeticStoreFlow:CosmeticStoreFlow
     @State var remoteReads:WireframeRemoteReadBridge
+    @State var crewFlow:WireframeCrewRemoteFlow
+    @State var pendingRemoteCrewCancellation:BackendCrewApplication?
+    @State var showingRemoteCrewCancellation=false
     let cosmeticStoreFixture: Bool
     let mediaUploadClient: MediaUploadClient?
     let communityMediaClient: CommunityMediaClient?
@@ -4148,6 +4161,14 @@ struct WireframeRoot:View {
         _authSessionFixtureStore=State(initialValue:remoteReadDependencies?.authSessionStore as? WireframeAuthSessionFixtureStore)
         #endif
         _authSessionClient=State(initialValue:remoteReadDependencies?.authSessionClient)
+        let crewService: (any CrewServing)? = remoteReadDependencies?.crewService ?? {
+            guard let dependencies = remoteReadDependencies,
+                  let apiClient = dependencies.runUploadAPIClient,
+                  let sessionStore = dependencies.authSessionStore,
+                  let authClient = dependencies.authSessionClient else { return nil }
+            return CrewClient(apiClient: apiClient, sessionProvider: WireframeRunUploadSessionProvider(sessionStore: sessionStore, authClient: authClient))
+        }()
+        _crewFlow=State(initialValue:WireframeCrewRemoteFlow(service:crewService))
         #if DEBUG
         let socialLoginFixture: SocialLoginCoordinator? = {
             guard WReviewMode.tools, args.contains("-wire-social-login-fixture") else{return nil}
@@ -4337,6 +4358,7 @@ struct WireframeRoot:View {
                 }
             }
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in
+                crewFlow.setAccountScope(scopeID)
                 cosmeticStoreFlow.accountContextDidChange()
                 handleRemoteAccountScopeChange(scopeID)
             }
@@ -4390,6 +4412,7 @@ struct WireframeRoot:View {
                     await cosmeticStoreFlow.refreshProduct(id:productID)
                 }
             }
+            .task(id:ui.remoteAccountScopeID){ crewFlow.setAccountScope(ui.remoteAccountScopeID) }
             .task {
                 runUploadNetworkMonitor.onReconnect={Task{@MainActor in _=await store.retryPendingRunUploads()}}
                 runUploadNetworkMonitor.start()
@@ -4496,7 +4519,7 @@ struct WireframeRoot:View {
 #endif
                 if let i=args.firstIndex(of:"-wire-community-viewer"),args.indices.contains(i+1){ui.communityViewerMemberID=args[i+1]}
                 if WReviewMode.tools && args.contains("-wire-community-not-member"){ui.communityJoinedCrewIDs.removeAll()}
-                if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-crew"),args.indices.contains(i+1){ui.communitySelectedCrewID=args[i+1]}
+                if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-crew"),args.indices.contains(i+1){ui.communitySelectedCrewID=args[i+1];if crewFlow.isAvailable{crewFlow.selectCrew(args[i+1])}}
                 if WReviewMode.tools,let i=args.firstIndex(of:"-wire-community-board"),args.indices.contains(i+1){ui.communityCrewBoardID=args[i+1]}
                 if reviewTools && args.contains("-wire-community-crew-data-test"),var crew=WCommunityCrewFixtures.values.first(where:{$0.id=="dawn"}) {
                     crew=WCommunityCrewFixtures.informationReviewFixture(crew,introduction:"선택된 크루 소개",ownerMemberID:"fixture-member-ga-on",level:7,boards:Array(crew.boards.prefix(1)));ui.communityCrewOverrides[crew.id]=crew
@@ -4742,7 +4765,7 @@ struct WireframeRoot:View {
         if ["H04","H10"].contains(ui.screen),route != ui.screen{remoteReads.cancelWeeklyGoalMutation()}
         if ui.screen=="M02",route != ui.screen{cancelMemberProfilePhotoUpload()}
         if ["M02","T02"].contains(ui.screen),route != ui.screen{remoteReads.cancelMemberProfileMutation();restoreMemberProfileDraft()}
-        if route=="C19"{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}}
+        if route=="C19" && !crewFlow.isAvailable{guard let crew=communityCrew(),communityCrewIsMember(crew) else{return}}
         if route=="A01" && ui.screen=="T10"{shareWorkspace.clear()}
         let mapStates=["R01","R02","R03","R04","R05","R07","R08","R10"]
         let duration=mapStates.contains(ui.screen) && mapStates.contains(route) ? 0.3:((ui.screen=="L01" && route=="L04") || (ui.screen=="L04" && route=="L01")) ? 0.32:0.24
@@ -5108,27 +5131,27 @@ struct WireframeRoot:View {
         case "C12":communityCourseDetail
         case "C13":communityCourseCompose
         case "C14":communityGhostRun
-        case "C15":communityCrewOverview
-        case "C16":communityCrewDetail
-        case "C17":communityCrewJoinForm
-        case "C18":communityCrewApplicationStatus
-        case "C19":communityCrewBoard
+        case "C15":if crewFlow.isAvailable{remoteCommunityCrewOverview()}else{communityCrewOverview}
+        case "C16":if crewFlow.isAvailable{remoteCommunityCrewDetail}else{communityCrewDetail}
+        case "C17":if crewFlow.isAvailable{remoteCommunityCrewJoinForm}else{communityCrewJoinForm}
+        case "C18":if crewFlow.isAvailable{remoteCommunityCrewApplicationStatus}else{communityCrewApplicationStatus}
+        case "C19":if crewFlow.isAvailable{remoteCommunityCrewBoard}else{communityCrewBoard}
         case "C20":communityCrewEditor
-        case "C21":communityCrewManagement
-        case "C22":communityCrewApplicationReview
+        case "C21":if crewFlow.isAvailable{remoteCommunityCrewManagement}else{communityCrewManagement}
+        case "C22":if crewFlow.isAvailable{remoteCommunityCrewApplicationReview}else{communityCrewApplicationReview}
         case "C36":communityCrewGuidanceSettings
         case "C37":communityCrewBoardManagement
         case "C38":communityCrewBoardEditor
         case "C39":communityCrewAnnouncementEditor
-        case "C40":communityCrewPendingApplications
+        case "C40":if crewFlow.isAvailable{remoteCommunityCrewPendingApplications}else{communityCrewPendingApplications}
         case "C34":communityCrewMemberList
         case "C35":communityCrewMemberDetail
         case "C07":communityCardPreview
         case "C08":communityRunnerProfile
         case "C30":communityConnections
         case "C31":communityPhotoViewer
-        case "C32":communityCrewInformation
-        case "C33":communityCrewApplicationList
+        case "C32":if crewFlow.isAvailable{remoteCommunityCrewInformation}else{communityCrewInformation}
+        case "C33":if crewFlow.isAvailable{remoteCommunityCrewApplicationList}else{communityCrewApplicationList}
         case "C23":communityReport
         case "C24":communityNotifications
         case "C25":communityReportReceipt

@@ -992,6 +992,17 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
+    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,delayedWrites:Bool=false,crewID:String?="101") {
+        app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-crew-api-fixture","-wire-test-store-suite","remote-crew-\(UUID().uuidString)","-wire-reset","-appearance","light"]
+        if manager { app.launchArguments.append("-wire-crew-fixture-manager") }
+        if nonMember { app.launchArguments.append("-wire-crew-fixture-non-member") }
+        if failMyCrewsOnce { app.launchArguments.append("-wire-crew-fixture-fail-my-crews-once") }
+        if delayedWrites { app.launchArguments.append("-wire-crew-fixture-delay-writes") }
+        if let crewID { app.launchArguments += ["-wire-community-crew",crewID] }
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10),app.debugDescription)
+    }
+
     private func openCommunitySettingsFromProfile() {
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
         app.buttons["community-tab-profile"].tap()
@@ -1138,6 +1149,111 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5),"Back preserves navigation and does not submit a request")
+    }
+
+    func testRemoteCrewSearchApplyCancelEmptyStateAndCommunityTab() {
+        openRemoteCrewFixture("C15",nonMember:true,crewID:nil)
+        let crewTab=app.buttons["community-tab-crew"]
+        XCTAssertTrue(crewTab.waitForExistence(timeout:5),"The community-specific bottom tab stays visible on C15")
+        XCTAssertTrue(crewTab.isSelected)
+        app.buttons["communityCrewTab-find"].tap()
+        let search=app.textFields["remoteCrewSearchField"]
+        XCTAssertTrue(search.waitForExistence(timeout:5))
+        search.tap();search.typeText("새벽")
+        let recruitment=app.buttons["remoteCrewRecruitment-401"]
+        XCTAssertTrue(recruitment.waitForExistence(timeout:5),app.debugDescription)
+        recruitment.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCrewDetailName"].waitForExistence(timeout:5))
+        app.buttons["communityCrewJoin"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        let submit=app.buttons["communityCrewSubmitApplication"]
+        submit.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationHeading"].label.contains("가입 승인을 기다리고 있어요"))
+        app.buttons["communityCrewCancelPending"].tap()
+        XCTAssertTrue(app.alerts["가입 신청을 취소할까요?"].waitForExistence(timeout:3))
+        app.alerts.buttons.matching(identifier:"communityCrewApplicationCancelConfirm").firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewMutationMessage"].waitForExistence(timeout:5))
+        app.buttons["communityCrewReturnToApplications"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C33"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationsEmpty"].exists)
+        XCTAssertFalse(app.buttons["community-tab-crew"].exists,"The community tab bar is shown only on community root screens")
+    }
+
+    func testRemoteCrewReadFailureCanBeRetried() {
+        openRemoteCrewFixture("C15",failMyCrewsOnce:true,crewID:nil)
+        let error=app.staticTexts["remoteMyCrewsError"]
+        XCTAssertTrue(error.waitForExistence(timeout:8),app.debugDescription)
+        let retry=app.buttons["remoteMyCrewsRetry"]
+        XCTAssertTrue(retry.exists)
+        retry.tap()
+        XCTAssertTrue(app.buttons["communityCrewOpen-101"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(error.exists,"An explicit retry clears the previous read error")
+    }
+
+    func testRemoteCrewManagerCanApproveAndRejectAndMemberCannotReadQueue() {
+        openRemoteCrewFixture("C15",manager:true,crewID:nil)
+        app.buttons["communityCrewOpen-101"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewManage"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5))
+        let pendingEntry=app.buttons["communityCrewPendingApplications"]
+        XCTAssertTrue(pendingEntry.waitForExistence(timeout:5))
+        XCTAssertTrue(pendingEntry.label.contains("2건"),app.debugDescription)
+        pendingEntry.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:5))
+        let first=app.buttons["communityCrewPendingRequest-301"]
+        XCTAssertTrue(first.waitForExistence(timeout:5));first.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C22"].waitForExistence(timeout:5))
+        app.buttons["communityCrewApproveApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["communityCrewPendingRequest-301"].exists)
+        let second=app.buttons["communityCrewPendingRequest-302"]
+        XCTAssertTrue(second.waitForExistence(timeout:5));second.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C22"].waitForExistence(timeout:5))
+        app.buttons["communityCrewRejectApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C40"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["communityCrewPendingApplicationsEmpty"].waitForExistence(timeout:5))
+
+        app.terminate()
+        openRemoteCrewFixture("C40",manager:false,crewID:"101")
+        XCTAssertTrue(app.staticTexts["remoteCrewPendingError"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.staticTexts["이 화면을 볼 권한이 없어요."].exists)
+        XCTAssertFalse(app.buttons["communityCrewPendingRequest-301"].exists)
+    }
+
+    func testRemoteCrewRequestStaysOnceWhenLeavingWhileInFlightAndBoardPostFlow() {
+        openRemoteCrewFixture("C16",nonMember:true,delayedWrites:true,crewID:"101")
+        let join=app.buttons["communityCrewJoin"]
+        XCTAssertTrue(join.waitForExistence(timeout:5));join.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5))
+        let submit=app.buttons["communityCrewSubmitApplication"]
+        submit.tap()
+        XCTAssertFalse(submit.isEnabled,"The in-flight guard blocks a repeated tap")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewCheckApplication"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].exists,"Completing a request after leaving C17 does not force navigation")
+        app.buttons["communityCrewCheckApplication"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C18"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["communityCrewApplicationHeading"].label.contains("가입 승인을 기다리고 있어요"))
+        app.buttons["뒤로"].tap()
+        app.terminate()
+        openRemoteCrewFixture("C16",crewID:"101")
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewBoardTab-501"].waitForExistence(timeout:8))
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8))
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:5))
+        app.buttons["remoteCrewPostDetailBack"].tap()
+        app.buttons["communityCrewComposePost"].tap()
+        XCTAssertTrue(app.textFields["remoteCrewPostTitle"].waitForExistence(timeout:5))
+        app.textFields["remoteCrewPostTitle"].tap();app.textFields["remoteCrewPostTitle"].typeText("새벽 모임 안내")
+        app.textViews["remoteCrewPostContent"].tap();app.textViews["remoteCrewPostContent"].typeText("토요일 오전 여덟 시에 만나요.")
+        app.buttons["remoteCrewPostSubmit"].tap()
+        XCTAssertTrue(app.staticTexts["새벽 모임 안내"].waitForExistence(timeout:8),app.debugDescription)
     }
 
     func testCommunityCrewInformationMatchesWireframeAndRoutesFromDetailAndBoard() {
