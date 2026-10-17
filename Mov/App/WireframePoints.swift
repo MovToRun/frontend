@@ -612,8 +612,11 @@ extension WireframeRoot {
         let canPurchase = serverProduct.map(cosmeticStoreFlow.canPurchase) ?? false
         let failureMessage: String? = {
             if case .failed(let failure) = cosmeticStoreFlow.purchaseState { return failure.userMessage }
-            if case .failed(let failure) = cosmeticStoreFlow.productState, failure == .productUnavailable || failure == .notFound {
-                return failure.userMessage
+            if case .failed(let failure) = cosmeticStoreFlow.productState {
+                switch failure {
+                case .productUnavailable, .notFound: return failure.userMessage
+                default: break
+                }
             }
             return nil
         }()

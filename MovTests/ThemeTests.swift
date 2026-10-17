@@ -1399,43 +1399,30 @@ final class ThemeTests:XCTestCase {
         XCTAssertNil(WProfilePhotoPolicy.sanitizeStored(large.jpegData(compressionQuality:0.8)))
     }
 
-    @MainActor func testPointStorePurchaseDeductsAndPersistsLocally() {
+    @MainActor func testPointOverviewExampleDataPersistsWithoutAStorePurchasePath() {
         let suite = "MovTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = WPointsStore(defaults: defaults)
-        let product = WPointProduct.catalog[0]
-        let startingBalance = store.balance
-        XCTAssertTrue(store.canPurchase(product))
-        XCTAssertTrue(store.purchase(product, at: Date(timeIntervalSince1970: 1_800_000_000)))
-        XCTAssertEqual(store.balance, startingBalance - product.price)
-        XCTAssertTrue(store.ownedItemIDs.contains(product.id))
-        XCTAssertEqual(store.entries.first?.amount, -product.price)
-        XCTAssertFalse(store.canPurchase(product), "An owned sample item cannot be purchased twice")
-        let balanceAfterPurchase = store.balance
-        let entriesAfterPurchase = store.entries
-        XCTAssertFalse(store.purchase(product), "A repeated local purchase must not mutate state")
-        XCTAssertEqual(store.balance, balanceAfterPurchase)
-        XCTAssertEqual(store.entries, entriesAfterPurchase)
+        XCTAssertEqual(store.balance, 1_250)
+        XCTAssertTrue(store.entries.contains { $0.detail == "사용 내역 예시" })
+        XCTAssertTrue(store.ownedItemIDs.isEmpty)
 
         let reloaded = WPointsStore(defaults: defaults)
         XCTAssertEqual(reloaded.balance, store.balance)
-        XCTAssertTrue(reloaded.ownedItemIDs.contains(product.id))
-        XCTAssertEqual(reloaded.entries.first?.title, product.name)
+        XCTAssertEqual(reloaded.entries, store.entries)
+        XCTAssertTrue(reloaded.ownedItemIDs.isEmpty)
     }
 
-    @MainActor func testPointStoreRejectsInsufficientLocalPurchase() {
+    @MainActor func testPointOverviewInsufficientFixtureOnlyChangesExampleBalance() {
         let suite = "MovTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = WPointsStore(defaults: defaults, insufficientFixture: true)
-        let product = WPointProduct.catalog[0]
         let originalEntries = store.entries
-        XCTAssertFalse(store.canPurchase(product))
-        XCTAssertFalse(store.purchase(product))
         XCTAssertEqual(store.balance, 100)
         XCTAssertEqual(store.entries, originalEntries)
-        XCTAssertFalse(store.ownedItemIDs.contains(product.id))
+        XCTAssertTrue(store.ownedItemIDs.isEmpty)
     }
 
     @MainActor func testPointStoreMigratesV1WithoutLosingBalanceHistoryOrLegacyOwnership() throws {
@@ -1491,7 +1478,7 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), staleV1)
     }
 
-    @MainActor func testPointStorePreservesCorruptDataAndDisablesMutation() throws {
+    @MainActor func testPointStorePreservesCorruptDataWithoutReplacingItWithExamples() throws {
         let suite = "MovTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -1505,9 +1492,6 @@ final class ThemeTests:XCTestCase {
         XCTAssertEqual(store.balance, 0)
         XCTAssertTrue(store.entries.isEmpty)
         XCTAssertTrue(store.ownedItemIDs.isEmpty)
-        let product = WPointProduct.catalog[0]
-        XCTAssertFalse(store.canPurchase(product))
-        XCTAssertFalse(store.purchase(product))
         XCTAssertEqual(defaults.data(forKey: "mov.points.local.v2"), corruptV2)
         XCTAssertEqual(defaults.data(forKey: "mov.points.local.v1"), validV1)
 

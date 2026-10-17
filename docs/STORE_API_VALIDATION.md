@@ -36,8 +36,9 @@
 
 ### F009 로컬 검사
 
-- `swift build` — 성공 (MovNetworking 디버그 타깃).
-- `swift build -c release` — 성공 (MovNetworking 릴리스 타깃).
-- `swift test` — XCTest를 import하는 시점에 실패했습니다. 현재 실행 환경은 Xcode 대신 Command Line Tools이며 XCTest 모듈이 없습니다. 요청된 순수 단위 테스트는 추가했지만 실행 증거는 없습니다.
-- `xcodebuild ... build-for-testing` — 실행 환경에 `xcodebuild`가 없어 시작하지 못했습니다. active developer directory는 `/Library/Developer/CommandLineTools`입니다.
-- UI 테스트와 앱 실행은 이 작업에서 하지 않았습니다.
+- 독립 검토에서 발견한 컴파일 오류를 수정했습니다. associated-value 실패 enum을 패턴 매칭하고, `ThemeTests`에서 제거된 로컬 상점 구매 API를 호출하던 테스트를 샘플 잔액/내역 보존 검증으로 바꿨습니다.
+- Xcode 26.3 Swift toolchain에서 전체 `swift test` — 203 tests passed, 0 failures. `--filter CosmeticStore` — 19 tests passed, 0 failures.
+- iOS Simulator SDK Debug `xcodebuild build-for-testing` — 성공.
+- 최적화된 Release `xcodebuild build-for-testing` — `ENABLE_TESTABILITY=YES` 명령행 재정의로 성공. 테스트 타깃이 `@testable import MovUITestHost`를 사용하므로 해당 설정이 필요하며 프로젝트 설정은 변경하지 않았습니다.
+- Debug 및 Release 제품 경로에서 `scripts/verify-ui-test-isolation.sh` — 모두 성공. MovUITestHost/runner와 UUID 격리 fixture 구성을 확인했고, Mov 제품 앱 산출물 및 `DependentProductPaths` 참조가 없음을 확인했습니다.
+- UI 테스트 실행, 실제 앱 설치/실행, 실제 서버 호출은 하지 않았습니다. 첫 검증 기록의 Command Line Tools/XCTest 제한은 Xcode developer directory를 지정한 이번 재검증으로 해소됐습니다.
