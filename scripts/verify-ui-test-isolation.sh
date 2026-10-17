@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ui_tests="$repo_root/MovUITests/LaunchTests.swift"
 scheme="$repo_root/Mov.xcodeproj/xcshareddata/xcschemes/Mov.xcscheme"
+project="$repo_root/Mov.xcodeproj/project.pbxproj"
 
 fail() {
     printf 'UI-test isolation check failed: %s\n' "$1" >&2
@@ -37,10 +38,21 @@ expected_ui_test_id='local.mov.prototype.MovUITests'
 test "$PRODUCT_BUNDLE_IDENTIFIER" = "$expected_unit_test_id" \
     || fail "resolved test-action bundle ID is '$PRODUCT_BUNDLE_IDENTIFIER', expected $expected_unit_test_id (a command-line build-setting override may be active)"
 
+# The production app stays a normal Run/Archive target, but it must not be in
+# the build-for-testing product graph. Its identity is checked from project
+# settings; the test build must not materialize Mov.app at all.
+product_id_occurrences=$(/usr/bin/grep -F -c "PRODUCT_BUNDLE_IDENTIFIER = $expected_product_id;" "$project" || true)
+test "$product_id_occurrences" -eq 2 \
+    || fail "project no longer declares the production bundle ID $expected_product_id in both app configurations"
+
 plist_value() {
     /usr/bin/plutil -extract "$2" raw -o - "$1" 2>/dev/null \
         || fail "missing or unreadable $2 in built plist: $1"
 }
+
+source_product_id=$(plist_value "$repo_root/Mov/Info.plist" CFBundleIdentifier)
+test "$source_product_id" = '$(PRODUCT_BUNDLE_IDENTIFIER)' \
+    || fail "source product Info.plist uses unexpected CFBundleIdentifier '$source_product_id'"
 
 verify_app() {
     bundle=$1
@@ -82,7 +94,6 @@ verify_test_bundle() {
         || fail "$label test-bundle executable is missing: $executable"
 }
 
-product_app="$products_dir/Mov.app"
 host_app="$products_dir/MovUITestHost.app"
 ui_runner="$products_dir/MovUITests-Runner.app"
 unit_bundle="$host_app/PlugIns/MovTests.xctest"
@@ -93,7 +104,9 @@ test -f "$1" || fail "build-for-testing configuration is missing beside built pr
 test "$#" -eq 1 || fail "expected one Mov .xctestrun configuration, found $#"
 xctestrun=$1
 
-verify_app "$product_app" "$expected_product_id" Mov 'product app'
+if [ -e "$products_dir/Mov.app" ] || [ -L "$products_dir/Mov.app" ]; then
+    fail "production app artifact must be excluded from build-for-testing products: $products_dir/Mov.app"
+fi
 verify_app "$host_app" "$expected_host_id" MovUITestHost 'test host'
 verify_app "$ui_runner" - - 'UI test runner'
 verify_test_bundle "$unit_bundle" "$expected_unit_test_id" 'unit test'
@@ -124,6 +137,22 @@ xctestrun_value() {
     /usr/bin/plutil -extract "$1" raw -o - "$xctestrun" 2>/dev/null \
         || fail "missing $1 in build-for-testing configuration: $xctestrun"
 }
+
+xctestrun_array_json() {
+    /usr/bin/plutil -extract "$1" json -o - "$xctestrun" 2>/dev/null \
+        || fail "missing $1 in build-for-testing configuration: $xctestrun"
+}
+
+verify_no_product_app_dependencies() {
+    target=$1
+    dependencies=$(xctestrun_array_json "$target.DependentProductPaths")
+    if printf '%s\n' "$dependencies" | /usr/bin/grep -Eiq '(^|[/"])Mov[.]app([/"]|$)'; then
+        fail "$target DependentProductPaths references the production Mov.app: $dependencies"
+    fi
+}
+
+verify_no_product_app_dependencies MovTests
+verify_no_product_app_dependencies MovUITests
 
 resolve_testroot_path() {
     case "$1" in
@@ -190,8 +219,11 @@ if ! /usr/bin/perl -0e '
             && $scheme =~ /verify-ui-test-isolation\.sh/;
     die "TestAction must include both unit and UI test targets\n"
         unless $scheme =~ /BlueprintName = "MovTests"/ && $scheme =~ /BlueprintName = "MovUITests"/;
+    die "The product app must be excluded from build-for-testing while the isolated host remains included\n"
+        unless $scheme =~ /<BuildActionEntry\s+buildForTesting = "NO"[\s\S]*?BlueprintName = "Mov"\s*\n/
+            && $scheme =~ /<BuildActionEntry\s+buildForTesting = "YES"[\s\S]*?BlueprintName = "MovUITestHost"/;
 ' "$ui_tests" "$scheme"; then
     fail 'test artifacts exist, but UUID-scoped UserDefaults/Keychain launch configuration or TestAction wiring is invalid'
 fi
 
-printf 'Verified built product/host/runner/test-bundle plists, resolved TEST_HOST executable, build-for-testing host paths, and UUID-scoped test fixtures.\n'
+printf 'Verified no Mov.app test artifact or DependentProductPaths reference, test host/runner/bundle plists, resolved TEST_HOST executable, build-for-testing host paths, and UUID-scoped fixtures.\n'
