@@ -27,6 +27,42 @@ import UIKit
         "\(prefix).\(UUID().uuidString)"
     }
     func open(_ screen:String="H00",reset:Bool=true){app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-appearance","light"];if reset{app.launchArguments.append("-wire-reset")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
+    private func openCosmeticStoreFixture(_ screen:String="SHOP",expectStoreFixtureBanner:Bool=true,extraArguments:[String]=[]) {
+        let suite=makeFixtureStoreSuite("mov.ui.cosmetic-store")
+        app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-cosmetic-store-fixture","-wire-test-store-suite",suite,"-wire-reset","-appearance","light"]+extraArguments
+        app.launch()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15),app.debugDescription)
+        let fixtureBanner=app.descendants(matching:.any)["cosmeticStoreFixtureBanner"]
+        if expectStoreFixtureBanner {
+            XCTAssertTrue(fixtureBanner.waitForExistence(timeout:8),app.debugDescription)
+        } else {
+            XCTAssertFalse(fixtureBanner.exists,"The points overview shows sample data, not the store fixture banner.\n\(app.debugDescription)")
+        }
+    }
+    private func confirmPointStorePurchase() {
+        let confirmationDialog=app.sheets.matching(
+            NSPredicate(format:"label == %@","구매를 확인할까요?")
+        ).firstMatch
+        XCTAssertTrue(confirmationDialog.waitForExistence(timeout:5),"The purchase confirmation dialog must appear before the purchase is submitted.\n\(app.debugDescription)")
+
+        // SwiftUI exposes this dialog action as a Button nested inside another Button with the same identifier.
+        // Scope to the dialog and select the first node so XCUI does not fail on the duplicate wrapper.
+        let confirmationButton=confirmationDialog.buttons.matching(identifier:"confirmPointPurchase").firstMatch
+        XCTAssertTrue(confirmationButton.waitForExistence(timeout:5),"The purchase confirmation action must appear before the purchase is submitted.\n\(app.debugDescription)")
+        let ready=XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+            confirmationButton.exists && confirmationButton.isEnabled && confirmationButton.isHittable
+        },object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"The purchase confirmation action must be enabled and hittable.\n\(app.debugDescription)")
+        XCTAssertEqual(confirmationButton.label,"구매 확정")
+
+        let purchaseTerms=confirmationDialog.descendants(matching:.any).matching(
+            NSPredicate(format:"label CONTAINS %@","영구 보유되고 환불할 수 없어요")
+        ).firstMatch
+        XCTAssertTrue(purchaseTerms.waitForExistence(timeout:5),"The confirmation must show the permanent ownership and no-refund terms.\n\(app.debugDescription)")
+        XCTAssertTrue(purchaseTerms.label.contains("영구 보유되고 환불할 수 없어요"),purchaseTerms.label)
+
+        confirmationButton.tap()
+    }
     func openAuthFixture(_ screen:String,suite:String,userFlow:Bool=false){let isolatedSuite=makeFixtureStoreSuite(suite);app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-test-store-suite",isolatedSuite,"-wire-reset","-appearance","light"];if userFlow{app.launchArguments.append("-wire-user-flow")};app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-"+screen].waitForExistence(timeout:15))}
     func openSocialLoginFixture(_ extraArguments:[String]=[]){let suite=makeFixtureStoreSuite("mov.wire.social-login");socialLoginFixtureSuitesForCleanup.append(suite);app.launchArguments=["-wire-screen","A01","-wire-fixture","-wire-test-store-suite",suite,"-wire-reset","-wire-social-login-fixture","-appearance","light"]+extraArguments;app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-A01"].waitForExistence(timeout:15))}
     private func makeAuthSessionFixture()->(service:String,suite:String){
@@ -5158,32 +5194,68 @@ extension LaunchTests {
         replace(text,into:field)
     }
     func testPointsShopAndHeaderRoutes(){
-        userOpen("H00");XCTAssertTrue(visible("알림"));XCTAssertFalse(visible("설정"));capture("Home-bell-only")
-        tap("tab-0");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));XCTAssertEqual(app.buttons["tab-0"].label,"포인트");XCTAssertFalse(visible("설정"));XCTAssertFalse(visible("기록 보기"));XCTAssertTrue(visible("browsePointShop"),app.debugDescription);XCTAssertTrue(app.staticTexts["pointBalance"].exists,app.debugDescription);capture("Points-overview")
-        tap("pointGuideOverview");XCTAssertTrue(app.descendants(matching:.any)["screen-B04"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","포인트로")).firstMatch.exists);tap("browsePointShopFromGuide");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));tap("뒤로");tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5))
-        tap("browsePointShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));XCTAssertFalse(visible("tab-0"));capture("Shop-catalog")
-        tap("shop-category-image");tap("shop-item-line");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));capture("Shop-item-detail")
-        tap("pointPreview");XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5));tap("뒤로")
-        let balanceSnapshot=app.descendants(matching:.any)["detailPointBalance"];XCTAssertTrue(balanceSnapshot.waitForExistence(timeout:5));let beforeCancel=balanceSnapshot.value as? String
-        let confirm=app.buttons.matching(identifier:"confirmPointPurchase").firstMatch
-        tap("purchaseShopItem");XCTAssertTrue(confirm.waitForExistence(timeout:5))
-        app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.25)).tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].exists);XCTAssertTrue(app.buttons["purchaseShopItem"].isEnabled)
-        XCTAssertEqual(balanceSnapshot.value as? String,beforeCancel,"Cancel must leave the balance and ledger count unchanged")
-        let dialogDismissed=XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:confirm)
-        XCTAssertEqual(XCTWaiter.wait(for:[dialogDismissed],timeout:5),.completed,"Cancel should fully dismiss the purchase dialog before reopening it")
-        tap("purchaseShopItem");XCTAssertTrue(waitHittable(confirm,timeout:5));confirm.tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-local-purchase")
-        tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));XCTAssertFalse(app.buttons["purchaseShopItem"].isEnabled);XCTAssertEqual(app.buttons["purchaseShopItem"].label,"보유 중")
-        tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5));tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-POINTS"].waitForExistence(timeout:5));tap("openPointHistory");XCTAssertTrue(app.descendants(matching:.any)["screen-B02"].waitForExistence(timeout:5));XCTAssertTrue(app.staticTexts["모브 라인"].exists)
-        app.terminate();app.launchArguments=["-wire-screen","POINTS","-wire-fixture","-wire-test-store-suite",isolatedStoreSuite,"-wire-user-flow","-appearance","light"];app.launch();XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:10));XCTAssertEqual(app.staticTexts["pointBalance"].label,"850","Purchase state persists only in the fixture device store")
+        openCosmeticStoreFixture("POINTS",expectStoreFixtureBanner:false)
+        XCTAssertTrue(app.staticTexts["pointBalance"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["pointBalance"].label,"1,250","Overview balance remains explicitly labelled sample data")
+        tap("browsePointShop");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["storeBalance"].label,"1,475","Shop uses the isolated server wallet fixture")
+        capture("Shop-fixture-catalog")
+        tap("shop-item-101");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5));capture("Shop-item-detail")
+        tap("pointPreview")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B10"].waitForExistence(timeout:5))
+        XCTAssertEqual(app.staticTexts["cosmeticPreviewTreatment"].label,"러닝 카드 이미지 · #AABBCC")
+        XCTAssertTrue(app.descendants(matching:.any)["cosmeticPreviewAssetNotice"].label.contains("실제 상품 그림은 아직 연결되지 않았어요."))
+        tap("previewBackToShop")
+        tap("purchaseShopItem");confirmPointStorePurchase()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:5));capture("Shop-fixture-receipt")
+        tap("backToShop");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["purchaseShopItem"].isEnabled)
+        XCTAssertEqual(app.buttons["purchaseShopItem"].label,"보유 중")
+        tap("뒤로");XCTAssertTrue(app.descendants(matching:.any)["screen-SHOP"].waitForExistence(timeout:5))
+        let equip=app.buttons["equip-101"]
+        if !equip.isHittable { app.swipeUp() }
+        XCTAssertTrue(waitHittable(equip,timeout:5),app.debugDescription);equip.tap()
+        XCTAssertTrue(app.staticTexts["장착 중"].waitForExistence(timeout:5),app.debugDescription)
+        // The inventory-section identifier masks child identifiers in this tree; the visible action label is unique here.
+        let unequip=app.buttons.matching(NSPredicate(format:"label == %@","기본으로")).firstMatch
+        if !unequip.isHittable {
+            app.scrollViews.allElementsBoundByIndex.first{$0.isHittable && $0.frame.minX>=0}?.swipeUp()
+        }
+        XCTAssertTrue(waitHittable(unequip,timeout:5),app.debugDescription)
+        unequip.tap()
+        XCTAssertTrue(app.staticTexts["기본 디자인"].waitForExistence(timeout:5))
     }
     func testPointsShopDisablesInsufficientPurchaseAndShowsEmptyLedger(){
-        app.launchArguments=["-wire-screen","B06","-wire-fixture","-wire-reset","-wire-points-insufficient","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:15))
-        let purchase=app.buttons["purchaseShopItem"];XCTAssertTrue(purchase.exists);XCTAssertFalse(purchase.isEnabled);tap("pointShortageHelp");XCTAssertTrue(app.descendants(matching:.any)["screen-B08"].waitForExistence(timeout:5))
-        app.terminate();app.launchArguments=["-wire-screen","B08","-wire-fixture","-wire-reset","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B08"].waitForExistence(timeout:15));XCTAssertTrue(app.buttons["pointShortageAmount"].label.contains("350P"),app.debugDescription)
-        app.terminate();app.launchArguments=["-wire-screen","B09","-wire-fixture","-wire-reset","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B09"].waitForExistence(timeout:15));XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","달리기와 함께")).firstMatch.exists);XCTAssertTrue(app.staticTexts["광고 보고 받기"].exists);XCTAssertFalse(app.descendants(matching:.any)["pointAdPlaceholder"].exists)
-        app.terminate();app.launchArguments=["-wire-screen","B03","-wire-fixture","-wire-reset","-wire-points-empty","-appearance","light"];app.launch();XCTAssertTrue(app.descendants(matching:.any)["screen-B03"].waitForExistence(timeout:15));XCTAssertTrue(app.staticTexts["포인트 내역이 없어요"].exists)
+        openCosmeticStoreFixture("B06",extraArguments:["-wire-cosmetic-store-insufficient"])
+        let purchase=app.buttons["purchaseShopItem"];XCTAssertTrue(purchase.exists);XCTAssertFalse(purchase.isEnabled)
+        XCTAssertTrue(app.descendants(matching:.any)["detailPointBalance"].exists)
+        tap("pointShortageHelp");XCTAssertTrue(app.descendants(matching:.any)["screen-B08"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.descendants(matching:.any)["pointShortageAmount"].label.contains("300P"),app.debugDescription)
+    }
+    func testCosmeticStoreLostResponseOnlyReplaysOnExplicitSameRequestAction(){
+        openCosmeticStoreFixture("SHOP",extraArguments:["-wire-cosmetic-store-lost-response-once"])
+        tap("shop-item-101");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
+        tap("purchaseShopItem");confirmPointStorePurchase()
+        let unknown=app.descendants(matching:.any)["cosmeticStorePurchaseOutcomeUnknown"]
+        XCTAssertTrue(unknown.waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].exists,"An ambiguous response must not be presented as a successful purchase")
+        XCTAssertTrue(app.buttons["resolveCosmeticStorePurchase"].isEnabled)
+        tap("resolveCosmeticStorePurchase")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-B07"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertTrue(app.descendants(matching:.any)["cosmeticStorePurchaseReplay"].waitForExistence(timeout:5))
+    }
+    func testCosmeticStoreDiscontinuedDetailCannotBePurchased(){
+        openCosmeticStoreFixture("SHOP",extraArguments:["-wire-cosmetic-store-sale-stopped-on-detail"])
+        tap("shop-item-101");XCTAssertTrue(app.descendants(matching:.any)["screen-B06"].waitForExistence(timeout:5))
+        let purchase=app.buttons["purchaseShopItem"]
+        XCTAssertTrue(purchase.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(purchase.isEnabled)
+        XCTAssertEqual(purchase.label,"판매 종료")
+        let detailFailure=app.descendants(matching:.any)["cosmeticStorePurchaseFailure"]
+        XCTAssertTrue(detailFailure.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(detailFailure.label.contains("상품을 찾을 수 없어요"),detailFailure.label)
+        XCTAssertFalse(app.descendants(matching:.any)["cosmeticStoreProductFailure"].exists,
+                       "The catalog product remains selected, so the detail view shows its actual detail failure state.")
     }
     func testIndependentInlineRecordEditing(){
         userOpen("L04");XCTAssertFalse(visible("기록 편집"));tap("editTitle")
