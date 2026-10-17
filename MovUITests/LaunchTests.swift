@@ -40,7 +40,14 @@ import UIKit
         }
     }
     private func confirmPointStorePurchase() {
-        let confirmationButton=app.buttons["confirmPointPurchase"]
+        let confirmationDialog=app.sheets.matching(
+            NSPredicate(format:"label == %@","구매를 확인할까요?")
+        ).firstMatch
+        XCTAssertTrue(confirmationDialog.waitForExistence(timeout:5),"The purchase confirmation dialog must appear before the purchase is submitted.\n\(app.debugDescription)")
+
+        // SwiftUI exposes this dialog action as a Button nested inside another Button with the same identifier.
+        // Scope to the dialog and select the first node so XCUI does not fail on the duplicate wrapper.
+        let confirmationButton=confirmationDialog.buttons.matching(identifier:"confirmPointPurchase").firstMatch
         XCTAssertTrue(confirmationButton.waitForExistence(timeout:5),"The purchase confirmation action must appear before the purchase is submitted.\n\(app.debugDescription)")
         let ready=XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
             confirmationButton.exists && confirmationButton.isEnabled && confirmationButton.isHittable
@@ -48,7 +55,7 @@ import UIKit
         XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:5),.completed,"The purchase confirmation action must be enabled and hittable.\n\(app.debugDescription)")
         XCTAssertEqual(confirmationButton.label,"구매 확정")
 
-        let purchaseTerms=app.descendants(matching:.any).matching(
+        let purchaseTerms=confirmationDialog.descendants(matching:.any).matching(
             NSPredicate(format:"label CONTAINS %@","영구 보유되고 환불할 수 없어요")
         ).firstMatch
         XCTAssertTrue(purchaseTerms.waitForExistence(timeout:5),"The confirmation must show the permanent ownership and no-refund terms.\n\(app.debugDescription)")
@@ -5209,7 +5216,13 @@ extension LaunchTests {
         if !equip.isHittable { app.swipeUp() }
         XCTAssertTrue(waitHittable(equip,timeout:5),app.debugDescription);equip.tap()
         XCTAssertTrue(app.staticTexts["장착 중"].waitForExistence(timeout:5),app.debugDescription)
-        tap("unequip-RUN_CARD_BACKGROUND")
+        // The inventory-section identifier masks child identifiers in this tree; the visible action label is unique here.
+        let unequip=app.buttons.matching(NSPredicate(format:"label == %@","기본으로")).firstMatch
+        if !unequip.isHittable {
+            app.scrollViews.allElementsBoundByIndex.first{$0.isHittable && $0.frame.minX>=0}?.swipeUp()
+        }
+        XCTAssertTrue(waitHittable(unequip,timeout:5),app.debugDescription)
+        unequip.tap()
         XCTAssertTrue(app.staticTexts["기본 디자인"].waitForExistence(timeout:5))
     }
     func testPointsShopDisablesInsufficientPurchaseAndShowsEmptyLedger(){
