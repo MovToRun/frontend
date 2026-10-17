@@ -4538,11 +4538,16 @@ extension LaunchTests {
             "-wire-reset","-wire-profile-photo-upload-cancel-fixture","-appearance","light"]
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:10))
-        XCTAssertTrue(app.otherElements["memberProfilePhotoUploadProgress"].waitForExistence(timeout:5))
+        let uploadProgressIndicator=app.activityIndicators.firstMatch
+        let uploadProgressStatus=app.staticTexts["프로필 사진을 업로드하고 있어요."]
+        XCTAssertTrue(uploadProgressIndicator.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(uploadProgressStatus.waitForExistence(timeout:5),app.debugDescription)
         app.buttons["memberProfileEditCancel"].tap()
         XCTAssertFalse(app.descendants(matching:.any)["screen-M02"].waitForExistence(timeout:3),
                        "Cancel leaves the photo editor, which cancels its upload task")
-        XCTAssertFalse(app.otherElements["memberProfilePhotoUploadProgress"].exists)
+        XCTAssertFalse(uploadProgressIndicator.exists)
+        XCTAssertFalse(uploadProgressStatus.exists,
+                       "The upload status must remain absent after cancelling the editor")
     }
 
     func testProfilePhotoFailureIsVisibleAndLeavesEditorAvailable() {
