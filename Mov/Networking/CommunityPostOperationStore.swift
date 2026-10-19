@@ -3,7 +3,7 @@ import Foundation
 enum CommunityPostOperationPhase: String, Codable, Equatable, Sendable {
     case draftReady
     case uploadingAttachments
-    /// Written durably before the non-idempotent create request is sent.
+    /// Written durably with its idempotency key before the create request is sent.
     case creatingPost
     case createResultUnknown
     case postCreated
@@ -16,6 +16,11 @@ struct CommunityPostDraftAccountBinding: Equatable, Sendable {
     func permitsPublish(memberID currentMemberID: String?, accountScopeID currentScopeID: String) -> Bool {
         guard let memberID, AuthSessionSnapshot.isCanonicalMemberID(memberID) else { return false }
         return memberID == currentMemberID && accountScopeID == currentScopeID
+    }
+
+    func permitsRecovery(memberID currentMemberID: String?) -> Bool {
+        guard let memberID, AuthSessionSnapshot.isCanonicalMemberID(memberID) else { return false }
+        return memberID == currentMemberID
     }
 }
 
@@ -82,6 +87,9 @@ struct CommunityPostOperationRecord: Codable, Equatable, Sendable {
     var title: String
     var content: String
     var runID: String?
+    /// Optional for journals written before keyed create recovery was available.
+    /// Such ambiguous legacy records remain blocked instead of being replayed.
+    var idempotencyKey: String? = nil
     var phase: CommunityPostOperationPhase
     var postID: String?
     var attachmentVersion: Int64?
@@ -89,6 +97,18 @@ struct CommunityPostOperationRecord: Codable, Equatable, Sendable {
 
     var hasAmbiguousCreate: Bool {
         postID == nil && (phase == .creatingPost || phase == .createResultUnknown)
+    }
+
+    var canRecoverAmbiguousCreate: Bool {
+        hasAmbiguousCreate && idempotencyKey.map(Self.isValidIdempotencyKey) == true
+    }
+
+    private static func isValidIdempotencyKey(_ value: String) -> Bool {
+        guard (8...128).contains(value.utf8.count) else { return false }
+        return value.utf8.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0)
+                || [45, 46, 95, 126].contains($0)
+        }
     }
 }
 
@@ -124,8 +144,8 @@ enum CommunityPostOperationStoreError: Error, Equatable {
 
 /// Stores one unfinished remote community post per authenticated member. The journal
 /// lives under Application Support rather than the purgeable temporary-directory
-/// attachment cache. A `creatingPost` journal is intentionally considered ambiguous
-/// after relaunch because the current create API has no idempotency or lookup key.
+/// attachment cache. Keyed ambiguous creates can be reconciled after relaunch; older
+/// journals without a key remain blocked rather than risking a duplicate post.
 private struct CommunityPostOperationLeaseKey: Hashable {
     let rootPath: String
     let memberID: String
@@ -270,7 +290,7 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
                 if existing.operationID != operationID, !completedIDs.contains(existing.operationID) {
                     throw CommunityPostOperationStoreError.operationAlreadyExists
                 }
-                if existing.hasAmbiguousCreate {
+                if existing.hasAmbiguousCreate && !existing.canRecoverAmbiguousCreate {
                     throw CommunityPostOperationStoreError.recoveryRequired
                 }
             }
@@ -465,6 +485,7 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
             return false
         }
         if let postID = record.postID, !isCanonicalPostID(postID) { return false }
+        if let idempotencyKey = record.idempotencyKey, !isValidIdempotencyKey(idempotencyKey) { return false }
         if record.boardKey == .runningVerification,
            record.runID.map(isCanonicalPostID) != true {
             return false
@@ -479,6 +500,14 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
         return String(parsed) == value
     }
 
+    private static func isValidIdempotencyKey(_ value: String) -> Bool {
+        guard (8...128).contains(value.utf8.count) else { return false }
+        return value.utf8.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0)
+                || [45, 46, 95, 126].contains($0)
+        }
+    }
+
     private static func validatePhaseChange(from current: CommunityPostOperationRecord,
                                             to next: CommunityPostOperationRecord,
                                             allowCreateTransition: Bool = false) throws {
@@ -489,6 +518,16 @@ final class FileCommunityPostOperationStore: CommunityPostOperationPersisting, @
             throw CommunityPostOperationStoreError.recoveryRequired
         }
         if current.hasAmbiguousCreate {
+            guard current.operationID == next.operationID,
+                  current.memberID == next.memberID,
+                  current.boardKey == next.boardKey,
+                  current.title == next.title,
+                  current.content == next.content,
+                  current.runID == next.runID,
+                  current.idempotencyKey == next.idempotencyKey,
+                  current.attachments == next.attachments else {
+                throw CommunityPostOperationStoreError.recoveryRequired
+            }
             guard next.hasAmbiguousCreate || next.postID != nil else {
                 throw CommunityPostOperationStoreError.recoveryRequired
             }
@@ -521,6 +560,7 @@ enum CommunityPostPublishingFailure: Error, Equatable, Sendable {
 enum CommunityPostPublishStage: Sendable {
     case uploadingAttachments
     case creatingPost
+    case recoveringPostCreation
     case updatingPost
     case attaching
     case verifying
@@ -551,11 +591,15 @@ struct CommunityPostPublishingService: Sendable {
     func publish(
         record initialRecord: CommunityPostOperationRecord,
         attachmentData initialAttachmentData: [String: Data],
+        recoverAmbiguousCreate: Bool = false,
         isScopeCurrent: @escaping @Sendable () async -> Bool,
         onStage: @escaping @Sendable (CommunityPostPublishStage) async -> Void = { _ in }
     ) async throws -> CommunityPostPublishResult {
         try await requireCurrentScope(isScopeCurrent)
-        guard !initialRecord.hasAmbiguousCreate else { throw CommunityPostPublishingFailure.recoveryRequired }
+        guard !initialRecord.hasAmbiguousCreate
+                || (recoverAmbiguousCreate && initialRecord.canRecoverAmbiguousCreate) else {
+            throw CommunityPostPublishingFailure.recoveryRequired
+        }
 
         let lease: CommunityPostOperationLease
         do {
@@ -573,8 +617,23 @@ struct CommunityPostPublishingService: Sendable {
             guard persisted.operationID == initialRecord.operationID else {
                 throw CommunityPostOperationStoreError.operationAlreadyExists
             }
-            guard !persisted.hasAmbiguousCreate else { throw CommunityPostPublishingFailure.recoveryRequired }
+            guard !persisted.hasAmbiguousCreate
+                    || (recoverAmbiguousCreate && persisted.canRecoverAmbiguousCreate) else {
+                throw CommunityPostPublishingFailure.recoveryRequired
+            }
             record = persisted
+            if initialRecord.hasAmbiguousCreate {
+                guard record.operationID == initialRecord.operationID,
+                      record.memberID == initialRecord.memberID,
+                      record.boardKey == initialRecord.boardKey,
+                      record.title == initialRecord.title,
+                      record.content == initialRecord.content,
+                      record.runID == initialRecord.runID,
+                      record.idempotencyKey == initialRecord.idempotencyKey,
+                      record.attachments == initialRecord.attachments else {
+                    throw CommunityPostPublishingFailure.recoveryRequired
+                }
+            }
             for attachment in record.attachments {
                 savedAttachmentData[attachment.id] = try operationStore.attachmentData(
                     memberID: record.memberID, operationID: record.operationID, attachmentID: attachment.id
@@ -582,8 +641,16 @@ struct CommunityPostPublishingService: Sendable {
             }
         } else {
             record = initialRecord
+            guard !record.hasAmbiguousCreate else { throw CommunityPostPublishingFailure.recoveryRequired }
             try operationStore.save(record, attachmentData: initialAttachmentData, lease: lease)
             savedAttachmentData = initialAttachmentData
+        }
+
+        guard !record.hasAmbiguousCreate || (recoverAmbiguousCreate && record.canRecoverAmbiguousCreate) else {
+            throw CommunityPostPublishingFailure.recoveryRequired
+        }
+        if record.idempotencyKey == nil {
+            record.idempotencyKey = record.operationID.uuidString.lowercased()
         }
 
         let boundTokens = MemberBoundAccessTokenProvider(sessionStore: sessionStore, memberID: record.memberID)
@@ -629,18 +696,41 @@ struct CommunityPostPublishingService: Sendable {
             try operationStore.save(record, attachmentData: [:], lease: lease)
             try await requireCurrentScope(isScopeCurrent)
         } else {
-            guard !record.hasAmbiguousCreate else { throw CommunityPostPublishingFailure.recoveryRequired }
+            let recoveringAmbiguousCreate = record.hasAmbiguousCreate
+            guard !recoveringAmbiguousCreate || (recoverAmbiguousCreate && record.canRecoverAmbiguousCreate) else {
+                throw CommunityPostPublishingFailure.recoveryRequired
+            }
             _ = try await boundTokens.accessToken()
-            await onStage(.creatingPost)
+            await onStage(recoveringAmbiguousCreate ? .recoveringPostCreation : .creatingPost)
             try await requireCurrentScope(isScopeCurrent)
-            // If this write fails, no non-idempotent POST is sent.
-            try operationStore.transitionToCreatingPost(record, lease: lease)
-            record.phase = .creatingPost
+            if !recoveringAmbiguousCreate {
+                // Persist the member-scoped key and create phase before sending POST.
+                try operationStore.transitionToCreatingPost(record, lease: lease)
+                record.phase = .creatingPost
+            }
             do {
-                post = try await communityClient.createPost(board: record.boardKey, title: record.title,
-                                                            content: record.content, runID: record.runID)
+                guard let key = record.idempotencyKey else { throw CommunityPostPublishingFailure.recoveryRequired }
+                if recoveringAmbiguousCreate {
+                    do {
+                        let found = try await communityClient.fetchPostCreationResult(idempotencyKey: key)
+                        guard Self.matchesCreatePayload(found, record: record) else {
+                            throw CommunityMediaFailure.postCreationRequestConflict
+                        }
+                        post = found
+                    } catch let failure as CommunityMediaFailure where failure == .postCreationResultMissing {
+                        post = try await communityClient.createPost(
+                            board: record.boardKey, title: record.title, content: record.content,
+                            idempotencyKey: key, runID: record.runID
+                        )
+                    }
+                } else {
+                    post = try await communityClient.createPost(
+                        board: record.boardKey, title: record.title, content: record.content,
+                        idempotencyKey: key, runID: record.runID
+                    )
+                }
             } catch let failure as CommunityMediaFailure {
-                if failure == .postCreationResultUnknown {
+                if recoveringAmbiguousCreate || failure == .postCreationResultUnknown {
                     record.phase = .createResultUnknown
                 } else {
                     record.phase = .draftReady
@@ -702,5 +792,12 @@ struct CommunityPostPublishingService: Sendable {
         guard !Task.isCancelled, await isCurrent() else {
             throw CommunityPostPublishingFailure.accountScopeChanged
         }
+    }
+
+    private static func matchesCreatePayload(_ post: CommunityPostSnapshot,
+                                             record: CommunityPostOperationRecord) -> Bool {
+        post.boardKey == record.boardKey
+            && post.title == record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            && post.content == record.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

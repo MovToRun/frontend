@@ -216,6 +216,29 @@ enum WireframeCrewLoadState: Equatable {
         }
     }
 
+    /// Refreshes the selected crew before opening the single-field join-guide editor.
+    /// The following PUT must preserve the server's latest name and introduction.
+    func loadFreshSelectedCrewForGuidance() async -> Bool {
+        guard let service,let crewID=selectedCrewID,!isMutating,isManager else{return false}
+        let scope=accountScopeID
+        do {
+            let fresh=try await service.fetchCrew(id:crewID)
+            guard !Task.isCancelled,accountScopeID==scope,selectedCrewID==crewID else{return false}
+            guard fresh.role=="OWNER" || fresh.role=="OPERATOR" else {
+                mutationMessage="크루장·운영자 권한을 확인할 수 없어요.";mutationError=true;return false
+            }
+            selectedCrew=fresh
+            if let index=myCrews.firstIndex(where:{$0.id==crewID}){myCrews[index]=fresh}
+            if let index=crewDirectory.firstIndex(where:{$0.id==crewID}){crewDirectory[index]=fresh}
+            mutationMessage="";mutationError=false
+            return true
+        } catch {
+            guard accountScopeID==scope,selectedCrewID==crewID else{return false}
+            mutationMessage=message(for:error);mutationError=true
+            return false
+        }
+    }
+
     func loadMembers() async {
         guard let service, let crewID = selectedCrewID else { return }
         let requestID = beginRead("members", state: .loading)
@@ -348,6 +371,34 @@ enum WireframeCrewLoadState: Equatable {
             self.mutationMessage = "크루 정보를 수정했어요."
         }
         return succeeded && accountScopeID == scope && selectedCrewID == crewID
+    }
+
+    /// Saves C36 through the existing C20 PUT contract. A fresh GET supplies the
+    /// other two replacement fields so this editor cannot overwrite newer metadata.
+    func updateSelectedCrewJoinGuide(_ joinGuide: String) async -> Bool {
+        guard let service,let crew=selectedCrew,!isMutating,isManager else{return false}
+        let scope=accountScopeID,crewID=crew.id,key="update-crew|\(crew.id)"
+        let wasWriteBlocked=isWriteBlocked(key)
+        let succeeded=await performMutation(key:key,unknownMessage:"가입 안내 저장 결과를 확인하지 못했어요. 다시 읽어 확인한 뒤 안전하게 이어 갈게요.") {
+            let fresh=try await service.fetchCrew(id:crewID)
+            guard self.accountScopeID==scope,self.selectedCrewID==crewID else{return}
+            guard fresh.role=="OWNER" || fresh.role=="OPERATOR" else{throw CrewClientFailure.forbidden}
+            if wasWriteBlocked { self.writeBlockedKeys.remove(key) }
+            let result:BackendCrew
+            if (fresh.joinGuide ?? "")==joinGuide {
+                result=fresh
+            } else {
+                result=try await service.updateCrew(
+                    crewID:crewID,name:fresh.name,introduction:fresh.introduction,joinGuide:joinGuide
+                )
+            }
+            guard self.accountScopeID==scope,self.selectedCrewID==crewID else{return}
+            self.selectedCrew=result
+            if let index=self.myCrews.firstIndex(where:{$0.id==crewID}){self.myCrews[index]=result}
+            if let index=self.crewDirectory.firstIndex(where:{$0.id==crewID}){self.crewDirectory[index]=result}
+            self.mutationMessage="가입 안내를 저장했어요.";self.mutationError=false
+        }
+        return succeeded && accountScopeID==scope && selectedCrewID==crewID
     }
 
     func reviewApplication(approve: Bool) async -> Bool {
@@ -718,6 +769,8 @@ actor WireframeCrewServiceFixture: CrewServing {
     private let postAuthorOther: Bool
     private var failPostUpdateOnce: Bool
     private var failPostDeleteOnce: Bool
+    private var loseCrewUpdateResponseOnce: Bool
+    private var crewUpdateCallCount = 0
     private var myCrewsReadCount = 0
     private var nextApplicationID = 601
     private var nextCrewID = 102
@@ -758,6 +811,7 @@ actor WireframeCrewServiceFixture: CrewServing {
         postAuthorOther = arguments.contains("-wire-crew-fixture-post-author-other")
         failPostUpdateOnce = arguments.contains("-wire-crew-fixture-fail-post-update-once")
         failPostDeleteOnce = arguments.contains("-wire-crew-fixture-fail-post-delete-once")
+        loseCrewUpdateResponseOnce = arguments.contains("-wire-crew-fixture-lose-crew-update-response-once")
         fillBoardCapacity = arguments.contains("-wire-crew-fixture-full-boards")
         pendingApplications = [
             BackendCrewApplication(applicationId: "301", crewId: "101", memberId: "202", note: "주말에 함께 달리고 싶어요.", grade: nil, status: "PENDING", createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z"),
@@ -895,8 +949,14 @@ actor WireframeCrewServiceFixture: CrewServing {
         let updated = BackendCrew(crewId: crewID, name: name, introduction: introduction, joinGuide: joinGuide,
             capacity: previous.capacity, memberCount: previous.memberCount, status: previous.status, role: currentRole)
         updatedCrews[crewID] = updated
+        crewUpdateCallCount += 1
+        if loseCrewUpdateResponseOnce {
+            loseCrewUpdateResponseOnce = false
+            throw CrewClientFailure.mutationResultUnknown
+        }
         return updated
     }
+    func crewUpdateCalls() -> Int { crewUpdateCallCount }
     func apply(crewID: String, note: String?, grade: String?) async throws -> BackendCrewApplication {
         if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
         let id = String(nextApplicationID); nextApplicationID += 1

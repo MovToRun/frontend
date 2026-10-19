@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-    printf 'Usage: %s <build-derived-data-dir> <destination-specifier> [execution-work-dir]\n' "$0" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+    printf 'Usage: %s <build-derived-data-dir> <destination-specifier> [execution-work-dir] [all|crew-contracts|c36-ui|crew-edit-ui|crew-info-ui]\n' "$0" >&2
     exit 2
 fi
 
@@ -10,6 +10,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build_derived_data=$(mkdir -p "$1" && CDPATH= cd -- "$1" && pwd -P)
 destination=$2
 execution_work_dir_arg=${3-}
+test_selection=${4:-all}
 developer_dir=${DEVELOPER_DIR:-$(/usr/bin/xcode-select -p)}
 xcodebuild="$developer_dir/usr/bin/xcodebuild"
 products_dir="$build_derived_data/Build/Products/Debug-iphonesimulator"
@@ -67,6 +68,49 @@ test ! -e "$result_bundle" || {
 mkdir -p "$derived_data_path"
 printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data_path" "$result_bundle"
 
+case "$test_selection" in
+    all) ;;
+    crew-contracts)
+        "$xcodebuild" test-without-building -xctestrun "$xctestrun" \
+            -destination "$destination" -parallel-testing-enabled NO \
+            -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
+            -only-testing:MovTests/ThemeTests/testCrewManagementClientUsesOnlyConfirmedControllerRoutesAndDTOs \
+            -only-testing:MovTests/ThemeTests/testCrewManagementClientRejectsUnconfirmedRoleAndNonNumericIDsBeforeSending \
+            -only-testing:MovTests/ThemeTests/testCrewPostEditAndDeleteUseConfirmedControllerRoutes \
+            -only-testing:MovTests/ThemeTests/testCrewPostMutationsRejectNoncanonicalIDsAndUnknownEditResponses \
+            -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testGuidanceSaveRefreshesAndPreservesLatestCrewNameAndIntroduction \
+            -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testGuidanceSaveRecoversLostPutResponseByReadingBeforeRetry \
+            -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testOrdinaryCrewMemberCannotSaveGuidance
+        exit $?
+        ;;
+    c36-ui)
+        "$xcodebuild" test-without-building -xctestrun "$xctestrun" \
+            -destination "$destination" -parallel-testing-enabled NO \
+            -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
+            -only-testing:MovUITests/LaunchTests/testRemoteCrewJoinGuideSaveUsesManagerOnlyC36AndPersistsServerValue
+        exit $?
+        ;;
+    crew-edit-ui)
+        "$xcodebuild" test-without-building -xctestrun "$xctestrun" \
+            -destination "$destination" -parallel-testing-enabled NO \
+            -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
+            -only-testing:MovUITests/LaunchTests/testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft \
+            -only-testing:MovUITests/LaunchTests/testRemoteCrewJoinGuideSaveUsesManagerOnlyC36AndPersistsServerValue
+        exit $?
+        ;;
+    crew-info-ui)
+        "$xcodebuild" test-without-building -xctestrun "$xctestrun" \
+            -destination "$destination" -parallel-testing-enabled NO \
+            -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
+            -only-testing:MovUITests/LaunchTests/testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft
+        exit $?
+        ;;
+    *)
+        printf 'Unknown test selection: %s\n' "$test_selection" >&2
+        exit 2
+        ;;
+esac
+
 # Run only the focused UI cases. This wrapper is the only supported entry point
 # for test-without-building; it rechecks the real product/host/test artifacts on
 # every invocation, directly before executing the tests.
@@ -77,12 +121,13 @@ printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data
     -only-testing:MovUITests/LaunchTests/testProfilePhotoFailureIsVisibleAndLeavesEditorAvailable \
     -only-testing:MovUITests/LaunchTests/testShareOutputPNGCanBeAttachedToCommunityDraft \
     -only-testing:MovUITests/LaunchTests/testCommunityPublishBusyPreventsReturningToEditableComposer \
-    -only-testing:MovUITests/LaunchTests/testCommunityAmbiguousCreateRemainsBlockedInPreview \
+    -only-testing:MovUITests/LaunchTests/testCommunityAmbiguousCreateOffersExplicitRecoveryWithoutEditingPayload \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewSearchApplyCancelEmptyStateAndCommunityTab \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewApplicationUnknownOutcomeBlocksDuplicateRetry \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewDirectoryCancelsSlowOldQueryAndDeduplicatesCursorPages \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewPendingApplicationsPaginateRetryCancellationAndReentry \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewJoinGuideSaveUsesManagerOnlyC36AndPersistsServerValue \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewAccountSwitchDiscardsLateOldAccountListResponse \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewCreateMembersAndBoardManagementUseConfirmedContracts \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewBoardCapacityPreventsCreateAndRestoreAtFiveActive \
@@ -96,4 +141,7 @@ printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data
     -only-testing:MovTests/ThemeTests/testCrewManagementClientUsesOnlyConfirmedControllerRoutesAndDTOs \
     -only-testing:MovTests/ThemeTests/testCrewManagementClientRejectsUnconfirmedRoleAndNonNumericIDsBeforeSending \
     -only-testing:MovTests/ThemeTests/testCrewPostEditAndDeleteUseConfirmedControllerRoutes \
-    -only-testing:MovTests/ThemeTests/testCrewPostMutationsRejectNoncanonicalIDsAndUnknownEditResponses
+    -only-testing:MovTests/ThemeTests/testCrewPostMutationsRejectNoncanonicalIDsAndUnknownEditResponses \
+    -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testGuidanceSaveRefreshesAndPreservesLatestCrewNameAndIntroduction \
+    -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testGuidanceSaveRecoversLostPutResponseByReadingBeforeRetry \
+    -only-testing:MovTests/WireframeCrewGuidanceFlowTests/testOrdinaryCrewMemberCannotSaveGuidance

@@ -15,7 +15,7 @@ final class CommunityMediaClientTests: XCTestCase {
         ])
         let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
 
-        let post=try await client.createPost(board:.free,title:"Morning run",content:"A short update")
+        let post=try await client.createPost(board:.free,title:"Morning run",content:"A short update",idempotencyKey:"operation-42")
         let updated=try await client.replaceAttachments(postID:post.postID,expectedVersion:post.attachmentVersion,assetIDs:[assetID.lowercased()])
         let read=try await client.readAttachment(postID:post.postID,attachment:try XCTUnwrap(updated.attachments.first))
 
@@ -28,6 +28,7 @@ final class CommunityMediaClientTests: XCTestCase {
             "community/posts/42/attachments/\(assetID.lowercased())"
         ])
         XCTAssertTrue(requests.allSatisfy{$0.headers["Authorization"]=="Bearer fake-token"})
+        XCTAssertEqual(requests[0].headers["Idempotency-Key"],"operation-42")
         let createBody=try XCTUnwrap(requests[0].body)
         let createObject=try XCTUnwrap(JSONSerialization.jsonObject(with:createBody) as? [String:String])
         XCTAssertEqual(createObject,["title":"Morning run","content":"A short update"])
@@ -43,7 +44,7 @@ final class CommunityMediaClientTests: XCTestCase {
         let api=RecordingCommunityAPI(steps:[.init(path:"community/boards/free/posts",method:"POST",response:nil,transportFailure:true)])
         let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
         do {
-            _=try await client.createPost(board:.free,title:"Morning run",content:"A short update")
+            _=try await client.createPost(board:.free,title:"Morning run",content:"A short update",idempotencyKey:"operation-42")
             XCTFail("a lost POST response must be treated as unknown")
         } catch let failure as CommunityMediaFailure {
             XCTAssertEqual(failure,.postCreationResultUnknown)
@@ -60,8 +61,8 @@ final class CommunityMediaClientTests: XCTestCase {
             ])
             let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
             do {
-                _=try await client.createPost(board:.free,title:"Morning run",content:"A short update")
-                XCTFail("HTTP \(statusCode) after a non-idempotent POST is ambiguous")
+                _=try await client.createPost(board:.free,title:"Morning run",content:"A short update",idempotencyKey:"operation-42")
+                XCTFail("HTTP \(statusCode) after keyed create is an ambiguous outcome")
             } catch let failure as CommunityMediaFailure {
                 XCTAssertEqual(failure,.postCreationResultUnknown)
                 XCTAssertFalse(failure.canManuallyRetry)
@@ -69,6 +70,63 @@ final class CommunityMediaClientTests: XCTestCase {
             let requests=await api.recordedRequests()
             XCTAssertEqual(requests.count,1)
         }
+    }
+
+    func testCreatePostAcceptsIdempotentReplay200() async throws {
+        let api=RecordingCommunityAPI(steps:[
+            .init(path:"community/boards/free/posts",method:"POST",response:.init(statusCode:200,data:post(board:"free",version:0,attachments:[])))
+        ])
+        let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
+
+        let post=try await client.createPost(board:.free,title:"Morning run",content:"A short update",idempotencyKey:"operation-42")
+
+        XCTAssertEqual(post.postID,postID)
+        let requests=await api.recordedRequests()
+        XCTAssertEqual(requests.first?.headers["Idempotency-Key"],"operation-42")
+    }
+
+    func testCreatePostMapsPayloadConflictAndDeletedReceipt() async {
+        for (status,code,expected) in [
+            (409,"COMMUNITY_POST_REQUEST_CONFLICT",CommunityMediaFailure.postCreationRequestConflict),
+            (410,"COMMUNITY_POST_RESULT_UNAVAILABLE",CommunityMediaFailure.postCreationReceiptUnavailable)
+        ] {
+            let body=try! JSONSerialization.data(withJSONObject:["code":code])
+            let api=RecordingCommunityAPI(steps:[
+                .init(path:"community/boards/free/posts",method:"POST",response:.init(statusCode:status,data:body))
+            ])
+            let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
+            do {
+                _=try await client.createPost(board:.free,title:"Morning run",content:"A short update",idempotencyKey:"operation-42")
+                XCTFail("expected keyed create failure")
+            } catch let failure as CommunityMediaFailure {
+                XCTAssertEqual(failure,expected)
+            } catch { XCTFail("unexpected error: \(error)") }
+        }
+    }
+
+    func testPostCreationResultUsesNoStoreAndMaps404410And409() async throws {
+        let conflict=try JSONSerialization.data(withJSONObject:["code":"COMMUNITY_POST_REQUEST_CONFLICT"])
+        let gone=try JSONSerialization.data(withJSONObject:["code":"COMMUNITY_POST_RESULT_UNAVAILABLE"])
+        let api=RecordingCommunityAPI(steps:[
+            .init(path:"community/me/post-creation-result",method:"GET",response:.init(statusCode:404,data:Data())),
+            .init(path:"community/me/post-creation-result",method:"GET",response:.init(statusCode:409,data:conflict)),
+            .init(path:"community/me/post-creation-result",method:"GET",response:.init(statusCode:410,data:gone)),
+            .init(path:"community/me/post-creation-result",method:"GET",response:.init(statusCode:200,data:post(board:"free",version:0,attachments:[])))
+        ])
+        let client=CommunityMediaClient(apiClient:api,tokenProvider:CommunityTestTokenProvider())
+
+        do { _=try await client.fetchPostCreationResult(idempotencyKey:"operation-42"); XCTFail("expected missing receipt") }
+        catch let failure as CommunityMediaFailure { XCTAssertEqual(failure,.postCreationResultMissing) }
+        do { _=try await client.fetchPostCreationResult(idempotencyKey:"operation-42"); XCTFail("expected key conflict") }
+        catch let failure as CommunityMediaFailure { XCTAssertEqual(failure,.postCreationRequestConflict) }
+        do { _=try await client.fetchPostCreationResult(idempotencyKey:"operation-42"); XCTFail("expected deleted receipt") }
+        catch let failure as CommunityMediaFailure { XCTAssertEqual(failure,.postCreationReceiptUnavailable) }
+        let result=try await client.fetchPostCreationResult(idempotencyKey:"operation-42")
+
+        XCTAssertEqual(result.postID,postID)
+        let requests=await api.recordedRequests()
+        XCTAssertEqual(requests.count,4)
+        XCTAssertTrue(requests.allSatisfy{$0.headers["Idempotency-Key"]=="operation-42" && $0.headers["Cache-Control"]=="no-store"})
     }
 
     func testAttachmentVersionConflictReadsCurrentStateBeforeRetry() async throws {

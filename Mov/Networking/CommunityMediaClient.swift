@@ -48,6 +48,9 @@ enum CommunityMediaFailure: Error, Equatable, Sendable {
     case postNotFound
     case versionConflict
     case postCreationResultUnknown
+    case postCreationResultMissing
+    case postCreationRequestConflict
+    case postCreationReceiptUnavailable
     case attachmentResultUnknown
     case attachmentUnavailable
     case invalidResponse
@@ -76,7 +79,13 @@ enum CommunityMediaFailure: Error, Equatable, Sendable {
         case .versionConflict:
             return "게시글 첨부가 바뀌었어요. 최신 상태를 확인한 뒤 다시 시도해 주세요."
         case .postCreationResultUnknown:
-            return "게시글 생성 응답을 받지 못해 완료 여부를 확인할 수 없어요. 커뮤니티에서 게시글을 확인한 뒤 다시 시도해 주세요."
+            return "게시글 생성 응답을 받지 못했어요. 결과를 확인한 뒤 같은 요청으로 복구해 주세요."
+        case .postCreationResultMissing:
+            return "저장된 게시글 결과가 아직 없어요. 같은 요청을 다시 보내 복구할 수 있어요."
+        case .postCreationRequestConflict:
+            return "같은 게시 요청 키가 다른 내용에 연결되어 있어요. 기존 내용을 바꾸지 말고 다시 확인해 주세요."
+        case .postCreationReceiptUnavailable:
+            return "게시 결과 기록을 확인할 수 없어 같은 요청을 다시 보내지 않았어요. 서버의 게시글을 확인한 뒤 이어서 진행해 주세요."
         case .attachmentResultUnknown:
             return "첨부 결과를 확인하지 못했어요. 게시글을 새로 읽어 확인한 뒤 다시 시도해 주세요."
         case .attachmentUnavailable:
@@ -95,10 +104,12 @@ enum CommunityMediaFailure: Error, Equatable, Sendable {
     var canManuallyRetry: Bool {
         switch self {
         case .mediaUnavailable, .uploadPending, .uploadExpired, .versionConflict,
-             .attachmentResultUnknown, .attachmentUnavailable, .serverFailure, .transport:
+             .attachmentResultUnknown, .attachmentUnavailable, .serverFailure, .transport,
+             .postCreationResultMissing:
             true
         case .accessTokenUnavailable, .unauthenticated, .forbidden, .invalidPostDraft,
-             .unsupportedVideoUpload, .postNotFound, .postCreationResultUnknown, .invalidResponse, .cancelled:
+             .unsupportedVideoUpload, .postNotFound, .postCreationResultUnknown,
+             .postCreationRequestConflict, .postCreationReceiptUnavailable, .invalidResponse, .cancelled:
             false
         }
     }
@@ -117,14 +128,15 @@ struct CommunityMediaClient: Sendable {
         CommunityMediaClient(apiClient: apiClient, tokenProvider: tokenProvider)
     }
 
-    /// Post creation has no idempotency key in the current API contract. A transport
-    /// failure is surfaced as an unknown outcome and must not be blindly replayed.
+    /// The idempotency key is durable in the operation journal before this request.
+    /// A lost response is resolved by looking up that key before a same-key replay.
     func createPost(board: CommunityPostBoardKey, title: String, content: String,
-                    runID: String? = nil) async throws -> CommunityPostSnapshot {
+                    idempotencyKey: String, runID: String? = nil) async throws -> CommunityPostSnapshot {
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedTitle.isEmpty, !normalizedContent.isEmpty,
-              normalizedTitle.count <= 60, normalizedContent.count <= 2_000 else {
+              normalizedTitle.count <= 60, normalizedContent.count <= 2_000,
+              Self.isValidIdempotencyKey(idempotencyKey) else {
             throw CommunityMediaFailure.invalidPostDraft
         }
         let path: String
@@ -152,14 +164,15 @@ struct CommunityMediaClient: Sendable {
             throw CommunityMediaFailure.invalidPostDraft
         }
         do {
-            let response = try await sendAuthorized(path: path, method: "POST", body: body)
+            let response = try await sendAuthorized(path: path, method: "POST", body: body,
+                                                    additionalHeaders: ["Idempotency-Key": idempotencyKey])
             // A 5xx response can be produced after the server committed the post but
-            // failed while serializing or returning the response. The create routes
-            // have no idempotency key, so replaying such a request could duplicate it.
+            // failed while serializing or returning the response. Keep the outcome
+            // unknown and resolve it through the member-scoped idempotency key.
             if (500..<600).contains(response.statusCode) {
                 throw CommunityMediaFailure.postCreationResultUnknown
             }
-            guard response.statusCode == 201 else { throw Self.mapResponseFailure(response) }
+            guard response.statusCode == 201 || response.statusCode == 200 else { throw Self.mapResponseFailure(response) }
             do { return try Self.decodePost(response.data) }
             catch { throw CommunityMediaFailure.postCreationResultUnknown }
         } catch let failure as CommunityMediaFailure {
@@ -167,6 +180,23 @@ struct CommunityMediaClient: Sendable {
         } catch {
             throw Self.mapTransportFailure(error, postCreation: true)
         }
+    }
+
+    /// Reads the result associated with a member-scoped create key without creating
+    /// a post-view history entry. A 404 is the only result that permits same-key POST recovery.
+    func fetchPostCreationResult(idempotencyKey: String) async throws -> CommunityPostSnapshot {
+        guard Self.isValidIdempotencyKey(idempotencyKey) else { throw CommunityMediaFailure.invalidPostDraft }
+        let response: APIClientResponse
+        do {
+            response = try await sendAuthorized(
+                path: "community/me/post-creation-result", method: "GET", body: nil,
+                additionalHeaders: ["Idempotency-Key": idempotencyKey]
+            )
+        } catch {
+            throw Self.mapTransportFailure(error, postCreation: false)
+        }
+        guard response.statusCode == 200 else { throw Self.mapPostCreationResultFailure(response) }
+        return try Self.decodePost(response.data)
     }
 
     func updatePost(postID: String, title: String, content: String) async throws -> CommunityPostSnapshot {
@@ -315,7 +345,8 @@ struct CommunityMediaClient: Sendable {
         }
     }
 
-    private func sendAuthorized(path: String, method: String, body: Data?, accepts: String = "application/json") async throws -> APIClientResponse {
+    private func sendAuthorized(path: String, method: String, body: Data?, accepts: String = "application/json",
+                                additionalHeaders: [String: String] = [:]) async throws -> APIClientResponse {
         let token: String?
         do { token = try await tokenProvider.accessToken() }
         catch { throw CommunityMediaFailure.accessTokenUnavailable }
@@ -325,6 +356,7 @@ struct CommunityMediaClient: Sendable {
         }
         var headers = ["Authorization": "Bearer \(token)", "Accept": accepts, "Cache-Control": "no-store"]
         if body != nil { headers["Content-Type"] = "application/json" }
+        headers.merge(additionalHeaders) { _, new in new }
         do {
             return try await apiClient.sendResponse(path: path, method: method, body: body,
                                                    headers: headers, queryItems: [])
@@ -390,12 +422,32 @@ struct CommunityMediaClient: Sendable {
         case (401, _), (_, "UNAUTHENTICATED"): .unauthenticated
         case (403, _): .forbidden
         case (404, _): .postNotFound
+        case (409, "COMMUNITY_POST_REQUEST_CONFLICT"): .postCreationRequestConflict
         case (409, "VERSION_CONFLICT"): .versionConflict
+        case (410, "COMMUNITY_POST_RESULT_UNAVAILABLE"): .postCreationReceiptUnavailable
         case (_, "MEDIA_UPLOAD_PENDING"): .uploadPending
         case (410, _), (_, "MEDIA_UPLOAD_EXPIRED"): .uploadExpired
         case (422, _), (_, "MEDIA_UPLOAD_INVALID"), (_, "VALIDATION_FAILED"): .invalidPostDraft
         case (503, _), (_, "MEDIA_UNAVAILABLE"), (_, "COMMUNITY_UNAVAILABLE"): .mediaUnavailable
         default: .serverFailure(statusCode: response.statusCode)
+        }
+    }
+
+    private static func mapPostCreationResultFailure(_ response: APIClientResponse) -> CommunityMediaFailure {
+        let code = (try? JSONDecoder().decode(APIProblem.self, from: response.data).code) ?? nil
+        switch (response.statusCode, code) {
+        case (404, _): return .postCreationResultMissing
+        case (409, "COMMUNITY_POST_REQUEST_CONFLICT"): return .postCreationRequestConflict
+        case (410, "COMMUNITY_POST_RESULT_UNAVAILABLE"): return .postCreationReceiptUnavailable
+        default: return mapResponseFailure(response)
+        }
+    }
+
+    private static func isValidIdempotencyKey(_ value: String) -> Bool {
+        guard (8...128).contains(value.utf8.count) else { return false }
+        return value.utf8.allSatisfy {
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0)
+                || [45, 46, 95, 126].contains($0)
         }
     }
 
