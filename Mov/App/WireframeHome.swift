@@ -443,7 +443,7 @@ extension WireframeRoot {
             }
             if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("communityCrewBoardMutationMessage") }
         } actions: {
-            if crewFlow.selectedCrew?.role != nil, crewFlow.selectedBoard != nil {
+            if crewFlow.canCreatePostOnSelectedBoard {
                 Button("글쓰기") { crewFlow.postDraftTitle = ""; crewFlow.postDraftContent = ""; crewFlow.showingPostComposer = true }
                     .buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewComposePost")
             }
@@ -452,7 +452,14 @@ extension WireframeRoot {
         .task(id: crewFlow.selectedCrewID) { await crewFlow.loadBoards() }
         .task(id: "\(crewFlow.selectedCrewID ?? "")|\(crewFlow.selectedBoardID ?? "")") { await crewFlow.loadPosts() }
         .sheet(isPresented: Binding(get: { crewFlow.showingPostComposer }, set: { crewFlow.showingPostComposer = $0 })) { remoteCrewPostComposer }
-        .sheet(item: Binding(get: { crewFlow.selectedPost }, set: { crewFlow.selectedPost = $0 })) { post in remoteCrewPostDetail(post) }
+        .sheet(item: Binding(get: { crewFlow.selectedPost }, set: { value in
+            if let value { crewFlow.selectedPost = value }
+            else {
+                crewFlow.closePostDetail()
+                showingRemoteCrewPostDeleteConfirmation = false
+                showingRemoteCrewPostEditDiscardConfirmation = false
+            }
+        })) { post in remoteCrewPostDetail(post) }
     }
 
     var remoteCrewPostComposer: some View {
@@ -715,11 +722,72 @@ extension WireframeRoot {
 
 
     func remoteCrewPostDetail(_ post: BackendCrewPost) -> some View {
-        WPage(title: post.boardName, back: { crewFlow.selectedPost = nil }, backIdentifier: "remoteCrewPostDetailBack") {
-            Text(post.title).font(W.font(22, .semibold)).accessibilityIdentifier("remoteCrewPostDetailTitle")
-            HStack { Text(post.authorNickname).font(W.font(12, .medium)); Spacer(); Text(post.createdAt).font(W.font(10)).foregroundStyle(W.muted) }
-            Text(post.content).font(W.font(14)).lineSpacing(6).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("remoteCrewPostDetailBody")
-        } actions: { }
+        WPage(title: post.boardName, back: {
+            if crewFlow.postDraftIsDirty(for: post) { showingRemoteCrewPostEditDiscardConfirmation = true }
+            else { crewFlow.closePostDetail() }
+        }, backIdentifier: "remoteCrewPostDetailBack") {
+            if crewFlow.editingPostID == post.id {
+                TextField("제목", text: $crewFlow.postDraftTitle).font(W.font(17, .semibold)).padding(14).frame(minHeight: 54)
+                    .background(W.paper, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(W.controlBorder))
+                    .accessibilityIdentifier("remoteCrewPostEditTitle")
+                TextEditor(text: $crewFlow.postDraftContent).font(W.font(14)).frame(minHeight: 150).padding(6)
+                    .background(W.paper, in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(W.controlBorder))
+                    .accessibilityIdentifier("remoteCrewPostEditContent")
+                Text("제목 60자 · 내용 2,000자까지").font(W.font(11)).foregroundStyle(W.muted)
+            } else {
+                Text(post.title).font(W.font(22, .semibold)).accessibilityIdentifier("remoteCrewPostDetailTitle")
+                HStack { Text(post.authorNickname).font(W.font(12, .medium)); Spacer(); Text(post.createdAt).font(W.font(10)).foregroundStyle(W.muted) }
+                Text(post.content).font(W.font(14)).lineSpacing(6).frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("remoteCrewPostDetailBody")
+            }
+            if !crewFlow.mutationMessage.isEmpty {
+                WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("remoteCrewPostMutationMessage")
+            }
+            if crewFlow.editingPostID == post.id, crewFlow.isWriteBlocked(crewFlow.postUpdateWriteKey(for: post)) {
+                WNotice(text: "수정 결과가 확인되지 않아 다시 보내지 않도록 잠겨 있어요.", danger: true).accessibilityIdentifier("remoteCrewPostEditBlocked")
+            }
+            if crewFlow.isWriteBlocked(crewFlow.postDeleteWriteKey(for: post)) {
+                WNotice(text: "삭제 결과가 확인되지 않아 중복 요청을 막았어요.", danger: true).accessibilityIdentifier("remoteCrewPostDeleteBlocked")
+            }
+        } actions: {
+            if crewFlow.editingPostID == post.id {
+                Button(crewFlow.isMutating ? "수정 중…" : "수정 완료") {
+                    Task { _ = await crewFlow.updatePost(post, title: crewFlow.postDraftTitle, content: crewFlow.postDraftContent) }
+                }.buttonStyle(WButtonStyle())
+                    .disabled(crewFlow.isMutating || crewFlow.isWriteBlocked(crewFlow.postUpdateWriteKey(for: post)) || crewFlow.postDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || crewFlow.postDraftTitle.count > 60 || crewFlow.postDraftContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || crewFlow.postDraftContent.count > 2_000)
+                    .accessibilityIdentifier("remoteCrewPostEditSave")
+                Button("수정 취소") {
+                    if crewFlow.postDraftIsDirty(for: post) { showingRemoteCrewPostEditDiscardConfirmation = true }
+                    else { crewFlow.cancelPostEditing() }
+                }.buttonStyle(WButtonStyle(kind: 1)).disabled(crewFlow.isMutating).accessibilityIdentifier("remoteCrewPostEditCancel")
+            } else {
+                if crewFlow.canEditPost(post) {
+                    Button("수정") { crewFlow.beginPostEditing(post) }.buttonStyle(WButtonStyle(kind: 1)).disabled(crewFlow.isMutating)
+                        .accessibilityIdentifier("remoteCrewPostEdit")
+                }
+                if crewFlow.canDeletePost(post) {
+                    Button("삭제") { showingRemoteCrewPostDeleteConfirmation = true }.buttonStyle(WButtonStyle(kind: 1))
+                        .disabled(crewFlow.isMutating || crewFlow.isWriteBlocked(crewFlow.postDeleteWriteKey(for: post)))
+                        .accessibilityIdentifier("remoteCrewPostDelete")
+                }
+            }
+        }
+        .confirmationDialog("게시글을 삭제할까요?", isPresented: $showingRemoteCrewPostDeleteConfirmation, titleVisibility: .visible) {
+            Button("게시글 삭제", role: .destructive) { Task { _ = await crewFlow.deletePost(post) } }
+                .disabled(crewFlow.isMutating || crewFlow.isWriteBlocked(crewFlow.postDeleteWriteKey(for: post)))
+                .accessibilityIdentifier("remoteCrewPostDeleteConfirm")
+            Button("취소") { showingRemoteCrewPostDeleteConfirmation = false }
+                .accessibilityIdentifier("remoteCrewPostDeleteCancel")
+        } message: {
+            Text("‘\(post.title)’ 게시글을 삭제하면 되돌릴 수 없어요.")
+        }
+        .alert("변경사항을 버릴까요?", isPresented: $showingRemoteCrewPostEditDiscardConfirmation) {
+            Button("계속 편집", role: .cancel) { }
+                .accessibilityIdentifier("remoteCrewPostEditDiscardContinue")
+            Button("버리기", role: .destructive) { crewFlow.cancelPostEditing(); crewFlow.closePostDetail() }
+                .accessibilityIdentifier("remoteCrewPostEditDiscardConfirm")
+        } message: {
+            Text("저장하지 않은 제목과 내용이 사라져요.")
+        }
     }
 }
 

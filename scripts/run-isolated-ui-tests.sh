@@ -84,4 +84,12 @@ printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data
     -only-testing:MovUITests/LaunchTests/testRemoteCrewBoardCapacityPreventsCreateAndRestoreAtFiveActive \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewManagerCanApproveAndRejectAndMemberCannotReadQueue \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewRequestStaysOnceWhenLeavingWhileInFlightAndBoardPostFlow \
-    -only-testing:MovUITests/LaunchTests/testRemoteCrewReadFailureCanBeRetried
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewPostAuthorCanEditRetryConflictAndDiscardDraft \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewPostDeleteConfirmationRetryAndManagerPermissions \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewPostActionsRespectAuthorAndRecruitmentModeratorPermissions \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewPostMutationCanBeLeftAndAccountScopeSwitchDiscardsLateResult \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewReadFailureCanBeRetried \
+    -only-testing:MovTests/ThemeTests/testCrewManagementClientUsesOnlyConfirmedControllerRoutesAndDTOs \
+    -only-testing:MovTests/ThemeTests/testCrewManagementClientRejectsUnconfirmedRoleAndNonNumericIDsBeforeSending \
+    -only-testing:MovTests/ThemeTests/testCrewPostEditAndDeleteUseConfirmedControllerRoutes \
+    -only-testing:MovTests/ThemeTests/testCrewPostMutationsRejectNoncanonicalIDsAndUnknownEditResponses

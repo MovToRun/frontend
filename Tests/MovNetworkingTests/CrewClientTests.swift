@@ -184,6 +184,77 @@ final class CrewClientTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
     }
 
+    func testPostEditAndDeleteUseConfirmedCrewBoardControllerRoutes() async throws {
+        let edited = #"{"postId":"401","crewId":"101","crewName":"모브 새벽 크루","boardId":"501","boardName":"러닝 일정","boardKind":"INTERNAL","authorMemberId":"202","authorNickname":"RunMate","title":"수정된 일정","content":"오전 9시에 만나요.","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T12:00:00Z"}"#
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data(edited.utf8)),
+            APIClientResponse(statusCode: 204, data: Data())
+        ])
+        let client = try makeRecordingClient(transport)
+
+        let result = try await client.updatePost(crewID: "101", boardID: "501", postID: "401", title: "수정된 일정", content: "오전 9시에 만나요.")
+        XCTAssertEqual(result.title, "수정된 일정")
+        try await client.deletePost(crewID: "101", boardID: "501", postID: "401")
+
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.map(\.path), [
+            "crews/101/boards/501/posts/401",
+            "crews/101/boards/501/posts/401"
+        ])
+        XCTAssertEqual(requests.map(\.method), ["PATCH", "DELETE"])
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
+        let requestBody = try XCTUnwrap(requests[0].body)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: requestBody) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), Set(["title", "content"]))
+        XCTAssertEqual(json["title"] as? String, "수정된 일정")
+        XCTAssertEqual(json["content"] as? String, "오전 9시에 만나요.")
+        XCTAssertNil(requests[1].body)
+    }
+
+    func testPostMutationRejectsNoncanonicalIDsAndUnknownUpdateResponse() async throws {
+        let wrongPost = post.replacingOccurrences(of: #""postId":"401""#, with: #""postId":"402""#)
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data(wrongPost.utf8)),
+            APIClientResponse(statusCode: 202, data: Data(#"{"accepted":true}"#.utf8)),
+            APIClientResponse(statusCode: 200, data: Data())
+        ])
+        let client = try makeRecordingClient(transport)
+
+        do {
+            _ = try await client.updatePost(crewID: "101", boardID: "501", postID: "../401", title: "수정", content: "본문")
+            XCTFail("The endpoint requires canonical resource IDs")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        do {
+            _ = try await client.updatePost(crewID: "101", boardID: "501", postID: "401", title: "수정", content: "본문")
+            XCTFail("A response for another post cannot be accepted after a mutation")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .mutationResultUnknown)
+        }
+        do {
+            _ = try await client.updatePost(crewID: "101", boardID: "501", postID: "401", title: "수정", content: "본문")
+            XCTFail("An unexpected successful PATCH status may have applied the edit")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .mutationResultUnknown)
+        }
+        do {
+            try await client.deletePost(crewID: "101", boardID: "501", postID: "401")
+            XCTFail("An unexpected successful DELETE status may have applied the delete")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .mutationResultUnknown)
+        }
+        do {
+            try await client.deletePost(crewID: "101", boardID: "501", postID: "0401")
+            XCTFail("Leading-zero IDs are not canonical")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.map(\.method), ["PATCH", "PATCH", "DELETE"])
+    }
+
     func testSessionChangeWhileResponseIsInFlightDiscardsOldAccountData() async throws {
         let session = MutableCrewSession(RunUploadSession(ownerID: "101", accessToken: "member-a-token"))
         let transport = CrewSwitchingTransport(session: session, response: APIClientResponse(statusCode: 200, data: Data("[\(crew)]".utf8)))

@@ -4282,6 +4282,8 @@ struct WireframeRoot:View {
     @State var communityCrewManageExitDestination:String?
     @State var showingCrewBoardArchiveConfirmation=false
     @State var communityCrewPendingArchiveBoardID:String?
+    @State var showingRemoteCrewPostDeleteConfirmation=false
+    @State var showingRemoteCrewPostEditDiscardConfirmation=false
     @State var showingCommunityCrewApplicationCancelConfirmation=false
     @State var communityCrewPendingCancellationApplicationID:String?
     @State var communityBottomBarVisible=true
@@ -4336,6 +4338,8 @@ struct WireframeRoot:View {
     }
     var rootCommunityTextUpdates:some View {
         rootRemoteStateUpdates
+            .onChange(of:crewFlow.postDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:60);if limited != value{crewFlow.postDraftTitle=limited}}
+            .onChange(of:crewFlow.postDraftContent){_,value in let limited=WCommunityTextLimit.apply(value,limit:2_000);if limited != value{crewFlow.postDraftContent=limited}}
             .onChange(of:ui.communityDraftTitle){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.title);if limited != value{ui.communityDraftTitle=limited}}
             .onChange(of:ui.communityDraftBody){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.body);if limited != value{ui.communityDraftBody=limited}}
             .onChange(of:ui.communityComment){_,value in let limited=WCommunityTextLimit.apply(value,limit:WCommunityTextLimit.comment);if limited != value{ui.communityComment=limited}}
@@ -4361,6 +4365,8 @@ struct WireframeRoot:View {
             }
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in
                 crewFlow.setAccountScope(scopeID)
+                showingRemoteCrewPostDeleteConfirmation=false
+                showingRemoteCrewPostEditDiscardConfirmation=false
                 cosmeticStoreFlow.accountContextDidChange()
                 handleRemoteAccountScopeChange(scopeID)
             }
@@ -4508,6 +4514,8 @@ struct WireframeRoot:View {
     }
     func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
+                // Set the account scope before launch routing applies a selected crew.
+                crewFlow.setAccountScope(ui.remoteAccountScopeID)
 #if DEBUG
                 if let cleanupService = AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: args),
                    let fixtureStore = authSessionFixtureStore,
