@@ -992,7 +992,7 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
-    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,delayedWrites:Bool=false,accountSwitchDuringRead:Bool=false,fullBoards:Bool=false,crewID:String?="101") {
+    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,delayedWrites:Bool=false,accountSwitchDuringRead:Bool=false,fullBoards:Bool=false,postAuthorOther:Bool=false,failPostUpdateOnce:Bool=false,failPostDeleteOnce:Bool=false,delayPostWrites:Bool=false,crewID:String?="101") {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-crew-api-fixture","-wire-test-store-suite","remote-crew-\(UUID().uuidString)","-wire-reset","-appearance","light"]
         if manager { app.launchArguments.append("-wire-crew-fixture-manager") }
         if nonMember { app.launchArguments.append("-wire-crew-fixture-non-member") }
@@ -1000,6 +1000,10 @@ import UIKit
         if delayedWrites { app.launchArguments.append("-wire-crew-fixture-delay-writes") }
         if accountSwitchDuringRead { app.launchArguments.append("-wire-crew-fixture-account-switch-during-read") }
         if fullBoards { app.launchArguments.append("-wire-crew-fixture-full-boards") }
+        if postAuthorOther { app.launchArguments.append("-wire-crew-fixture-post-author-other") }
+        if failPostUpdateOnce { app.launchArguments.append("-wire-crew-fixture-fail-post-update-once") }
+        if failPostDeleteOnce { app.launchArguments.append("-wire-crew-fixture-fail-post-delete-once") }
+        if delayPostWrites { app.launchArguments.append("-wire-crew-fixture-delay-post-writes") }
         if let crewID { app.launchArguments += ["-wire-community-crew",crewID] }
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10),app.debugDescription)
@@ -1365,6 +1369,112 @@ import UIKit
         app.textViews["remoteCrewPostContent"].tap();app.textViews["remoteCrewPostContent"].typeText("토요일 오전 여덟 시에 만나요.")
         app.buttons["remoteCrewPostSubmit"].tap()
         XCTAssertTrue(app.staticTexts["새벽 모임 안내"].waitForExistence(timeout:8),app.debugDescription)
+    }
+
+    func testRemoteCrewPostAuthorCanEditRetryConflictAndDiscardDraft() {
+        openRemoteCrewFixture("C16",failPostUpdateOnce:true)
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertTrue(app.buttons["remoteCrewPostEdit"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["remoteCrewPostEdit"].tap()
+        XCTAssertTrue(app.textFields["remoteCrewPostEditTitle"].waitForExistence(timeout:5),app.debugDescription)
+        replace("수정된 토요일 일정",into:app.textFields["remoteCrewPostEditTitle"])
+        replace("오전 9시에 만나요.",into:app.textViews["remoteCrewPostEditContent"])
+        let save=app.buttons["remoteCrewPostEditSave"]
+        save.tap()
+        XCTAssertTrue(app.staticTexts["상태가 바뀌었어요. 목록을 새로고침해 주세요."].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(save.isEnabled,"A known conflict can be retried explicitly")
+        save.tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertEqual(app.staticTexts["remoteCrewPostDetailTitle"].label,"수정된 토요일 일정")
+        XCTAssertEqual(app.staticTexts["remoteCrewPostDetailBody"].label,"오전 9시에 만나요.")
+
+        app.buttons["remoteCrewPostEdit"].tap()
+        replace("저장 전 변경",into:app.textFields["remoteCrewPostEditTitle"])
+        app.buttons["remoteCrewPostEditCancel"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["계속 편집"].tap()
+        XCTAssertEqual(app.textFields["remoteCrewPostEditTitle"].value as? String,"저장 전 변경")
+        app.buttons["remoteCrewPostDetailBack"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["remoteCrewPostEditDiscardConfirm"].tap()
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].label.contains("수정된 토요일 일정"),"The board reflects the server-returned update for the same post ID")
+    }
+
+    func testRemoteCrewPostDeleteConfirmationRetryAndManagerPermissions() {
+        openRemoteCrewFixture("C16",manager:true,failPostDeleteOnce:true)
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists,"A manager cannot edit another member's post")
+        XCTAssertTrue(app.buttons["remoteCrewPostDelete"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["remoteCrewPostDelete"].tap()
+        XCTAssertTrue(app.buttons["remoteCrewPostDeleteConfirm"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["remoteCrewPostDeleteCancel"].tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].exists,"Cancel leaves the post intact")
+
+        app.buttons["remoteCrewPostDelete"].tap()
+        app.buttons["remoteCrewPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.staticTexts["상태가 바뀌었어요. 목록을 새로고침해 주세요."].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertTrue(app.buttons["remoteCrewPostDelete"].isEnabled,"A known conflict remains retryable")
+        app.buttons["remoteCrewPostDelete"].tap()
+        app.buttons["remoteCrewPostDeleteConfirm"].tap()
+        XCTAssertTrue(app.staticTexts["communityCrewBoardEmpty"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.buttons["communityCrewPost-601"].exists,"Successful deletion removes that post ID from the board")
+    }
+
+    func testRemoteCrewPostActionsRespectAuthorAndRecruitmentModeratorPermissions() {
+        openRemoteCrewFixture("C16",postAuthorOther:true)
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.buttons["communityCrewComposePost"].waitForExistence(timeout:5))
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists)
+        XCTAssertFalse(app.buttons["remoteCrewPostDelete"].exists)
+
+        app.buttons["remoteCrewPostDetailBack"].tap()
+        app.buttons["communityCrewBoardTab-502"].tap()
+        XCTAssertFalse(app.buttons["communityCrewComposePost"].exists,"Only a crew owner or operator may create on a recruitment board")
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists,"Even the author cannot edit a recruitment-board post unless they can moderate that board")
+        XCTAssertTrue(app.buttons["remoteCrewPostDelete"].exists,"The author may still delete their own post")
+    }
+
+    func testRemoteCrewPostMutationCanBeLeftAndAccountScopeSwitchDiscardsLateResult() {
+        openRemoteCrewFixture("C15",accountSwitchDuringRead:true,delayPostWrites:true,crewID:nil)
+        let switchAccount=app.buttons["communityCrewFixtureSwitchAccount"]
+        XCTAssertTrue(switchAccount.waitForExistence(timeout:5),app.debugDescription)
+        switchAccount.tap()
+        XCTAssertTrue(app.buttons["communityCrewOpen-101"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewOpen-101"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
+        app.buttons["communityCrewEnterBoard"].tap()
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        app.buttons["remoteCrewPostEdit"].tap()
+        replace("계정 전환 전 수정",into:app.textFields["remoteCrewPostEditTitle"])
+        let save=app.buttons["remoteCrewPostEditSave"]
+        save.tap()
+        XCTAssertFalse(save.isEnabled,"An in-flight edit blocks repeated taps")
+        app.buttons["remoteCrewPostDetailBack"].tap()
+        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["remoteCrewPostEditDiscardConfirm"].tap()
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].exists)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C15"].waitForExistence(timeout:5))
+        XCTAssertTrue(switchAccount.waitForExistence(timeout:5),app.debugDescription)
+        switchAccount.tap()
+        XCTAssertTrue(app.staticTexts["계정 B 전용 크루"].waitForExistence(timeout:8),app.debugDescription)
+        Thread.sleep(forTimeInterval:7)
+        XCTAssertTrue(app.staticTexts["계정 B 전용 크루"].exists,"A late edit from the prior account does not navigate or overwrite the new scope")
+        XCTAssertFalse(app.staticTexts["remoteCrewPostDetailTitle"].exists)
+        XCTAssertTrue(app.buttons["community-tab-crew"].exists,"The community-only bottom bar remains on the community root")
     }
 
     func testCommunityCrewInformationMatchesWireframeAndRoutesFromDetailAndBoard() {

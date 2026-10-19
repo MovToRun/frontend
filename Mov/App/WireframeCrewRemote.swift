@@ -39,9 +39,11 @@ enum WireframeCrewLoadState: Equatable {
     var selectedApplication: BackendCrewApplication?
     var selectedMemberID: String?
     var selectedPost: BackendCrewPost?
+    private(set) var viewerMemberID: String?
     var searchText = ""
     var postDraftTitle = ""
     var postDraftContent = ""
+    var editingPostID: String?
     var showingPostComposer = false
     var boardDraftName = ""
     var boardDraftID: String?
@@ -51,6 +53,9 @@ enum WireframeCrewLoadState: Equatable {
     var isAvailable: Bool { service != nil }
     var isManager: Bool { selectedCrew?.role == "OWNER" || selectedCrew?.role == "OPERATOR" }
     var selectedBoard: BackendCrewBoard? { boards.first { $0.boardId == selectedBoardID } }
+    var canCreatePostOnSelectedBoard: Bool {
+        selectedCrew?.role != nil && selectedBoard != nil && (selectedBoard?.kind != "RECRUITMENT" || isManager)
+    }
     var selectedApplicationForCrew: BackendCrewApplication? {
         submittedApplications.last { $0.crewId == selectedCrewID && $0.status == "PENDING" }
     }
@@ -68,6 +73,7 @@ enum WireframeCrewLoadState: Equatable {
         pendingApplications = []; members = []; rejoinRestrictions = []; boards = []; posts = []
         selectedCrew = nil; selectedCrewID = nil; selectedBoardID = nil
         selectedApplication = nil; selectedMemberID = nil; selectedPost = nil
+        viewerMemberID = nil; editingPostID = nil; postDraftTitle = ""; postDraftContent = ""
         writeBlockedKeys.removeAll()
         isMutating = false; mutationID = nil; mutationMessage = ""; mutationError = false
     }
@@ -177,8 +183,14 @@ enum WireframeCrewLoadState: Equatable {
         }
         let requestID = beginRead("posts", state: .loading)
         do {
+            let memberID = try await service.currentMemberID()
+            guard isCurrentRead("posts", id: requestID), !Task.isCancelled else { return }
             let page = try await service.fetchPosts(crewID: crewID, boardID: boardID, cursor: nil, size: 20)
             guard isCurrentRead("posts", id: requestID), !Task.isCancelled else { return }
+            let currentMemberID = try await service.currentMemberID()
+            guard isCurrentRead("posts", id: requestID), !Task.isCancelled else { return }
+            guard currentMemberID == memberID else { throw CrewClientFailure.sessionChanged }
+            viewerMemberID = memberID
             posts = page.items; postsState = .loaded
         } catch {
             guard isCurrentRead("posts", id: requestID), !Task.isCancelled else { return }
@@ -245,6 +257,7 @@ enum WireframeCrewLoadState: Equatable {
         guard let service, let crewID = selectedCrewID, let boardID = selectedBoardID, !isMutating, !isWriteBlocked("post|\(boardID)") else { return false }
         let requestScopeID = accountScopeID
         guard selectedCrew?.role != nil else { mutationMessage = "크루 멤버 권한을 확인할 수 없어요."; mutationError = true; return false }
+        guard selectedBoard?.kind != "RECRUITMENT" || isManager else { mutationMessage = "모집 게시판에는 크루장·운영자만 글을 쓸 수 있어요."; mutationError = true; return false }
         let succeeded = await performMutation(key: "post|\(boardID)", unknownMessage: "게시 결과를 확인하지 못했어요. 글을 다시 보내지 않았어요.") {
             let result = try await service.createPost(crewID: crewID, boardID: boardID, title: title, content: content)
             guard self.accountScopeID == requestScopeID else { return }
@@ -253,6 +266,109 @@ enum WireframeCrewLoadState: Equatable {
             self.showingPostComposer = false
         }
         return succeeded && accountScopeID == requestScopeID
+    }
+
+    func canEditPost(_ post: BackendCrewPost) -> Bool {
+        guard let viewerMemberID else { return false }
+        guard post.authorMemberId == viewerMemberID else { return false }
+        return post.boardKind != "RECRUITMENT" || isManager
+    }
+
+    func canDeletePost(_ post: BackendCrewPost) -> Bool {
+        (viewerMemberID != nil && post.authorMemberId == viewerMemberID) || isManager
+    }
+
+    func postUpdateWriteKey(for post: BackendCrewPost) -> String {
+        "post-update|\(post.crewId)|\(post.boardId)|\(post.id)"
+    }
+
+    func postDeleteWriteKey(for post: BackendCrewPost) -> String {
+        "post-delete|\(post.crewId)|\(post.boardId)|\(post.id)"
+    }
+
+    func beginPostEditing(_ post: BackendCrewPost) {
+        guard canEditPost(post), selectedCrewID == post.crewId, selectedBoardID == post.boardId else { return }
+        postDraftTitle = post.title
+        postDraftContent = post.content
+        editingPostID = post.id
+        clearMutationMessage()
+    }
+
+    func postDraftIsDirty(for post: BackendCrewPost) -> Bool {
+        editingPostID == post.id && (postDraftTitle != post.title || postDraftContent != post.content)
+    }
+
+    func cancelPostEditing() {
+        editingPostID = nil
+        postDraftTitle = ""
+        postDraftContent = ""
+        clearMutationMessage()
+    }
+
+    func closePostDetail() {
+        selectedPost = nil
+        editingPostID = nil
+        postDraftTitle = ""
+        postDraftContent = ""
+    }
+
+    func updatePost(_ post: BackendCrewPost, title: String, content: String) async -> Bool {
+        guard let service, let crewID = selectedCrewID, let boardID = selectedBoardID,
+              crewID == post.crewId, boardID == post.boardId, editingPostID == post.id,
+              !isMutating else { return false }
+        guard canEditPost(post) else {
+            mutationMessage = "글 작성자만 게시글을 수정할 수 있어요."; mutationError = true
+            return false
+        }
+        guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              title.count <= 60,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              content.count <= 2_000 else {
+            mutationMessage = "제목은 60자, 내용은 2,000자까지 입력해 주세요."; mutationError = true
+            return false
+        }
+        let key = postUpdateWriteKey(for: post)
+        guard !isWriteBlocked(key) else { return false }
+        let scope = accountScopeID
+        let succeeded = await performMutation(key: key, unknownMessage: "수정 결과를 확인하지 못했어요. 중복 수정을 막기 위해 다시 보내지 않았어요.") {
+            let result = try await service.updatePost(crewID: crewID, boardID: boardID, postID: post.id, title: title, content: content)
+            guard self.accountScopeID == scope,
+                  self.selectedCrewID == crewID, self.selectedBoardID == boardID else { return }
+            if let index = self.posts.firstIndex(where: { $0.id == post.id }) { self.posts[index] = result }
+            if self.selectedPost?.id == post.id {
+                self.selectedPost = result
+                self.editingPostID = nil
+                self.postDraftTitle = ""
+                self.postDraftContent = ""
+            }
+            self.mutationMessage = "게시글을 수정했어요."
+        }
+        return succeeded && accountScopeID == scope && selectedCrewID == crewID && selectedBoardID == boardID
+    }
+
+    func deletePost(_ post: BackendCrewPost) async -> Bool {
+        guard let service, let crewID = selectedCrewID, let boardID = selectedBoardID,
+              crewID == post.crewId, boardID == post.boardId, selectedPost?.id == post.id,
+              !isMutating else { return false }
+        guard canDeletePost(post) else {
+            mutationMessage = "글 작성자 또는 크루장·운영자만 삭제할 수 있어요."; mutationError = true
+            return false
+        }
+        let key = postDeleteWriteKey(for: post)
+        guard !isWriteBlocked(key) else { return false }
+        let scope = accountScopeID
+        let succeeded = await performMutation(key: key, unknownMessage: "삭제 결과를 확인하지 못했어요. 중복 삭제를 막기 위해 다시 보내지 않았어요.") {
+            try await service.deletePost(crewID: crewID, boardID: boardID, postID: post.id)
+            guard self.accountScopeID == scope,
+                  self.selectedCrewID == crewID, self.selectedBoardID == boardID else { return }
+            self.posts.removeAll { $0.id == post.id }
+            if self.selectedPost?.id == post.id {
+                self.selectedPost = nil
+                self.editingPostID = nil
+            }
+            self.mutationMessage = "게시글을 삭제했어요."
+        }
+        return succeeded && accountScopeID == scope && selectedCrewID == crewID && selectedBoardID == boardID
     }
 
     func createCrew(name: String, introduction: String?, joinGuide: String?) async -> Bool {
@@ -462,12 +578,18 @@ actor WireframeCrewServiceFixture: CrewServing {
     private let nonMember: Bool
     private var failMyCrewsOnce: Bool
     private let delayedWrites: Bool
+    private let delayedPostWrites: Bool
     private let accountSwitchDuringRead: Bool
+    private let postAuthorOther: Bool
+    private var failPostUpdateOnce: Bool
+    private var failPostDeleteOnce: Bool
     private var myCrewsReadCount = 0
     private var nextApplicationID = 601
     private var nextCrewID = 102
     private var nextBoardID = 504
+    private var nextPostID = 602
     private var pendingApplications: [BackendCrewApplication]
+    private var posts: [BackendCrewPost] = []
     private var members = [
         BackendCrewMember(memberId: "201", role: "OWNER", joinedAt: "2026-10-01T09:00:00Z"),
         BackendCrewMember(memberId: "202", role: "MEMBER", joinedAt: "2026-10-02T09:00:00Z"),
@@ -488,7 +610,11 @@ actor WireframeCrewServiceFixture: CrewServing {
         nonMember = arguments.contains("-wire-crew-fixture-non-member")
         failMyCrewsOnce = arguments.contains("-wire-crew-fixture-fail-my-crews-once")
         delayedWrites = arguments.contains("-wire-crew-fixture-delay-writes")
+        delayedPostWrites = arguments.contains("-wire-crew-fixture-delay-post-writes")
         accountSwitchDuringRead = arguments.contains("-wire-crew-fixture-account-switch-during-read")
+        postAuthorOther = arguments.contains("-wire-crew-fixture-post-author-other")
+        failPostUpdateOnce = arguments.contains("-wire-crew-fixture-fail-post-update-once")
+        failPostDeleteOnce = arguments.contains("-wire-crew-fixture-fail-post-delete-once")
         fillBoardCapacity = arguments.contains("-wire-crew-fixture-full-boards")
         pendingApplications = [
             BackendCrewApplication(applicationId: "301", crewId: "101", memberId: "202", note: "주말에 함께 달리고 싶어요.", grade: nil, status: "PENDING", createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z"),
@@ -512,6 +638,15 @@ actor WireframeCrewServiceFixture: CrewServing {
     }
 
     private var currentRole: String? { manager ? "OWNER" : operatorRole ? "OPERATOR" : nonMember ? nil : "MEMBER" }
+    private var currentMemberIDValue: String? { currentRole == nil ? nil : manager ? "201" : "202" }
+
+    private func defaultPost(crewID: String, boardID: String) -> BackendCrewPost {
+        let board = boards.first { $0.id == boardID && $0.crewId == crewID }
+        return BackendCrewPost(postId: "601", crewId: crewID, crewName: "모브 새벽 크루", boardId: boardID,
+            boardName: board?.name ?? "러닝 일정", boardKind: board?.kind ?? "INTERNAL",
+            authorMemberId: postAuthorOther ? "203" : "202", authorNickname: postAuthorOther ? "PaceSetter" : "RunMate", title: "토요일 일정", content: "오전 8시에 만나요.",
+            createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z")
+    }
 
     func createCrew(name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew {
         if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
@@ -635,13 +770,80 @@ actor WireframeCrewServiceFixture: CrewServing {
         boards[index] = board; return board
     }
     func fetchPosts(crewID: String, boardID: String, cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewPost> {
-        let post = BackendCrewPost(postId: "601", crewId: crewID, crewName: "모브 새벽 크루", boardId: boardID, boardName: "러닝 일정", boardKind: "INTERNAL", authorMemberId: "202", authorNickname: "RunMate", title: "토요일 일정", content: "오전 8시에 만나요.", createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z")
-        return BackendCrewPage(items: [post], nextCursor: nil)
+        guard !nonMember else { throw CrewClientFailure.forbidden }
+        if !posts.contains(where: { $0.crewId == crewID && $0.boardId == boardID }) {
+            posts.append(defaultPost(crewID: crewID, boardID: boardID))
+        }
+        return BackendCrewPage(items: posts.filter { $0.crewId == crewID && $0.boardId == boardID }, nextCursor: nil)
     }
-    func fetchPost(crewID: String, boardID: String, postID: String) async throws -> BackendCrewPost { try await fetchPosts(crewID: crewID, boardID: boardID, cursor: nil, size: 1).items[0] }
+
+    func fetchPost(crewID: String, boardID: String, postID: String) async throws -> BackendCrewPost {
+        _ = try await fetchPosts(crewID: crewID, boardID: boardID, cursor: nil, size: 20)
+        guard let post = posts.first(where: { $0.id == postID && $0.crewId == crewID && $0.boardId == boardID }) else {
+            throw CrewClientFailure.notFound
+        }
+        return post
+    }
+
+    func currentMemberID() async throws -> String {
+        guard let currentMemberIDValue else { throw CrewClientFailure.accessTokenUnavailable }
+        return currentMemberIDValue
+    }
+
     func createPost(crewID: String, boardID: String, title: String, content: String) async throws -> BackendCrewPost {
-        if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
-        return BackendCrewPost(postId: UUID().uuidString, crewId: crewID, crewName: "모브 새벽 크루", boardId: boardID, boardName: "러닝 일정", boardKind: "INTERNAL", authorMemberId: "202", authorNickname: "RunMate", title: title, content: content, createdAt: "2026-10-17T12:00:00Z", updatedAt: "2026-10-17T12:00:00Z")
+        guard let memberID = currentMemberIDValue,
+              let board = boards.first(where: { $0.id == boardID && $0.crewId == crewID && $0.status == "ACTIVE" }) else {
+            throw CrewClientFailure.notFound
+        }
+        if board.kind == "RECRUITMENT" && !manager && !operatorRole { throw CrewClientFailure.forbidden }
+        if delayedPostWrites { try await Task.sleep(for: .milliseconds(6500)) }
+        else if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
+        let post = BackendCrewPost(postId: String(nextPostID), crewId: crewID, crewName: "모브 새벽 크루", boardId: boardID,
+            boardName: board.name, boardKind: board.kind, authorMemberId: memberID,
+            authorNickname: manager ? "크루장" : "RunMate", title: title, content: content,
+            createdAt: "2026-10-17T12:00:00Z", updatedAt: "2026-10-17T12:00:00Z")
+        nextPostID += 1
+        posts.insert(post, at: 0)
+        return post
+    }
+
+    func updatePost(crewID: String, boardID: String, postID: String, title: String, content: String) async throws -> BackendCrewPost {
+        guard let memberID = currentMemberIDValue,
+              let board = boards.first(where: { $0.id == boardID && $0.crewId == crewID && $0.status == "ACTIVE" }),
+              let index = posts.firstIndex(where: { $0.id == postID && $0.crewId == crewID && $0.boardId == boardID }) else {
+            throw CrewClientFailure.notFound
+        }
+        if board.kind == "RECRUITMENT" && !manager && !operatorRole { throw CrewClientFailure.forbidden }
+        guard posts[index].authorMemberId == memberID else { throw CrewClientFailure.forbidden }
+        if failPostUpdateOnce {
+            failPostUpdateOnce = false
+            throw CrewClientFailure.conflict(code: "POST_CHANGED")
+        }
+        if delayedPostWrites { try await Task.sleep(for: .milliseconds(6500)) }
+        else if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
+        let old = posts[index]
+        let updated = BackendCrewPost(postId: old.id, crewId: old.crewId, crewName: old.crewName, boardId: old.boardId,
+            boardName: old.boardName, boardKind: old.boardKind, authorMemberId: old.authorMemberId,
+            authorNickname: old.authorNickname, title: title, content: content, createdAt: old.createdAt,
+            updatedAt: "2026-10-17T12:00:00Z")
+        posts[index] = updated
+        return updated
+    }
+
+    func deletePost(crewID: String, boardID: String, postID: String) async throws {
+        guard let memberID = currentMemberIDValue,
+              boards.contains(where: { $0.id == boardID && $0.crewId == crewID && $0.status == "ACTIVE" }),
+              let index = posts.firstIndex(where: { $0.id == postID && $0.crewId == crewID && $0.boardId == boardID }) else {
+            throw CrewClientFailure.notFound
+        }
+        guard posts[index].authorMemberId == memberID || manager || operatorRole else { throw CrewClientFailure.forbidden }
+        if failPostDeleteOnce {
+            failPostDeleteOnce = false
+            throw CrewClientFailure.conflict(code: "POST_CHANGED")
+        }
+        if delayedPostWrites { try await Task.sleep(for: .milliseconds(6500)) }
+        else if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
+        posts.remove(at: index)
     }
 }
 #endif
