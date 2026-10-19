@@ -33,9 +33,11 @@
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C39 알림 예시, C41–C43 인기글·차단 해제·최근 활동, C10–C14 인증·코스 흐름은 로컬 fixture로 구현했습니다. C36은 관리자에게 가입 안내 전용 편집 화면을 제공하며, 원격 crew 서비스가 있으면 최신 정보를 읽은 뒤 C20의 BE117 PUT으로 저장하고, fixture 경로는 로컬 상태를 사용합니다. 크루 흐름은 F010에서 확인된 API 범위(C15–C22, C32–C38, C40)와 로컬 wireframe 상태를 구분합니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C39 알림 예시, C41–C43 인기글·차단 해제·최근 활동은 로컬 fixture로 구현했습니다. C10–C14 인증·코스 흐름은 F011에서 확인된 API가 구성되면 원격 연결을 사용하고 서비스 부재 시 로컬 fixture로 동작합니다. C44–C45 운영자 검토도 서비스 운영자 권한이 별도 구성되는 범위에서 원격 연결을 사용합니다. C36은 관리자에게 가입 안내 전용 편집 화면을 제공하며, 원격 crew 서비스가 있으면 최신 정보를 읽은 뒤 C20의 BE117 PUT으로 저장하고, fixture 경로는 로컬 상태를 사용합니다. 크루 흐름은 F010에서 확인된 API 범위(C15–C22, C32–C38, C40)와 로컬 wireframe 상태를 구분합니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
 **2026-10-19 F010 follow-up:** PR #93 added paginated server crew search, the signed-in member's pending-application page and cancellation, and OWNER/OPERATOR crew information replacement. This follow-up starts from frontend `main` at `8e1b302039d1c2457794c65a54ae26c02b5fab82` and inspected latest backend main at `de51d83a79a5d63f5d754c5c952001919a15b9b3` (BE #116 merge `6359da7e64c46054e11156b2158c5e69342db09c`). C36 now saves the join guide for managers through a fresh GET and the existing confirmed BE117 PUT, preserving the other replacement fields; an ambiguous response is checked with GET before another write. Free/anonymous/running-verification community post create now uses BE #116's member-scoped idempotency key and result lookup, with exact-payload replay only after a confirmed missing result. Search covers name/introduction only; no region/level filters are exposed. C39 announcements, warnings, and other fields absent from these controllers remain outside this API integration. See [F010 crew progress](F010_CREW_PROGRESS.md) for exact routes, test evidence, and limits.
+
+**2026-10-19 F011 course/badge follow-up:** C10–C14 and the service-operator review screens C44–C45 now use the backend course-certification, masked-course, and follow-session contract at `de51d83a79a5d63f5d754c5c952001919a15b9b3`. Course sharing begins as a private draft and requires explicit consent before publication; follow progress sends only route-version-bound scalar distance/time and comparison binds the same existing server run. Unknown draft-create results block duplicate creates because the contract provides no lookup or idempotency route. The signed-in empty certification GET response, certification-withdraw success status, and full comparison response schema need backend confirmation. See [F011 course and badge progress](F011_COURSE_BADGES_FOLLOW_PROGRESS.md) for scope, local test evidence, and remaining limits.
 
 ## 현재 구조 요약
 
@@ -226,11 +228,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C07` | 러닝 카드 | `communityCardPreview` — 방문/닫기, 사진 확대 |
 | [x] | `C08` | 러너 프로필 (범위 구현) | 기본 프로필에 더보기 신고/차단 메뉴 연결; 차단은 로컬 콘텐츠를 숨김 |
 | [x] | `C09` | 게시 미리보기 | `communityPreview` — 사진·영상 포스터를 표시하고 영상 재생 미리보기를 제공하는 로컬 게시 예시 |
-| [x] | `C10` | 계정 인증 신청 | `communityVerificationForm` — 로컬 신청·중복/길이 검증; PR30 |
-| [x] | `C11` | 인증 신청 상태 | `communityVerificationStatus` — 로컬 대기·승인·반려, review tool 전용 결과 예시; PR30 |
-| [x] | `C12` | 공유 코스 | `communityCourseDetail` — 코스 요약·작성자·경로·따라달리기 |
-| [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — 승인 로컬 계정·유효 기기 기록 선택·끝 위치 숨김·게시 미리보기 |
-| [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 60배속 로컬 시간축, 재생/정지/처음부터/끝 위치 설정 |
+| [x] | `C10` | 계정 인증 신청 | `communityVerificationForm` — 로컬 fixture와 F011 원격 인증 신청, HTTPS 증거 URL 검사, 승인 결과 복구 |
+| [x] | `C11` | 인증 신청 상태 | `communityVerificationStatus` — F011 원격 상태·대기 신청 취소·계정 인증 확인, 서비스 부재 시 fixture |
+| [x] | `C12` | 공유 코스 | `communityCourseDetail` — F011 공개 코스 목록/마스킹 경로/기록 요약과 revision 고정 따라달리기 시작 |
+| [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — F011 본인 VALID 서버 기록·가리기 거리·비공개 초안과 명시 동의 후 게시 |
+| [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 로컬 fixture의 60배속 예시와 F011 원격 revision 고정 진행/기록 비교 |
 | [x] | `C15` | 크루 탐색 | `communityCrewOverview` — F010: `/crews/me`와 BE117 `/crews?q&cursor&size` 서버 검색·페이지네이션; 이름·소개만 검색 |
 | [x] | `C16` | 크루 소개 | `communityCrewDetail` — F010: 서버 소개·정원·역할을 읽고 가입/게시판 진입; 지역·등급은 API 미제공 |
 | [x] | `C17` | 크루 가입 신청 | `communityCrewJoinForm` — F010: 선택 메모로 가입 신청; 중복 전송 잠금과 알 수 없는 결과 보존 |
