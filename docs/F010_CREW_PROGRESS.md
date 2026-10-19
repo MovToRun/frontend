@@ -34,4 +34,4 @@
 
 ## Review state
 
-This implementation is intended for a draft PR. It is not merged. A separate final verification and review remain required before merge.
+Draft PR [#93](https://github.com/MovToRun/frontend/pull/93) is open on `codex/f010-be117-search-applications-info-20261019`. It is not merged. A separate final verification and review remain required before merge.
