@@ -37,4 +37,4 @@
 
 ## Review state
 
-PR [#93](https://github.com/MovToRun/frontend/pull/93) was merged to `main` at `8e1b302039d1c2457794c65a54ae26c02b5fab82`. This follow-up will be submitted as a separate draft PR; separate final verification and review remain required before any merge.
+PR [#93](https://github.com/MovToRun/frontend/pull/93) was merged to `main` at `8e1b302039d1c2457794c65a54ae26c02b5fab82`. Draft follow-up [PR #94](https://github.com/MovToRun/frontend/pull/94) contains this implementation; separate final verification and review remain required before merge.
