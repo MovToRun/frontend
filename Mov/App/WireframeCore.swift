@@ -4514,6 +4514,8 @@ struct WireframeRoot:View {
     }
     func configureRootForLaunch() async {
                 let args=ProcessInfo.processInfo.arguments
+                // Set the account scope before launch routing applies a selected crew.
+                crewFlow.setAccountScope(ui.remoteAccountScopeID)
 #if DEBUG
                 if let cleanupService = AuthSessionFixtureLaunchPolicy.cleanupServiceName(arguments: args),
                    let fixtureStore = authSessionFixtureStore,

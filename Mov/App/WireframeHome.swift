@@ -775,12 +775,14 @@ extension WireframeRoot {
             Button("게시글 삭제", role: .destructive) { Task { _ = await crewFlow.deletePost(post) } }
                 .disabled(crewFlow.isMutating || crewFlow.isWriteBlocked(crewFlow.postDeleteWriteKey(for: post)))
                 .accessibilityIdentifier("remoteCrewPostDeleteConfirm")
-            Button("취소", role: .cancel) { }.accessibilityIdentifier("remoteCrewPostDeleteCancel")
+            Button("취소") { showingRemoteCrewPostDeleteConfirmation = false }
+                .accessibilityIdentifier("remoteCrewPostDeleteCancel")
         } message: {
             Text("‘\(post.title)’ 게시글을 삭제하면 되돌릴 수 없어요.")
         }
         .alert("변경사항을 버릴까요?", isPresented: $showingRemoteCrewPostEditDiscardConfirmation) {
             Button("계속 편집", role: .cancel) { }
+                .accessibilityIdentifier("remoteCrewPostEditDiscardContinue")
             Button("버리기", role: .destructive) { crewFlow.cancelPostEditing(); crewFlow.closePostDetail() }
                 .accessibilityIdentifier("remoteCrewPostEditDiscardConfirm")
         } message: {

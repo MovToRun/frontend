@@ -6308,7 +6308,9 @@ extension ThemeTests {
     func testCrewPostMutationsRejectNoncanonicalIDsAndUnknownEditResponses() async throws {
         let wrongPost = BackendCrewPost(postId:"602",crewId:"101",crewName:"새벽 러너",boardId:"501",boardName:"일정",boardKind:"INTERNAL",authorMemberId:"201",authorNickname:"RunMate",title:"수정된 일정",content:"오전 9시에 만나요.",createdAt:"2026-10-17T10:00:00Z",updatedAt:"2026-10-17T12:00:00Z")
         let transport = CrewContractTransport(responses:[
-            APIClientResponse(statusCode:200,data:try JSONEncoder().encode(wrongPost),requestID:"crew-post-mismatch")
+            APIClientResponse(statusCode:200,data:try JSONEncoder().encode(wrongPost),requestID:"crew-post-mismatch"),
+            APIClientResponse(statusCode:202,data:Data(#"{"accepted":true}"#.utf8),requestID:"crew-post-update-accepted"),
+            APIClientResponse(statusCode:200,data:Data(),requestID:"crew-post-delete-ok")
         ])
         let client = CrewClient(apiClient:transport,sessionProvider:RunStoreUploadSessionFake(session:RunUploadSession(ownerID:"201",accessToken:"crew-test-token")))
         do {
@@ -6324,13 +6326,26 @@ extension ThemeTests {
             XCTAssertEqual(failure,.mutationResultUnknown)
         }
         do {
+            _ = try await client.updatePost(crewID:"101",boardID:"501",postID:"601",title:"수정된 일정",content:"오전 9시에 만나요.")
+            XCTFail("An unexpected successful PATCH status could have applied the edit")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure,.mutationResultUnknown)
+        }
+        do {
+            try await client.deletePost(crewID:"101",boardID:"501",postID:"601")
+            XCTFail("An unexpected successful DELETE status could have applied the delete")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure,.mutationResultUnknown)
+        }
+        do {
             try await client.deletePost(crewID:"101",boardID:"501",postID:"00601")
             XCTFail("Post IDs with leading zeroes are not canonical")
         } catch let failure as CrewClientFailure {
             XCTAssertEqual(failure,.invalidRequest)
         }
         let requests = await transport.requests()
-        XCTAssertEqual(requests.count,1,"Invalid IDs are rejected before sending")
+        XCTAssertEqual(requests.count,3,"Invalid IDs are rejected before sending")
+        XCTAssertEqual(requests.map(\.method),["PATCH","PATCH","DELETE"])
     }
 
     @MainActor func testConfirmedWithdrawalClearsOnlyThatMembersLocalRunsAndSession() async throws {

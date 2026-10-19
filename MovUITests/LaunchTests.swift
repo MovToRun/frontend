@@ -103,6 +103,17 @@ import UIKit
         paste.tap()
     }
     private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{scrollCurrentScreen()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
+    private func replaceTextEditor(_ value:String,into element:XCUIElement){
+        if !element.exists || !element.isHittable{scrollCurrentScreen()}
+        XCTAssertTrue(element.waitForExistence(timeout:5),app.debugDescription)
+        element.tap()
+        element.press(forDuration:0.8)
+        let selectAll=app.descendants(matching:.any).matching(NSPredicate(format:"label == %@ OR label == %@ OR label == %@","Select All","모두 선택","전체 선택")).firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout:5),app.debugDescription)
+        selectAll.tap()
+        element.typeText(value)
+        XCTAssertEqual(element.value as? String,value,"TextEditor replacement must not append to the server-provided text")
+    }
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func capture(_ name:String){let a=XCTAttachment(screenshot:app.screenshot());a.name="Wire-"+name;a.lifetime = .keepAlways;add(a)}
@@ -1008,6 +1019,31 @@ import UIKit
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10),app.debugDescription)
     }
+    private func enterRemoteCrewBoard(){
+        let enter=app.buttons["communityCrewEnterBoard"]
+        XCTAssertTrue(waitHittable(enter,timeout:8),"The board-entry action must be visible before it is tapped.\n\(app.debugDescription)")
+        enter.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:8),app.debugDescription)
+    }
+    private func remoteCrewDeleteDialogAction(_ identifier:String,label:String)->XCUIElement{
+        let dialog=app.sheets.matching(NSPredicate(format:"label == %@","게시글을 삭제할까요?")).firstMatch
+        XCTAssertTrue(dialog.waitForExistence(timeout:5),"The delete confirmation sheet must be visible.\n\(app.debugDescription)")
+        // SwiftUI can expose an action and its nested wrapper with the same ID;
+        // scope to the real confirmation sheet and select that action's first node.
+        let action=dialog.buttons.matching(identifier:identifier).firstMatch
+        XCTAssertTrue(waitHittable(action,timeout:5),"The expected delete-sheet action must be available.\n\(app.debugDescription)")
+        XCTAssertEqual(action.label,label)
+        return action
+    }
+    private func remoteCrewDiscardAlertAction(_ identifier:String,label:String)->XCUIElement{
+        let alert=app.alerts.matching(NSPredicate(format:"label == %@","변경사항을 버릴까요?")).firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout:5),"The discard confirmation alert must be visible.\n\(app.debugDescription)")
+        // Scope SwiftUI's duplicate accessibility wrapper to the actual alert.
+        let action=alert.buttons.matching(identifier:identifier).firstMatch
+        XCTAssertTrue(waitHittable(action,timeout:5),"The expected discard-alert action must be available.\n\(app.debugDescription)")
+        XCTAssertEqual(action.label,label)
+        return action
+    }
 
     private func openCommunitySettingsFromProfile() {
         XCTAssertTrue(app.descendants(matching:.any)["screen-C01"].waitForExistence(timeout:5),app.debugDescription)
@@ -1356,8 +1392,7 @@ import UIKit
         app.buttons["뒤로"].tap()
         app.terminate()
         openRemoteCrewFixture("C16",crewID:"101")
-        app.buttons["communityCrewEnterBoard"].tap()
-        XCTAssertTrue(app.descendants(matching:.any)["screen-C19"].waitForExistence(timeout:5))
+        enterRemoteCrewBoard()
         XCTAssertTrue(app.buttons["communityCrewBoardTab-501"].waitForExistence(timeout:8))
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8))
         app.buttons["communityCrewPost-601"].tap()
@@ -1373,14 +1408,14 @@ import UIKit
 
     func testRemoteCrewPostAuthorCanEditRetryConflictAndDiscardDraft() {
         openRemoteCrewFixture("C16",failPostUpdateOnce:true)
-        app.buttons["communityCrewEnterBoard"].tap()
+        enterRemoteCrewBoard()
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
         app.buttons["communityCrewPost-601"].tap()
         XCTAssertTrue(app.buttons["remoteCrewPostEdit"].waitForExistence(timeout:5),app.debugDescription)
         app.buttons["remoteCrewPostEdit"].tap()
         XCTAssertTrue(app.textFields["remoteCrewPostEditTitle"].waitForExistence(timeout:5),app.debugDescription)
         replace("수정된 토요일 일정",into:app.textFields["remoteCrewPostEditTitle"])
-        replace("오전 9시에 만나요.",into:app.textViews["remoteCrewPostEditContent"])
+        replaceTextEditor("오전 9시에 만나요.",into:app.textViews["remoteCrewPostEditContent"])
         let save=app.buttons["remoteCrewPostEditSave"]
         save.tap()
         XCTAssertTrue(app.staticTexts["상태가 바뀌었어요. 목록을 새로고침해 주세요."].waitForExistence(timeout:5),app.debugDescription)
@@ -1393,41 +1428,44 @@ import UIKit
         app.buttons["remoteCrewPostEdit"].tap()
         replace("저장 전 변경",into:app.textFields["remoteCrewPostEditTitle"])
         app.buttons["remoteCrewPostEditCancel"].tap()
-        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
-        app.buttons["계속 편집"].tap()
+        remoteCrewDiscardAlertAction("remoteCrewPostEditDiscardContinue",label:"계속 편집").tap()
         XCTAssertEqual(app.textFields["remoteCrewPostEditTitle"].value as? String,"저장 전 변경")
         app.buttons["remoteCrewPostDetailBack"].tap()
-        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
-        app.buttons["remoteCrewPostEditDiscardConfirm"].tap()
+        remoteCrewDiscardAlertAction("remoteCrewPostEditDiscardConfirm",label:"버리기").tap()
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:5),app.debugDescription)
         XCTAssertTrue(app.buttons["communityCrewPost-601"].label.contains("수정된 토요일 일정"),"The board reflects the server-returned update for the same post ID")
     }
 
     func testRemoteCrewPostDeleteConfirmationRetryAndManagerPermissions() {
         openRemoteCrewFixture("C16",manager:true,failPostDeleteOnce:true)
-        app.buttons["communityCrewEnterBoard"].tap()
+        enterRemoteCrewBoard()
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
         app.buttons["communityCrewPost-601"].tap()
         XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists,"A manager cannot edit another member's post")
         XCTAssertTrue(app.buttons["remoteCrewPostDelete"].waitForExistence(timeout:5),app.debugDescription)
         app.buttons["remoteCrewPostDelete"].tap()
-        XCTAssertTrue(app.buttons["remoteCrewPostDeleteConfirm"].waitForExistence(timeout:5),app.debugDescription)
-        app.buttons["remoteCrewPostDeleteCancel"].tap()
+        remoteCrewDeleteDialogAction("remoteCrewPostDeleteConfirm",label:"게시글 삭제")
+        remoteCrewDeleteDialogAction("remoteCrewPostDeleteCancel",label:"취소").tap()
         XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].exists,"Cancel leaves the post intact")
 
-        app.buttons["remoteCrewPostDelete"].tap()
-        app.buttons["remoteCrewPostDeleteConfirm"].tap()
+        let dismissedDialog=app.sheets.matching(NSPredicate(format:"label == %@","게시글을 삭제할까요?")).firstMatch
+        let dialogGone=XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:dismissedDialog)
+        XCTAssertEqual(XCTWaiter.wait(for:[dialogGone],timeout:5),.completed,"The canceled confirmation sheet must finish dismissing before it can be reopened.")
+        let deleteAgain=app.buttons["remoteCrewPostDelete"]
+        XCTAssertTrue(waitHittable(deleteAgain,timeout:5),app.debugDescription)
+        deleteAgain.tap()
+        remoteCrewDeleteDialogAction("remoteCrewPostDeleteConfirm",label:"게시글 삭제").tap()
         XCTAssertTrue(app.staticTexts["상태가 바뀌었어요. 목록을 새로고침해 주세요."].waitForExistence(timeout:5),app.debugDescription)
         XCTAssertTrue(app.buttons["remoteCrewPostDelete"].isEnabled,"A known conflict remains retryable")
         app.buttons["remoteCrewPostDelete"].tap()
-        app.buttons["remoteCrewPostDeleteConfirm"].tap()
+        remoteCrewDeleteDialogAction("remoteCrewPostDeleteConfirm",label:"게시글 삭제").tap()
         XCTAssertTrue(app.staticTexts["communityCrewBoardEmpty"].waitForExistence(timeout:8),app.debugDescription)
         XCTAssertFalse(app.buttons["communityCrewPost-601"].exists,"Successful deletion removes that post ID from the board")
     }
 
     func testRemoteCrewPostActionsRespectAuthorAndRecruitmentModeratorPermissions() {
         openRemoteCrewFixture("C16",postAuthorOther:true)
-        app.buttons["communityCrewEnterBoard"].tap()
+        enterRemoteCrewBoard()
         XCTAssertTrue(app.buttons["communityCrewComposePost"].waitForExistence(timeout:5))
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
         app.buttons["communityCrewPost-601"].tap()
@@ -1442,6 +1480,17 @@ import UIKit
         app.buttons["communityCrewPost-601"].tap()
         XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:5))
         XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists,"Even the author cannot edit a recruitment-board post unless they can moderate that board")
+        XCTAssertFalse(app.buttons["remoteCrewPostDelete"].exists,"A different author's recruitment-board post cannot be deleted by this member")
+
+        app.terminate()
+        openRemoteCrewFixture("C16")
+        enterRemoteCrewBoard()
+        XCTAssertTrue(app.buttons["communityCrewBoardTab-502"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewBoardTab-502"].tap()
+        XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
+        app.buttons["communityCrewPost-601"].tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:5))
+        XCTAssertFalse(app.buttons["remoteCrewPostEdit"].exists,"A member author cannot edit a recruitment-board post")
         XCTAssertTrue(app.buttons["remoteCrewPostDelete"].exists,"The author may still delete their own post")
     }
 
@@ -1453,7 +1502,7 @@ import UIKit
         XCTAssertTrue(app.buttons["communityCrewOpen-101"].waitForExistence(timeout:8),app.debugDescription)
         app.buttons["communityCrewOpen-101"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
-        app.buttons["communityCrewEnterBoard"].tap()
+        enterRemoteCrewBoard()
         XCTAssertTrue(app.buttons["communityCrewPost-601"].waitForExistence(timeout:8),app.debugDescription)
         app.buttons["communityCrewPost-601"].tap()
         app.buttons["remoteCrewPostEdit"].tap()
@@ -1462,8 +1511,7 @@ import UIKit
         save.tap()
         XCTAssertFalse(save.isEnabled,"An in-flight edit blocks repeated taps")
         app.buttons["remoteCrewPostDetailBack"].tap()
-        XCTAssertTrue(app.alerts["변경사항을 버릴까요?"].waitForExistence(timeout:5),app.debugDescription)
-        app.buttons["remoteCrewPostEditDiscardConfirm"].tap()
+        remoteCrewDiscardAlertAction("remoteCrewPostEditDiscardConfirm",label:"버리기").tap()
         app.buttons["뒤로"].tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].exists)
         app.buttons["뒤로"].tap()

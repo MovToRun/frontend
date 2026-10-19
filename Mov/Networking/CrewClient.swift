@@ -481,7 +481,9 @@ struct CrewClient: CrewServing, Sendable {
             throw CrewClientFailure.mutationResultUnknown
         }
         guard response.statusCode == 200 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
+            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
+                throw CrewClientFailure.mutationResultUnknown
+            }
             throw Self.mapFailure(response)
         }
         do {
@@ -525,7 +527,9 @@ struct CrewClient: CrewServing, Sendable {
             }
         } catch { throw CrewClientFailure.mutationResultUnknown }
         guard response.statusCode == 204 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
+            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
+                throw CrewClientFailure.mutationResultUnknown
+            }
             throw Self.mapFailure(response)
         }
     }

@@ -213,7 +213,11 @@ final class CrewClientTests: XCTestCase {
 
     func testPostMutationRejectsNoncanonicalIDsAndUnknownUpdateResponse() async throws {
         let wrongPost = post.replacingOccurrences(of: #""postId":"401""#, with: #""postId":"402""#)
-        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 200, data: Data(wrongPost.utf8))])
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data(wrongPost.utf8)),
+            APIClientResponse(statusCode: 202, data: Data(#"{"accepted":true}"#.utf8)),
+            APIClientResponse(statusCode: 200, data: Data())
+        ])
         let client = try makeRecordingClient(transport)
 
         do {
@@ -229,14 +233,26 @@ final class CrewClientTests: XCTestCase {
             XCTAssertEqual(failure, .mutationResultUnknown)
         }
         do {
+            _ = try await client.updatePost(crewID: "101", boardID: "501", postID: "401", title: "수정", content: "본문")
+            XCTFail("An unexpected successful PATCH status may have applied the edit")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .mutationResultUnknown)
+        }
+        do {
+            try await client.deletePost(crewID: "101", boardID: "501", postID: "401")
+            XCTFail("An unexpected successful DELETE status may have applied the delete")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .mutationResultUnknown)
+        }
+        do {
             try await client.deletePost(crewID: "101", boardID: "501", postID: "0401")
             XCTFail("Leading-zero IDs are not canonical")
         } catch let failure as CrewClientFailure {
             XCTAssertEqual(failure, .invalidRequest)
         }
         let requests = await transport.capturedRequests()
-        XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests.first?.method, "PATCH")
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.map(\.method), ["PATCH", "PATCH", "DELETE"])
     }
 
     func testSessionChangeWhileResponseIsInFlightDiscardsOldAccountData() async throws {
