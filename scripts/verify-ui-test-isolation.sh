@@ -3,7 +3,7 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ui_tests="$repo_root/MovUITests/LaunchTests.swift"
-scheme="$repo_root/Mov.xcodeproj/xcshareddata/xcschemes/Mov.xcscheme"
+scheme="$repo_root/Mov.xcodeproj/xcshareddata/xcschemes/MovUITestHost.xcscheme"
 project="$repo_root/Mov.xcodeproj/project.pbxproj"
 
 fail() {
@@ -99,9 +99,9 @@ ui_runner="$products_dir/MovUITests-Runner.app"
 unit_bundle="$host_app/PlugIns/MovTests.xctest"
 ui_bundle="$ui_runner/PlugIns/MovUITests.xctest"
 products_root=$(dirname "$products_dir")
-set -- "$products_root"/Mov_*.xctestrun
-test -f "$1" || fail "build-for-testing configuration is missing beside built products: $products_root"
-test "$#" -eq 1 || fail "expected one Mov .xctestrun configuration, found $#"
+set -- "$products_root"/MovUITestHost_*.xctestrun
+test -f "$1" || fail "MovUITestHost build-for-testing configuration is missing beside built products: $products_root"
+test "$#" -eq 1 || fail "expected one MovUITestHost .xctestrun configuration, found $#"
 xctestrun=$1
 
 if [ -e "$products_dir/Mov.app" ] || [ -L "$products_dir/Mov.app" ]; then
@@ -227,9 +227,10 @@ if ! /usr/bin/perl -0e '
             && $scheme =~ /verify-ui-test-isolation\.sh/;
     die "TestAction must include both unit and UI test targets\n"
         unless $scheme =~ /BlueprintName = "MovTests"/ && $scheme =~ /BlueprintName = "MovUITests"/;
-    die "The product app must be excluded from build-for-testing while the isolated host remains included\n"
-        unless $scheme =~ /<BuildActionEntry\s+buildForTesting = "NO"[\s\S]*?BlueprintName = "Mov"\s*\n/
-            && $scheme =~ /<BuildActionEntry\s+buildForTesting = "YES"[\s\S]*?BlueprintName = "MovUITestHost"/;
+    die "The product app must not be in the isolated host scheme build graph\n"
+        if $scheme =~ /BlueprintName = "Mov"\s*\n|BuildableName = "Mov[.]app"/;
+    die "The isolated host must be explicitly built for testing\n"
+        unless $scheme =~ /<BuildActionEntry\s+buildForTesting = "YES"[\s\S]*?BlueprintName = "MovUITestHost"/;
 ' "$ui_tests" "$scheme"; then
     fail 'test artifacts exist, but UUID-scoped UserDefaults/Keychain launch configuration or TestAction wiring is invalid'
 fi

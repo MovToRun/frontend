@@ -528,8 +528,11 @@ import Observation
             let result = try await service.compareFollowRun(id: followSession.sessionId, routeVersion: followSession.routeVersion, runID: serverRunID)
             guard generation == ticket.generation else { return }
             comparison = result
-            if let memberID = runStore.authenticatedUploadMemberID {
-                pendingFollowKeys.removeValue(forKey: Self.followKey(memberID: memberID, courseID: followSession.courseId, routeVersion: followSession.routeVersion))
+            if let memberID = runStore.authenticatedUploadMemberID,
+               let completedClientRunID = followClientRunID {
+                pendingFollowKeys = pendingFollowKeys.filter { _, pending in
+                    pending.memberID != memberID || pending.runID != completedClientRunID
+                }
                 Self.savePendingFollowKeys(pendingFollowKeys)
             }
             followClientRunID = nil
@@ -598,7 +601,8 @@ import Observation
             application = actual
             busy = false
             operationID = nil
-            if missingMeansWithdrawn, actual == nil {
+            if missingMeansWithdrawn && (actual == nil || actual?.status == .withdrawn) {
+                application = nil
                 noticeMessage = "대기 중인 신청 철회를 확인했어요."
                 errorMessage = ""
             } else if actual?.status == .pending { noticeMessage = "신청 접수를 확인했어요."; errorMessage = "" }
@@ -881,9 +885,9 @@ extension WireframeRoot {
                 Button(courseFlow.busy ? "기록 저장 중…" : "러닝 완료하고 비교") { Task { await courseFlow.finishFollowingRun(runStore: store) } }.buttonStyle(WButtonStyle()).disabled(courseFlow.busy || run.elapsed(at: Date()) <= 0).accessibilityIdentifier("communityFollowFinish")
             } else if let comparison = courseFlow.comparison {
                 Text("따라달리기 비교를 저장했어요").font(W.font(18, .semibold)).accessibilityIdentifier("communityFollowComparisonTitle")
-                remoteCourseFact("코스 거리", "\(MovNumber.display(Double(comparison.courseDistanceMeters))) m")
-                remoteCourseFact("내 거리", "\(MovNumber.display(Double(comparison.runDistanceMeters))) m")
-                remoteCourseFact("시간 차이", "\(RunRecord.clock(Double(abs(comparison.runningSecondsDelta))))")
+                remoteCourseFact("코스 거리", "\(MovNumber.display(Double(courseFlow.course?.distanceMeters ?? 0))) m")
+                remoteCourseFact("내 유효 거리", "\(MovNumber.display(Double(comparison.validDistanceMeters))) m")
+                remoteCourseFact("시간 차이", "\(RunRecord.clock(Double(abs(comparison.secondsDelta))))")
             } else if store.session != nil {
                 WNotice(text: "다른 러닝이 진행 중이에요. 코스 세션과 일치하는 기록만 연결할 수 있어요.", danger: true)
             } else {
@@ -937,6 +941,7 @@ actor WireframeCommunityCourseFixture: CommunityCourseServing {
     private var courseWasPublished = true
     private var draft: BackendCommunityCourseDraft?
     private var followSessions: [UUID: BackendCourseFollowSession] = [:]
+    private var followClientRunIDs: [UUID: UUID] = [:]
 
     init(arguments: [String]) {
         operatorEnabled = arguments.contains("-wire-community-course-operator")
@@ -975,8 +980,10 @@ actor WireframeCommunityCourseFixture: CommunityCourseServing {
         return application!
     }
     func withdrawCertification() async throws {
-        guard application?.status == .pending else { throw CommunityCourseFailure.conflict }
-        application = nil
+        guard let pending = application, pending.status == .pending else { throw CommunityCourseFailure.conflict }
+        application = CommunityCertificationApplication(applicationId: pending.applicationId,
+            applicantMemberId: pending.applicantMemberId, status: .withdrawn, applicationReason: nil,
+            submittedAt: pending.submittedAt, updatedAt: "2026-10-19T08:00:00Z", evidenceUrls: [], reviews: pending.reviews)
         if failWithdrawalOnce && !withdrawalFailed { withdrawalFailed = true; throw CommunityCourseFailure.transport(.timedOut) }
     }
     func certificationSubmissionCount() -> Int { submissionCalls }
@@ -1034,20 +1041,23 @@ actor WireframeCommunityCourseFixture: CommunityCourseServing {
     func createFollowSession(courseID: String, clientSessionID: UUID, clientRunID: UUID, routeVersion: Int64) async throws -> BackendCourseFollowSession {
         guard courseWasPublished, courseID == "7001", routeVersion == 1 else { throw CommunityCourseFailure.notFound }
         if let existing = followSessions[clientSessionID] {
-            guard existing.clientRunId == clientRunID, existing.courseId == courseID, existing.routeVersion == routeVersion else { throw CommunityCourseFailure.conflict }
+            guard followClientRunIDs[clientSessionID] == clientRunID,
+                  existing.course?.courseId == courseID, existing.routeVersion == routeVersion else { throw CommunityCourseFailure.conflict }
             return existing
         }
-        let value = BackendCourseFollowSession(sessionId: "8101", courseId: courseID, clientSessionId: clientSessionID, clientRunId: clientRunID,
-            routeVersion: routeVersion, progressMeters: 0, elapsedSeconds: 0, courseAvailable: true, course: Self.course(id: courseID), comparison: nil)
+        let value = BackendCourseFollowSession(sessionId: "8101", status: "RUNNING", routeVersion: routeVersion,
+            progressMeters: 0, elapsedSeconds: 0, runId: nil, courseAvailable: true,
+            course: Self.course(id: courseID), comparison: nil)
         followSessions[clientSessionID] = value
+        followClientRunIDs[clientSessionID] = clientRunID
         return value
     }
     func fetchFollowSession(id: String) async throws -> BackendCourseFollowSession {
         guard let value = followSessions.values.first(where: { $0.sessionId == id }) else { throw CommunityCourseFailure.notFound }
         if unavailableFollowCourse {
-            return BackendCourseFollowSession(sessionId: value.sessionId, courseId: value.courseId,
-                clientSessionId: value.clientSessionId, clientRunId: value.clientRunId, routeVersion: value.routeVersion,
-                progressMeters: value.progressMeters, elapsedSeconds: value.elapsedSeconds,
+            return BackendCourseFollowSession(sessionId: value.sessionId, status: value.status,
+                routeVersion: value.routeVersion, progressMeters: value.progressMeters,
+                elapsedSeconds: value.elapsedSeconds, runId: value.runId,
                 courseAvailable: false, course: nil, comparison: nil)
         }
         return value
@@ -1056,17 +1066,21 @@ actor WireframeCommunityCourseFixture: CommunityCourseServing {
         guard let (key, value) = followSessions.first(where: { $0.value.sessionId == id }), routeVersion == value.routeVersion,
               progressMeters >= value.progressMeters, elapsedSeconds >= value.elapsedSeconds,
               progressMeters <= 4_820 else { throw CommunityCourseFailure.conflict }
-        followSessions[key] = BackendCourseFollowSession(sessionId: value.sessionId, courseId: value.courseId,
-            clientSessionId: value.clientSessionId, clientRunId: value.clientRunId, routeVersion: value.routeVersion,
-            progressMeters: progressMeters, elapsedSeconds: elapsedSeconds, courseAvailable: value.courseAvailable, course: value.course, comparison: value.comparison)
+        followSessions[key] = BackendCourseFollowSession(sessionId: value.sessionId, status: value.status,
+            routeVersion: value.routeVersion, progressMeters: progressMeters, elapsedSeconds: elapsedSeconds,
+            runId: value.runId, courseAvailable: value.courseAvailable, course: value.course, comparison: value.comparison)
     }
     func compareFollowRun(id: String, routeVersion: Int64, runID: String) async throws -> BackendCourseFollowComparison {
-        guard let value = followSessions.values.first(where: { $0.sessionId == id }), value.routeVersion == routeVersion else { throw CommunityCourseFailure.notFound }
+        guard let (key, value) = followSessions.first(where: { $0.value.sessionId == id }),
+              value.routeVersion == routeVersion else { throw CommunityCourseFailure.notFound }
         guard Int64(runID) != nil else { throw CommunityCourseFailure.invalidRequest }
-        return BackendCourseFollowComparison(courseId: value.courseId, routeVersion: routeVersion, runId: runID,
-            courseDistanceMeters: 4_820, courseRunningSeconds: 1_808, coursePaceSecondsPerKm: 375,
-            runDistanceMeters: 5_000, runRunningSeconds: 1_900, runPaceSecondsPerKm: 380,
-            distanceDeltaMeters: 180, runningSecondsDelta: 92, paceSecondsPerKmDelta: 5)
+        let comparison = BackendCourseFollowComparison(runId: runID, validDistanceMeters: 5_000,
+            validSeconds: 1_900, paceSecondsPerKm: 380, distanceDeltaMeters: 180,
+            secondsDelta: 92, paceDeltaSecondsPerKm: 5)
+        followSessions[key] = BackendCourseFollowSession(sessionId: value.sessionId, status: "COMPLETED",
+            routeVersion: value.routeVersion, progressMeters: value.progressMeters, elapsedSeconds: value.elapsedSeconds,
+            runId: runID, courseAvailable: value.courseAvailable, course: value.course, comparison: comparison)
+        return comparison
     }
 
     private static func course(id: String) -> BackendCommunityCourse {

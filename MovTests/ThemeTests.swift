@@ -97,6 +97,21 @@ final class WireframeCommunityCourseFlowTests: XCTestCase {
     }
 
     @MainActor
+    func testCertificationWithdrawalRecoversWithdrawnStatusAfterLostResponse() async {
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-pending", "-wire-community-course-withdraw-fail-once"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-withdraw-recovery")
+        await flow.loadCertification()
+        XCTAssertEqual(flow.application?.status, .pending)
+
+        await flow.withdrawCertification()
+
+        XCTAssertNil(flow.application, "The confirmed WITHDRAWN application is cleared from the member view")
+        XCTAssertEqual(flow.noticeMessage, "대기 중인 신청 철회를 확인했어요.")
+        XCTAssertTrue(flow.errorMessage.isEmpty)
+    }
+
+    @MainActor
     func testRepeatedCertificationTapWhileRequestIsPendingSendsOnce() async {
         let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-delay-submit"])
         let flow = WireframeCommunityCourseFlow(service: service)

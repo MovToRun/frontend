@@ -75,29 +75,23 @@ struct BackendCommunityCourseDraft: Codable, Equatable, Sendable {
 }
 
 struct BackendCourseFollowComparison: Codable, Equatable, Sendable {
-    let courseId: String
-    let routeVersion: Int64
     let runId: String
-    let courseDistanceMeters: Int64
-    let courseRunningSeconds: Int64
-    let coursePaceSecondsPerKm: Int64?
-    let runDistanceMeters: Int64
-    let runRunningSeconds: Int64
-    let runPaceSecondsPerKm: Int64?
+    let validDistanceMeters: Int64
+    let validSeconds: Int64
+    let paceSecondsPerKm: Int64?
     let distanceDeltaMeters: Int64
-    let runningSecondsDelta: Int64
-    let paceSecondsPerKmDelta: Int64?
+    let secondsDelta: Int64
+    let paceDeltaSecondsPerKm: Int64?
 }
 
 struct BackendCourseFollowSession: Codable, Equatable, Sendable, Identifiable {
     let sessionId: String
-    let courseId: String
-    let clientSessionId: UUID?
-    let clientRunId: UUID?
+    let status: String
     let routeVersion: Int64
     let progressMeters: Int64
     let elapsedSeconds: Int64
-    let courseAvailable: Bool?
+    let runId: String?
+    let courseAvailable: Bool
     let course: BackendCommunityCourse?
     let comparison: BackendCourseFollowComparison?
 
@@ -254,7 +248,9 @@ struct CommunityCourseClient: CommunityCourseServing, Sendable {
         guard routeVersion > 0, Int64(runID) != nil, Int64(runID)! > 0 else { throw CommunityCourseFailure.invalidRequest }
         let response = try await send(path: "course-follow-sessions/\(Self.pathComponent(id))/comparison", method: "POST", body: try encode(FollowComparisonRequest(routeVersion: routeVersion, runId: Int64(runID)!)))
         try require(response, statuses: [200, 201])
-        return try decode(BackendCourseFollowComparison.self, from: response.data)
+        let session = try decode(BackendCourseFollowSession.self, from: response.data)
+        guard let comparison = session.comparison else { throw CommunityCourseFailure.invalidResponse }
+        return comparison
     }
 
     private func send(path: String, method: String = "GET", body: Data? = nil, query: [URLQueryItem] = []) async throws -> APIClientResponse {

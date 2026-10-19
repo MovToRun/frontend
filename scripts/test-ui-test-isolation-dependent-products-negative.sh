@@ -27,7 +27,7 @@ make_bundle "$products_dir/MovUITests-Runner.app/PlugIns/MovUITests.xctest" loca
 
 write_xctestrun() {
     bad_target=$1
-    python3 - "$tmp_dir/Build/Products/Mov_isolation_negative.xctestrun" "$bad_target" <<'PY'
+    python3 - "$tmp_dir/Build/Products/MovUITestHost_isolation_negative.xctestrun" "$bad_target" <<'PY'
 import plistlib
 import sys
 

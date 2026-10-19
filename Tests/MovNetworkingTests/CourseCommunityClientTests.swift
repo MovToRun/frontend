@@ -31,7 +31,7 @@ private actor CourseResponseTransport: APIResponseSending {
 
 final class CourseCommunityClientTests: XCTestCase {
     func testCertificationUsesSelfScopedRequestAndNoStore() async throws {
-        let transport = CourseResponseTransport([APIClientResponse(statusCode: 200, data: Data(#"{"applicationId":"41","status":"PENDING","applicationReason":"runner","evidenceUrls":["https://example.org/a"],"reviews":[]}"#.utf8))])
+        let transport = CourseResponseTransport([APIClientResponse(statusCode: 200, data: Data(#"{"applicationId":"41","applicantMemberId":"7","status":"PENDING","applicationReason":"runner","submittedAt":"2026-10-18T07:00:00Z","updatedAt":"2026-10-18T07:00:00Z","evidenceUrls":["https://example.org/a"],"reviews":[]}"#.utf8))])
         let client = CommunityCourseClient(apiClient: transport, tokenProvider: CourseTestToken())
 
         let application = try await client.fetchMyCertification()
@@ -70,6 +70,22 @@ final class CourseCommunityClientTests: XCTestCase {
         XCTAssertTrue(invalidCalls.isEmpty)
     }
 
+    func testCertificationEmptyAndWithdrawalStatusesMatchControllerResponses() async throws {
+        let transport = CourseResponseTransport([
+            APIClientResponse(statusCode: 404, data: Data()),
+            APIClientResponse(statusCode: 204, data: Data())
+        ])
+        let client = CommunityCourseClient(apiClient: transport, tokenProvider: CourseTestToken())
+
+        let application = try await client.fetchMyCertification()
+        XCTAssertNil(application)
+        try await client.withdrawCertification()
+
+        let calls = await transport.capturedCalls()
+        XCTAssertEqual(calls.map(\.path), ["course-certifications/me", "course-certifications/me"])
+        XCTAssertEqual(calls.map(\.method), ["GET", "DELETE"])
+    }
+
     func testOperatorQueueUsesPendingCursorAndDecisionRequiresServiceContract() async throws {
         let queue = Data(#"{"items":[],"nextCursor":"cursor-a"}"#.utf8)
         let decision = Data(#"{"applicationId":"41","status":"APPROVED","applicationReason":"runner","evidenceUrls":null,"reviews":[]}"#.utf8)
@@ -100,14 +116,16 @@ final class CourseCommunityClientTests: XCTestCase {
         let draft = Data(#"{"courseId":"901","status":"DRAFT","startMaskMeters":300,"endMaskMeters":250}"#.utf8)
         let adjustedDraft = Data(#"{"courseId":"901","status":"DRAFT","startMaskMeters":450,"endMaskMeters":250}"#.utf8)
         let course = Data(#"{"courseId":"901","routeVersion":1,"runDate":"2026-10-18","distanceMeters":4820,"runningSeconds":1808,"paceSecondsPerKm":375,"routeSegments":[[{"latitude":37.56,"longitude":126.97,"elapsedSeconds":0},{"latitude":37.57,"longitude":126.98,"elapsedSeconds":400}]]}"#.utf8)
-        let follow = Data(#"{"sessionId":"700","courseId":"901","routeVersion":1,"progressMeters":0,"elapsedSeconds":0,"courseAvailable":true,"course":null,"comparison":null}"#.utf8)
-        let comparison = Data(#"{"courseId":"901","routeVersion":1,"runId":"505","courseDistanceMeters":4820,"courseRunningSeconds":1808,"coursePaceSecondsPerKm":375,"runDistanceMeters":5000,"runRunningSeconds":1900,"runPaceSecondsPerKm":380,"distanceDeltaMeters":180,"runningSecondsDelta":92,"paceSecondsPerKmDelta":5}"#.utf8)
+        let follow = Data(#"{"sessionId":"700","status":"RUNNING","routeVersion":1,"progressMeters":0,"elapsedSeconds":0,"runId":null,"courseAvailable":true,"course":{"courseId":"901","routeVersion":1,"runDate":"2026-10-18","distanceMeters":4820,"runningSeconds":1808,"paceSecondsPerKm":375,"routeSegments":[[{"latitude":37.56,"longitude":126.97,"elapsedSeconds":0},{"latitude":37.57,"longitude":126.98,"elapsedSeconds":400}]]},"comparison":null}"#.utf8)
+        let followed = Data(#"{"sessionId":"700","status":"RUNNING","routeVersion":1,"progressMeters":250,"elapsedSeconds":80,"runId":null,"courseAvailable":true,"course":{"courseId":"901","routeVersion":1,"runDate":"2026-10-18","distanceMeters":4820,"runningSeconds":1808,"paceSecondsPerKm":375,"routeSegments":[[{"latitude":37.56,"longitude":126.97,"elapsedSeconds":0},{"latitude":37.57,"longitude":126.98,"elapsedSeconds":400}]]},"comparison":null}"#.utf8)
+        let comparison = Data(#"{"sessionId":"700","status":"COMPLETED","routeVersion":1,"progressMeters":250,"elapsedSeconds":80,"runId":"505","courseAvailable":true,"course":{"courseId":"901","routeVersion":1,"runDate":"2026-10-18","distanceMeters":4820,"runningSeconds":1808,"paceSecondsPerKm":375,"routeSegments":[[{"latitude":37.56,"longitude":126.97,"elapsedSeconds":0},{"latitude":37.57,"longitude":126.98,"elapsedSeconds":400}]]},"comparison":{"runId":"505","validDistanceMeters":5000,"validSeconds":1900,"paceSecondsPerKm":380,"distanceDeltaMeters":180,"secondsDelta":92,"paceDeltaSecondsPerKm":5}}"#.utf8)
         let transport = CourseResponseTransport([
             APIClientResponse(statusCode: 201, data: draft),
             APIClientResponse(statusCode: 200, data: adjustedDraft),
             APIClientResponse(statusCode: 201, data: course),
             APIClientResponse(statusCode: 201, data: follow),
-            APIClientResponse(statusCode: 204, data: Data()),
+            APIClientResponse(statusCode: 200, data: follow),
+            APIClientResponse(statusCode: 200, data: followed),
             APIClientResponse(statusCode: 200, data: comparison)
         ])
         let client = CommunityCourseClient(apiClient: transport, tokenProvider: CourseTestToken())
@@ -116,12 +134,20 @@ final class CourseCommunityClientTests: XCTestCase {
         _ = try await client.publishCourse(id: "901")
         let sessionKey = UUID(uuidString: "A382BBA8-468D-447E-88EF-54A0A451951F")!
         let runKey = UUID(uuidString: "AC52B9F3-3A59-41A5-82F5-F5619D9D90DD")!
-        _ = try await client.createFollowSession(courseID: "901", clientSessionID: sessionKey, clientRunID: runKey, routeVersion: 1)
+        let createdSession = try await client.createFollowSession(courseID: "901", clientSessionID: sessionKey, clientRunID: runKey, routeVersion: 1)
+        let currentSession = try await client.fetchFollowSession(id: "700")
         try await client.updateFollowProgress(id: "700", routeVersion: 1, progressMeters: 250, elapsedSeconds: 80)
         let result = try await client.compareFollowRun(id: "700", routeVersion: 1, runID: "505")
         let calls = await transport.capturedCalls()
 
+        XCTAssertEqual(createdSession.status, "RUNNING")
+        XCTAssertEqual(createdSession.course?.courseId, "901")
+        XCTAssertNil(createdSession.runId)
+        XCTAssertEqual(currentSession.progressMeters, 0)
+        XCTAssertEqual(result.validDistanceMeters, 5_000)
+        XCTAssertEqual(result.validSeconds, 1_900)
         XCTAssertEqual(result.distanceDeltaMeters, 180)
+        XCTAssertEqual(result.secondsDelta, 92)
         XCTAssertEqual(calls[0].path, "courses/me")
         XCTAssertEqual(Set(try XCTUnwrap(calls[0].body).jsonObject().keys), Set(["runId", "startMaskMeters", "endMaskMeters"]))
         XCTAssertEqual(calls[1].path, "courses/me/901")
@@ -130,15 +156,20 @@ final class CourseCommunityClientTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(calls[2].body).jsonObject()["publicConsent"] as? Bool, true)
         XCTAssertEqual(calls[3].path, "courses/901/follow-sessions")
         XCTAssertEqual(try XCTUnwrap(calls[3].body).jsonObject()["clientSessionId"] as? String, sessionKey.uuidString)
-        let progress = try XCTUnwrap(calls[4].body).jsonObject()
+        let progress = try XCTUnwrap(calls[5].body).jsonObject()
         XCTAssertEqual(Set(progress.keys), Set(["routeVersion", "progressMeters", "elapsedSeconds"]))
         XCTAssertNil(progress["latitude"])
-        XCTAssertEqual(calls[5].path, "course-follow-sessions/700/comparison")
-        XCTAssertEqual(try XCTUnwrap(calls[5].body).jsonObject()["runId"] as? Int, 505)
+        XCTAssertEqual(calls[4].path, "course-follow-sessions/700")
+        XCTAssertEqual(calls[4].method, "GET")
+        XCTAssertEqual(calls[5].path, "course-follow-sessions/700/progress")
+        XCTAssertEqual(calls[5].method, "PUT")
+        XCTAssertEqual(calls[6].path, "course-follow-sessions/700/comparison")
+        XCTAssertEqual(calls[6].method, "POST")
+        XCTAssertEqual(try XCTUnwrap(calls[6].body).jsonObject()["runId"] as? Int, 505)
     }
 
     func testCreateFollowSessionSameClientIDsAreReusableAcrossRetry() async throws {
-        let payload = Data(#"{"sessionId":"700","courseId":"901","routeVersion":1,"progressMeters":0,"elapsedSeconds":0,"courseAvailable":true,"course":null,"comparison":null}"#.utf8)
+        let payload = Data(#"{"sessionId":"700","status":"RUNNING","routeVersion":1,"progressMeters":0,"elapsedSeconds":0,"runId":null,"courseAvailable":true,"course":{"courseId":"901","routeVersion":1,"runDate":"2026-10-18","distanceMeters":4820,"runningSeconds":1808,"paceSecondsPerKm":375,"routeSegments":[]},"comparison":null}"#.utf8)
         let transport = CourseResponseTransport([
             APIClientResponse(statusCode: 201, data: payload), APIClientResponse(statusCode: 200, data: payload)
         ])

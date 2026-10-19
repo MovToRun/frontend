@@ -35,9 +35,9 @@ PRODUCT_BUNDLE_IDENTIFIER='local.mov.prototype.MovTests' \
     "$repo_root/scripts/verify-ui-test-isolation.sh"
 
 products_root=$(dirname "$products_dir")
-set -- "$products_root"/Mov_*.xctestrun
+set -- "$products_root"/MovUITestHost_*.xctestrun
 test -f "$1" && test "$#" -eq 1 || {
-    printf 'Expected one build-for-testing .xctestrun beside %s.\n' "$products_dir" >&2
+    printf 'Expected one MovUITestHost build-for-testing .xctestrun beside %s.\n' "$products_dir" >&2
     exit 1
 }
 xctestrun=$1
@@ -117,6 +117,7 @@ case "$test_selection" in
             -only-testing:MovUITests/LaunchTests/testRemoteCommunityCourseStopsWhenPinnedRevisionIsUnavailableAndHandlesEmptyCatalog \
             -only-testing:MovUITests/LaunchTests/testRemoteCommunityCourseShareCreatesPrivateDraftThenRequiresConsentToPublish \
             -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationRecoversAcceptedSubmissionAfterLostResponse \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationWithdrawalRecoversWithdrawnStatusAfterLostResponse \
             -only-testing:MovTests/WireframeCommunityCourseFlowTests/testRepeatedCertificationTapWhileRequestIsPendingSendsOnce \
             -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationReadFromPreviousAccountIsDiscarded \
             -only-testing:MovTests/WireframeCommunityCourseFlowTests/testOperatorRejectAndCertificationGateUseServerRoleAndStatus \
