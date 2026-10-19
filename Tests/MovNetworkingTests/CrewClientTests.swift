@@ -206,7 +206,7 @@ final class CrewClientTests: XCTestCase {
             APIClientResponse(statusCode: 200, data: Data("[\(application)]".utf8)),
             APIClientResponse(statusCode: 200, data: Data(application.replacingOccurrences(of: "PENDING", with: "APPROVED").utf8)),
             APIClientResponse(statusCode: 200, data: Data(application.replacingOccurrences(of: "PENDING", with: "REJECTED").utf8)),
-            APIClientResponse(statusCode: 200, data: Data())
+            APIClientResponse(statusCode: 204, data: Data())
         ])
         let client = try makeRecordingClient(transport)
 
@@ -339,7 +339,7 @@ final class CrewClientTests: XCTestCase {
              { _ = try await $0.apply(crewID: "101", note: nil) }),
             ("approve/reject", .init(statusCode: 201, data: Data(approvedApplication.utf8)), .mutationResultUnknown,
              { _ = try await $0.decide(crewID: "101", applicationID: "301", approve: true) }),
-            ("cancel application", .init(statusCode: 204, data: Data()), .mutationResultUnknown,
+            ("cancel application", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
              { try await $0.cancelApplication(crewID: "101", applicationID: "301") }),
             ("create board", .init(statusCode: 200, data: Data(board.utf8)), .mutationResultUnknown,
              { _ = try await $0.createBoard(crewID: "101", name: "새 게시판") }),

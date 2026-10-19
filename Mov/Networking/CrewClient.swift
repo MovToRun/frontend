@@ -410,7 +410,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        try Self.requireMutationStatus(response, expectedStatus: 200)
+        try Self.requireMutationStatus(response, expectedStatus: 204)
     }
 
     func fetchBoards(crewID: String) async throws -> [BackendCrewBoard] {
