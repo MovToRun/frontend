@@ -101,7 +101,7 @@ extension WireframeRoot {
                                 Button("크루 만들기", action: beginRemoteCrewCreation)
                                     .font(W.font(12, .medium)).accessibilityIdentifier("communityCrewCreate")
                                 Button { go("C33") } label: {
-                                    Text("신청중 \(crewFlow.pendingApplicationCount)").font(W.font(12, .medium)).foregroundStyle(W.ink)
+                                    Text("신청 중").font(W.font(12, .medium)).foregroundStyle(W.ink)
                                         .padding(.horizontal, 12).frame(height: 34).background(W.soft, in: Capsule())
                                 }.buttonStyle(.plain).accessibilityIdentifier("communityCrewPending")
                             }
@@ -123,34 +123,40 @@ extension WireframeRoot {
                         }
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("모집글에서 크루 찾기").font(W.font(18, .semibold))
-                            TextField("크루 이름이나 모집글 검색", text: $crewFlow.searchText)
+                            Text("크루 찾기").font(W.font(18, .semibold))
+                            TextField("크루 이름이나 소개 검색", text: $crewFlow.searchText)
                                 .font(W.font(14)).padding(13).background(W.soft, in: RoundedRectangle(cornerRadius: 10))
                                 .accessibilityIdentifier("remoteCrewSearchField")
-                            Text("공개 모집 게시글 20개 안에서 검색해요.").font(W.font(11)).foregroundStyle(W.muted)
-                            remoteCrewLoadState(crewFlow.recruitmentState, identifier: "remoteCrewRecruitment") { Task { await crewFlow.loadRecruitmentPosts() } }
-                            if crewFlow.recruitmentState == .loaded {
-                                let needle = crewFlow.searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                                let results = crewFlow.recruitmentPosts.filter { post in
-                                    needle.isEmpty || "\(post.crewName) \(post.title) \(post.content)".lowercased().contains(needle)
-                                }
-                                if results.isEmpty {
-                                    Text(needle.isEmpty ? "모집 중인 글이 아직 없어요" : "검색 결과가 없어요")
+                            Text("크루 이름과 소개를 검색해요. 지역·등급 필터는 지원하지 않아요.").font(W.font(11)).foregroundStyle(W.muted)
+                            remoteCrewLoadState(crewFlow.crewDirectoryState, identifier: "remoteCrewDirectory") {
+                                Task { await crewFlow.searchCrewDirectory(query: crewFlow.searchText) }
+                            }
+                            if crewFlow.crewDirectoryState == .loaded {
+                                if crewFlow.crewDirectory.isEmpty {
+                                    Text(crewFlow.searchText.isEmpty ? "아직 가입할 수 있는 크루가 없어요" : "검색 결과가 없어요")
                                         .font(W.font(14, .medium)).foregroundStyle(W.muted).frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 20).accessibilityIdentifier("remoteCrewRecruitmentEmpty")
+                                        .padding(.vertical, 20).accessibilityIdentifier("remoteCrewDirectoryEmpty")
                                 } else {
-                                    ForEach(results) { post in
+                                    ForEach(crewFlow.crewDirectory) { crew in
                                         Button {
-                                            crewFlow.selectCrew(post.crewId)
+                                            crewFlow.selectCrew(crew.id)
+                                            crewFlow.selectedCrew = crew
+                                            crewFlow.detailState = .loaded
                                             go("C16")
                                         } label: {
                                             VStack(alignment: .leading, spacing: 5) {
-                                                Text(post.crewName).font(W.font(14, .semibold)).foregroundStyle(W.ink)
-                                                Text(post.title).font(W.font(13, .medium)).foregroundStyle(W.ink)
-                                                Text(post.content).font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)
+                                                Text(crew.name).font(W.font(14, .semibold)).foregroundStyle(W.ink)
+                                                Text(crew.introduction ?? "소개가 등록되지 않았어요.").font(W.font(12)).foregroundStyle(W.muted).lineLimit(2)
+                                                Text("멤버 \(crew.memberCount)/\(crew.capacity)명").font(W.font(11)).foregroundStyle(W.muted)
                                             }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12).contentShape(Rectangle())
                                         }.buttonStyle(.plain).overlay(alignment: .bottom) { W.line.frame(height: 1) }
-                                            .accessibilityIdentifier("remoteCrewRecruitment-\(post.id)")
+                                            .accessibilityIdentifier("remoteCrewDirectory-\(crew.id)")
+                                    }
+                                    if crewFlow.crewDirectoryNextCursor != nil {
+                                        Button(crewFlow.loadingMoreDirectory ? "불러오는 중…" : "더 보기") {
+                                            Task { await crewFlow.loadMoreCrewDirectory() }
+                                        }.font(W.font(13, .medium)).frame(maxWidth: .infinity, minHeight: 44)
+                                            .disabled(crewFlow.loadingMoreDirectory).accessibilityIdentifier("remoteCrewDirectoryMore")
                                     }
                                 }
                             }
@@ -161,6 +167,14 @@ extension WireframeRoot {
                 .scrollDismissesKeyboard(.interactively).accessibilityIdentifier("communityCrewOverview")
         }.background(W.paper)
             .task(id: ui.remoteAccountScopeID) { crewFlow.setAccountScope(ui.remoteAccountScopeID); await crewFlow.loadOverview() }
+            .task(id: "\(ui.remoteAccountScopeID)|\(ui.communityCrewTab)|\(crewFlow.searchText)") {
+                guard ui.communityCrewTab == "find" else { return }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                await crewFlow.searchCrewDirectory(query: crewFlow.searchText)
+            }
+            .onChange(of: crewFlow.searchText) { _, value in
+                if value.count > 30 { crewFlow.searchText = String(value.prefix(30)) }
+            }
     }
 
     func remoteCrewRow(_ title: String, subtitle: String, detail: String, id: String, joined: Bool) -> some View {
@@ -241,6 +255,7 @@ extension WireframeRoot {
                 Text(application?.status == "PENDING" ? "가입 승인을 기다리고 있어요" : "현재 신청 상태를 확인할 수 없어요")
                     .font(W.font(19, .semibold)).accessibilityIdentifier("communityCrewApplicationHeading")
                 if let crew = crewFlow.selectedCrew { Text(crew.name).font(W.font(13, .medium)).padding(.top, 4).accessibilityIdentifier("communityCrewApplicationName") }
+                else if let application { Text(application.crewName).font(W.font(13, .medium)).padding(.top, 4).accessibilityIdentifier("communityCrewApplicationName") }
                 if let application, let note = application.note, !note.isEmpty { Text(note).font(W.font(13)).foregroundStyle(W.muted) }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(17).background(W.soft, in: RoundedRectangle(cornerRadius: 14))
             if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("remoteCrewMutationMessage") }
@@ -263,14 +278,13 @@ extension WireframeRoot {
     }
 
     var remoteCommunityCrewApplicationList: some View {
-        let applications = crewFlow.submittedApplications.filter { $0.status == "PENDING" }
+        let applications = crewFlow.myPendingApplications
         return WPage(title: "신청 중인 크루", back: back) {
-            WNotice(text: "신청 목록 API가 없어 이전 실행에서 보낸 신청은 이 화면에 표시되지 않아요.")
-                .accessibilityIdentifier("communityCrewApplicationsContractNotice")
-            if applications.isEmpty {
-                Text("현재 실행에서 보낸 신청이 없어요.").font(W.font(14)).foregroundStyle(W.muted)
+            remoteCrewLoadState(crewFlow.myApplicationsState, identifier: "remoteCrewApplications") { Task { await crewFlow.loadMyPendingApplications() } }
+            if crewFlow.myApplicationsState == .loaded && applications.isEmpty {
+                Text("승인을 기다리는 신청이 없어요.").font(W.font(14)).foregroundStyle(W.muted)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center).accessibilityIdentifier("communityCrewApplicationsEmpty")
-            } else {
+            } else if crewFlow.myApplicationsState == .loaded {
                 ForEach(applications) { application in
                     HStack(spacing: 10) {
                         Button {
@@ -278,7 +292,7 @@ extension WireframeRoot {
                             go("C18")
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(crewFlow.myCrews.first(where: { $0.id == application.crewId })?.name ?? "크루 \(application.crewId)").font(W.font(14, .medium)).foregroundStyle(W.ink)
+                                Text(application.crewName).font(W.font(14, .medium)).foregroundStyle(W.ink)
                                 Text("승인 대기 중").font(W.font(11)).foregroundStyle(W.muted)
                             }.frame(maxWidth: .infinity, minHeight: 60, alignment: .leading).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("communityCrewApplicationOpen-\(application.id)")
@@ -288,6 +302,12 @@ extension WireframeRoot {
                             .accessibilityIdentifier("communityCrewApplicationCancel-\(application.id)")
                     }.accessibilityElement(children: .contain).accessibilityIdentifier("communityCrewApplicationRow-\(application.id)")
                     W.line.frame(height: 1)
+                }
+                if crewFlow.myApplicationsNextCursor != nil {
+                    Button(crewFlow.loadingMoreApplications ? "불러오는 중…" : "더 보기") {
+                        Task { await crewFlow.loadMoreMyPendingApplications() }
+                    }.font(W.font(13, .medium)).frame(maxWidth: .infinity, minHeight: 44)
+                        .disabled(crewFlow.loadingMoreApplications).accessibilityIdentifier("communityCrewApplicationsMore")
                 }
             }
             if !crewFlow.mutationMessage.isEmpty { WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError) }
@@ -299,6 +319,7 @@ extension WireframeRoot {
                     Task { _ = await crewFlow.cancelApplication(application); pendingRemoteCrewCancellation = nil }
                 }.accessibilityIdentifier("communityCrewApplicationCancelConfirm")
             } message: { Text("이 신청을 취소할지 서버에 확인해요.") }
+            .task(id: ui.remoteAccountScopeID) { await crewFlow.loadMyPendingApplications() }
     }
 
     var remoteCommunityCrewInformation: some View {
@@ -317,6 +338,7 @@ extension WireframeRoot {
         } actions: {
             if crewFlow.selectedCrew?.role != nil { Button("게시판 보기") { go("C19") }.buttonStyle(WButtonStyle()).accessibilityIdentifier("communityCrewInfoBoard") }
             if crewFlow.isManager { Button("크루 관리") { go("C21") }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewInfoManage") }
+            if crewFlow.isManager { Button("정보 수정") { beginRemoteCrewEditing() }.buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewInfoEdit") }
         }.task(id: crewFlow.selectedCrewID) { if crewFlow.selectedCrew == nil { await crewFlow.loadCrewDetail() } }
     }
 
@@ -480,6 +502,7 @@ extension WireframeRoot {
     }
 
     func beginRemoteCrewCreation() {
+        communityCrewDraftOriginal = nil
         ui.communityCrewDraftID = nil
         ui.communityCrewDraftName = ""
         ui.communityCrewDraftIntroduction = ""
@@ -489,8 +512,31 @@ extension WireframeRoot {
         go("C20")
     }
 
+    func beginRemoteCrewEditing() {
+        guard crewFlow.isManager, let crew = crewFlow.selectedCrew else { return }
+        ui.communityCrewDraftID = crew.id
+        ui.communityCrewDraftName = crew.name
+        ui.communityCrewDraftIntroduction = crew.introduction ?? ""
+        ui.communityCrewDraftJoinGuide = crew.joinGuide ?? ""
+        ui.communityCrewDraftError = ""
+        ui.communityCrewNameCheck = ""
+        communityCrewDraftOriginal = WCommunityCrewDraftSnapshot(
+            name: crew.name, introduction: ui.communityCrewDraftIntroduction,
+            region: ui.communityCrewDraftRegion, minimumRank: ui.communityCrewDraftRank,
+            photoData: ui.communityCrewDraftPhoto, joinGuide: ui.communityCrewDraftJoinGuide
+        )
+        go("C20")
+    }
+
     var remoteCommunityCrewEditor: some View {
-        WPage(title: "크루 만들기", back: back) {
+        let isEditing = ui.communityCrewDraftID != nil
+        let title: String = isEditing ? "크루 정보 수정" : "크루 만들기"
+        let saveTitle = crewFlow.isMutating ? (isEditing ? "저장 중…" : "만드는 중…") : (isEditing ? "수정 저장" : "크루 만들기")
+        let saveKey = isEditing ? "update-crew|\(crewFlow.selectedCrewID ?? "")" : "create-crew"
+        let saveAction: () -> Void = {
+            if isEditing { submitRemoteCrewEdit() } else { submitRemoteCrewCreation() }
+        }
+        return WPage(title: title, back: back) {
             Text("크루 이름과 소개, 가입 안내를 입력해 주세요.").font(W.font(13)).foregroundStyle(W.muted)
             VStack(alignment: .trailing, spacing: 3) {
                 TextField("크루 이름", text: $ui.communityCrewDraftName)
@@ -500,7 +546,7 @@ extension WireframeRoot {
             }
             WField(label: "소개", text: $ui.communityCrewDraftIntroduction, limit: 300, multiline: true, multilineHeight: 120, textSize: 14, labelSize: 13, accessibilityID: "communityCrewDraftIntroduction")
             WField(label: "가입 안내", text: $ui.communityCrewDraftJoinGuide, limit: 500, multiline: true, multilineHeight: 150, textSize: 14, labelSize: 13, accessibilityID: "communityCrewDraftJoinGuide")
-            Text("크루 사진·지역·가입 등급은 현재 생성 API에서 받지 않아요.").font(W.font(11)).foregroundStyle(W.muted)
+            Text("크루 사진·지역·가입 등급은 API에서 받지 않아요.").font(W.font(11)).foregroundStyle(W.muted)
                 .accessibilityIdentifier("communityCrewCreateContractNote")
             if !ui.communityCrewDraftError.isEmpty {
                 WNotice(text: ui.communityCrewDraftError, danger: true).accessibilityIdentifier("communityCrewDraftError")
@@ -509,8 +555,8 @@ extension WireframeRoot {
                 WNotice(text: crewFlow.mutationMessage, danger: crewFlow.mutationError).accessibilityIdentifier("communityCrewCreateMutationMessage")
             }
         } actions: {
-            Button(crewFlow.isMutating ? "만드는 중…" : "크루 만들기", action: submitRemoteCrewCreation)
-                .buttonStyle(WButtonStyle()).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked("create-crew") || ui.communityCrewDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button(saveTitle, action: saveAction)
+                .buttonStyle(WButtonStyle()).disabled(crewFlow.isMutating || crewFlow.isWriteBlocked(saveKey) || ui.communityCrewDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("communityCrewSave")
             Button("취소", action: back).buttonStyle(WButtonStyle(kind: 1)).accessibilityIdentifier("communityCrewCancelEdit")
         }
@@ -533,7 +579,26 @@ extension WireframeRoot {
         Task {
             if await crewFlow.createCrew(name: name, introduction: introduction.isEmpty ? nil : introduction, joinGuide: joinGuide.isEmpty ? nil : joinGuide), ui.screen == origin {
                 ui.communityCrewDraftID = nil
+                communityCrewDraftOriginal = nil
                 go("C16")
+            }
+        }
+    }
+
+    func submitRemoteCrewEdit() {
+        let name = ui.communityCrewDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let introduction = ui.communityCrewDraftIntroduction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let joinGuide = ui.communityCrewDraftJoinGuide.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 30 else { ui.communityCrewDraftError = "크루 이름을 30자 안으로 입력해 주세요."; return }
+        guard introduction.count <= 300, joinGuide.count <= 500 else { ui.communityCrewDraftError = "소개는 300자, 가입 안내는 500자 안으로 입력해 주세요."; return }
+        let origin = ui.screen
+        ui.communityCrewDraftError = ""
+        Task {
+            if await crewFlow.updateSelectedCrew(name: name, introduction: introduction.isEmpty ? nil : introduction,
+                joinGuide: joinGuide.isEmpty ? nil : joinGuide), ui.screen == origin {
+                ui.communityCrewDraftID = nil
+                communityCrewDraftOriginal = nil
+                go("C32")
             }
         }
     }
@@ -967,6 +1032,7 @@ struct WCommunityCrewDraftSnapshot:Equatable {
     var region:String
     var minimumRank:Int
     var photoData:Data?
+    var joinGuide:String = ""
 }
 
 enum WCommunityCrewPolicy {
@@ -1093,9 +1159,9 @@ enum WCommunityCrewPolicy {
         guard memo.count<=300 else{return .invalidMemo}
         return .ready
     }
-    static func draftHasChanges(_ snapshot:WCommunityCrewDraftSnapshot?,name:String,introduction:String,region:String,minimumRank:Int,photoData:Data?)->Bool {
+    static func draftHasChanges(_ snapshot:WCommunityCrewDraftSnapshot?,name:String,introduction:String,region:String,minimumRank:Int,photoData:Data?,joinGuide:String = "")->Bool {
         guard let snapshot else{return false}
-        return snapshot != WCommunityCrewDraftSnapshot(name:name,introduction:introduction,region:region,minimumRank:minimumRank,photoData:photoData)
+        return snapshot != WCommunityCrewDraftSnapshot(name:name,introduction:introduction,region:region,minimumRank:minimumRank,photoData:photoData,joinGuide:joinGuide)
     }
     static func canReadBoard(crew:WCommunityCrew?,memberIDs:Set<String>,viewerID:String)->Bool {
         guard let crew else{return false}
@@ -2360,12 +2426,12 @@ extension WireframeRoot {
         ui.communityCrewMemberWarningDraft="";ui.communityCrewMemberFeedback="";ui.communityCrewMemberError="";ui.communitySelectedCrewMemberID="";performBack()
     }
     func startCommunityCrewCreation(){
-        communityCrewDraftOriginal=nil;ui.communityCrewDraftID=nil;ui.communityCrewDraftName="";ui.communityCrewDraftIntroduction="";ui.communityCrewDraftRegion="모브시 중앙";ui.communityCrewDraftRank=0;ui.communityCrewDraftPhoto=nil;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";go("C20")
+        communityCrewDraftOriginal=nil;ui.communityCrewDraftID=nil;ui.communityCrewDraftName="";ui.communityCrewDraftIntroduction="";ui.communityCrewDraftJoinGuide="";ui.communityCrewDraftRegion="모브시 중앙";ui.communityCrewDraftRank=0;ui.communityCrewDraftPhoto=nil;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";go("C20")
     }
     func startCommunityCrewEditing(_ crew:WCommunityCrew){
         guard communityCrewCanManage(crew) else{return}
-        let snapshot=WCommunityCrewDraftSnapshot(name:crew.name,introduction:crew.introduction,region:crew.region,minimumRank:crew.minimumRank,photoData:crew.photoData)
-        communityCrewDraftOriginal=snapshot;ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftID=crew.id;ui.communityCrewDraftName=crew.name;ui.communityCrewDraftIntroduction=crew.introduction;ui.communityCrewDraftRegion=crew.region;ui.communityCrewDraftRank=crew.minimumRank;ui.communityCrewDraftPhoto=crew.photoData;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";performNavigation("C20")
+        let snapshot=WCommunityCrewDraftSnapshot(name:crew.name,introduction:crew.introduction,region:crew.region,minimumRank:crew.minimumRank,photoData:crew.photoData,joinGuide:crew.guidance)
+        communityCrewDraftOriginal=snapshot;ui.communitySelectedCrewID=crew.id;ui.communityCrewDraftID=crew.id;ui.communityCrewDraftName=crew.name;ui.communityCrewDraftIntroduction=crew.introduction;ui.communityCrewDraftJoinGuide=crew.guidance;ui.communityCrewDraftRegion=crew.region;ui.communityCrewDraftRank=crew.minimumRank;ui.communityCrewDraftPhoto=crew.photoData;ui.communityCrewDraftError="";ui.communityCrewNameCheck="";performNavigation("C20")
     }
     func checkCommunityCrewDraftName(){
         let candidate=ui.communityCrewDraftName.trimmingCharacters(in:.whitespacesAndNewlines)

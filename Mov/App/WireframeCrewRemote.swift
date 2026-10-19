@@ -19,6 +19,8 @@ enum WireframeCrewLoadState: Equatable {
     private(set) var mutationError = false
     var myCrewsState: WireframeCrewLoadState = .idle
     var recruitmentState: WireframeCrewLoadState = .idle
+    var crewDirectoryState: WireframeCrewLoadState = .idle
+    var myApplicationsState: WireframeCrewLoadState = .idle
     var detailState: WireframeCrewLoadState = .idle
     var boardsState: WireframeCrewLoadState = .idle
     var postsState: WireframeCrewLoadState = .idle
@@ -27,6 +29,15 @@ enum WireframeCrewLoadState: Equatable {
     var restrictionsState: WireframeCrewLoadState = .idle
     var myCrews: [BackendCrew] = []
     var recruitmentPosts: [BackendCrewPost] = []
+    var crewDirectory: [BackendCrew] = []
+    var myPendingApplications: [BackendCrewMyApplication] = []
+    private(set) var crewDirectoryNextCursor: String?
+    private(set) var myApplicationsNextCursor: String?
+    private(set) var loadingMoreDirectory = false
+    private(set) var loadingMoreApplications = false
+    private var crewDirectoryQuery = ""
+    private var crewDirectoryUsedCursors: Set<String> = []
+    private var myApplicationsUsedCursors: Set<String> = []
     var submittedApplications: [BackendCrewApplication] = []
     var pendingApplications: [BackendCrewApplication] = []
     var members: [BackendCrewMember] = []
@@ -56,20 +67,21 @@ enum WireframeCrewLoadState: Equatable {
     var canCreatePostOnSelectedBoard: Bool {
         selectedCrew?.role != nil && selectedBoard != nil && (selectedBoard?.kind != "RECRUITMENT" || isManager)
     }
-    var selectedApplicationForCrew: BackendCrewApplication? {
-        submittedApplications.last { $0.crewId == selectedCrewID && $0.status == "PENDING" }
+    var selectedApplicationForCrew: BackendCrewMyApplication? {
+        myPendingApplications.first { $0.crewId == selectedCrewID && $0.status == "PENDING" }
     }
-    var pendingApplicationCount: Int { submittedApplications.filter { $0.status == "PENDING" }.count }
     func isWriteBlocked(_ key: String) -> Bool { writeBlockedKeys.contains(key) }
 
     func setAccountScope(_ scopeID: String) {
         guard accountScopeID != scopeID else { return }
         accountScopeID = scopeID
         readIDs.removeAll()
-        myCrewsState = .idle; recruitmentState = .idle; detailState = .idle
+        myCrewsState = .idle; recruitmentState = .idle; crewDirectoryState = .idle; myApplicationsState = .idle; detailState = .idle
         boardsState = .idle; postsState = .idle; pendingState = .idle
         membersState = .idle; restrictionsState = .idle
-        myCrews = []; recruitmentPosts = []; submittedApplications = []
+        myCrews = []; recruitmentPosts = []; crewDirectory = []; myPendingApplications = []; submittedApplications = []
+        crewDirectoryNextCursor = nil; myApplicationsNextCursor = nil; crewDirectoryUsedCursors = []; myApplicationsUsedCursors = []
+        crewDirectoryQuery = ""; loadingMoreDirectory = false; loadingMoreApplications = false; searchText = ""
         pendingApplications = []; members = []; rejoinRestrictions = []; boards = []; posts = []
         selectedCrew = nil; selectedCrewID = nil; selectedBoardID = nil
         selectedApplication = nil; selectedMemberID = nil; selectedPost = nil
@@ -80,6 +92,7 @@ enum WireframeCrewLoadState: Equatable {
 
     func loadOverview() async {
         await loadMyCrews()
+        await loadMyPendingApplications()
         await loadRecruitmentPosts()
     }
 
@@ -108,6 +121,83 @@ enum WireframeCrewLoadState: Equatable {
         } catch {
             guard isCurrentRead("recruitment", id: requestID), !Task.isCancelled else { return }
             recruitmentState = .failed(message(for: error))
+        }
+    }
+
+    func searchCrewDirectory(query: String) async {
+        guard let service, query.count <= 30 else { return }
+        crewDirectoryQuery = query
+        crewDirectory = []; crewDirectoryNextCursor = nil; crewDirectoryUsedCursors = []
+        loadingMoreDirectory = false
+        let requestID = beginRead("crew-directory", state: .loading)
+        do {
+            let page = try await service.searchCrews(query: query, cursor: nil, size: 20)
+            guard isCurrentRead("crew-directory", id: requestID), !Task.isCancelled, crewDirectoryQuery == query else { return }
+            crewDirectory = Self.uniqueCrews(page.items)
+            crewDirectoryNextCursor = Self.safeNextCursor(page.nextCursor, requested: nil, used: crewDirectoryUsedCursors)
+            crewDirectoryState = .loaded
+        } catch {
+            guard isCurrentRead("crew-directory", id: requestID), !Task.isCancelled, crewDirectoryQuery == query else { return }
+            crewDirectoryState = .failed(message(for: error))
+        }
+    }
+
+    func loadMoreCrewDirectory() async {
+        guard let service, let cursor = crewDirectoryNextCursor, !loadingMoreDirectory,
+              !crewDirectoryUsedCursors.contains(cursor) else { return }
+        loadingMoreDirectory = true
+        crewDirectoryUsedCursors.insert(cursor)
+        let requestID = beginRead("crew-directory", state: crewDirectoryState)
+        defer { if isCurrentRead("crew-directory", id: requestID) { loadingMoreDirectory = false } }
+        do {
+            let page = try await service.searchCrews(query: crewDirectoryQuery, cursor: cursor, size: 20)
+            guard isCurrentRead("crew-directory", id: requestID), !Task.isCancelled else { return }
+            crewDirectory = Self.uniqueCrews(crewDirectory + page.items)
+            crewDirectoryNextCursor = Self.safeNextCursor(page.nextCursor, requested: cursor, used: crewDirectoryUsedCursors)
+            crewDirectoryState = .loaded
+        } catch {
+            guard isCurrentRead("crew-directory", id: requestID), !Task.isCancelled else { return }
+            crewDirectoryUsedCursors.remove(cursor)
+            crewDirectoryNextCursor = cursor
+            crewDirectoryState = .failed(message(for: error))
+        }
+    }
+
+    func loadMyPendingApplications() async {
+        guard let service else { return }
+        myPendingApplications = []; myApplicationsNextCursor = nil; myApplicationsUsedCursors = []
+        loadingMoreApplications = false
+        let requestID = beginRead("my-applications", state: .loading)
+        do {
+            let page = try await service.fetchMyPendingApplications(cursor: nil, size: 20)
+            guard isCurrentRead("my-applications", id: requestID), !Task.isCancelled else { return }
+            myPendingApplications = Self.uniqueApplications(page.items)
+            myApplicationsNextCursor = Self.safeNextCursor(page.nextCursor, requested: nil, used: myApplicationsUsedCursors)
+            myApplicationsState = .loaded
+        } catch {
+            guard isCurrentRead("my-applications", id: requestID), !Task.isCancelled else { return }
+            myApplicationsState = .failed(message(for: error))
+        }
+    }
+
+    func loadMoreMyPendingApplications() async {
+        guard let service, let cursor = myApplicationsNextCursor, !loadingMoreApplications,
+              !myApplicationsUsedCursors.contains(cursor) else { return }
+        loadingMoreApplications = true
+        myApplicationsUsedCursors.insert(cursor)
+        let requestID = beginRead("my-applications", state: myApplicationsState)
+        defer { if isCurrentRead("my-applications", id: requestID) { loadingMoreApplications = false } }
+        do {
+            let page = try await service.fetchMyPendingApplications(cursor: cursor, size: 20)
+            guard isCurrentRead("my-applications", id: requestID), !Task.isCancelled else { return }
+            myPendingApplications = Self.uniqueApplications(myPendingApplications + page.items)
+            myApplicationsNextCursor = Self.safeNextCursor(page.nextCursor, requested: cursor, used: myApplicationsUsedCursors)
+            myApplicationsState = .loaded
+        } catch {
+            guard isCurrentRead("my-applications", id: requestID), !Task.isCancelled else { return }
+            myApplicationsUsedCursors.remove(cursor)
+            myApplicationsNextCursor = cursor
+            myApplicationsState = .failed(message(for: error))
         }
     }
 
@@ -220,12 +310,17 @@ enum WireframeCrewLoadState: Equatable {
             guard self.accountScopeID == requestScopeID, self.selectedCrewID == crewID else { return }
             self.submittedApplications.removeAll { $0.crewId == crewID && $0.status == "PENDING" }
             self.submittedApplications.append(result)
+            let summary = BackendCrewMyApplication(applicationId: result.applicationId, crewId: result.crewId,
+                crewName: self.selectedCrew?.name ?? "크루 \(result.crewId)", note: result.note, grade: result.grade,
+                status: result.status, createdAt: result.createdAt, updatedAt: result.updatedAt)
+            self.myPendingApplications.removeAll { $0.crewId == crewID && $0.status == "PENDING" }
+            self.myPendingApplications.insert(summary, at: 0)
             self.mutationMessage = "가입 신청을 보냈어요."
         }
         return succeeded && accountScopeID == requestScopeID
     }
 
-    func cancelApplication(_ application: BackendCrewApplication) async -> Bool {
+    func cancelApplication(_ application: BackendCrewMyApplication) async -> Bool {
         guard let service, !isMutating, application.status == "PENDING", !isWriteBlocked("cancel|\(application.id)") else { return false }
         let crewID = application.crewId
         let requestScopeID = accountScopeID
@@ -233,9 +328,26 @@ enum WireframeCrewLoadState: Equatable {
             try await service.cancelApplication(crewID: crewID, applicationID: application.id)
             guard self.accountScopeID == requestScopeID else { return }
             self.submittedApplications.removeAll { $0.id == application.id }
+            self.myPendingApplications.removeAll { $0.id == application.id }
             self.mutationMessage = "가입 신청을 취소했어요."
         }
         return succeeded && accountScopeID == requestScopeID
+    }
+
+    func updateSelectedCrew(name: String, introduction: String?, joinGuide: String?) async -> Bool {
+        guard let service, let crew = selectedCrew, !isMutating, isManager,
+              !isWriteBlocked("update-crew|\(crew.id)") else { return false }
+        let scope = accountScopeID
+        let crewID = crew.id
+        let succeeded = await performMutation(key: "update-crew|\(crewID)", unknownMessage: "정보 수정 결과를 확인하지 못했어요. 최신 정보를 다시 확인해야 해요.") {
+            let result = try await service.updateCrew(crewID: crewID, name: name, introduction: introduction, joinGuide: joinGuide)
+            guard self.accountScopeID == scope, self.selectedCrewID == crewID else { return }
+            self.selectedCrew = result
+            if let index = self.myCrews.firstIndex(where: { $0.id == crewID }) { self.myCrews[index] = result }
+            if let index = self.crewDirectory.firstIndex(where: { $0.id == crewID }) { self.crewDirectory[index] = result }
+            self.mutationMessage = "크루 정보를 수정했어요."
+        }
+        return succeeded && accountScopeID == scope && selectedCrewID == crewID
     }
 
     func reviewApplication(approve: Bool) async -> Bool {
@@ -506,6 +618,21 @@ enum WireframeCrewLoadState: Equatable {
         if board.status == "ACTIVE", selectedBoardID == nil { selectedBoardID = board.id }
     }
 
+    private static func uniqueCrews(_ items: [BackendCrew]) -> [BackendCrew] {
+        var ids = Set<String>()
+        return items.filter { ids.insert($0.id).inserted }
+    }
+
+    private static func uniqueApplications(_ items: [BackendCrewMyApplication]) -> [BackendCrewMyApplication] {
+        var ids = Set<String>()
+        return items.filter { ids.insert($0.id).inserted }
+    }
+
+    private static func safeNextCursor(_ cursor: String?, requested: String?, used: Set<String>) -> String? {
+        guard let cursor, cursor != requested, !used.contains(cursor) else { return nil }
+        return cursor
+    }
+
     func clearMutationMessage() { mutationMessage = ""; mutationError = false }
 
     private func beginRead(_ key: String, state: WireframeCrewLoadState) -> UUID {
@@ -513,6 +640,8 @@ enum WireframeCrewLoadState: Equatable {
         switch key {
         case "my-crews": myCrewsState = state
         case "recruitment": recruitmentState = state
+        case "crew-directory": if state == .loading { crewDirectoryState = state }
+        case "my-applications": if state == .loading { myApplicationsState = state }
         case "crew-detail": detailState = state
         case "boards": boardsState = state
         case "posts": postsState = state
@@ -577,6 +706,11 @@ actor WireframeCrewServiceFixture: CrewServing {
     private let operatorRole: Bool
     private let nonMember: Bool
     private var failMyCrewsOnce: Bool
+    private var failCancelOnce: Bool
+    private let delayedCrewSearch: Bool
+    private let pagedCrewSearch: Bool
+    private let duplicateCrewSearchPage: Bool
+    private let pagedMyApplications: Bool
     private let delayedWrites: Bool
     private let delayedPostWrites: Bool
     private let accountSwitchDuringRead: Bool
@@ -589,6 +723,8 @@ actor WireframeCrewServiceFixture: CrewServing {
     private var nextBoardID = 504
     private var nextPostID = 602
     private var pendingApplications: [BackendCrewApplication]
+    private var myApplications: [BackendCrewMyApplication] = []
+    private var updatedCrews: [String: BackendCrew] = [:]
     private var posts: [BackendCrewPost] = []
     private var members = [
         BackendCrewMember(memberId: "201", role: "OWNER", joinedAt: "2026-10-01T09:00:00Z"),
@@ -609,6 +745,11 @@ actor WireframeCrewServiceFixture: CrewServing {
         operatorRole = arguments.contains("-wire-crew-fixture-operator")
         nonMember = arguments.contains("-wire-crew-fixture-non-member")
         failMyCrewsOnce = arguments.contains("-wire-crew-fixture-fail-my-crews-once")
+        failCancelOnce = arguments.contains("-wire-crew-fixture-fail-cancel-once")
+        delayedCrewSearch = arguments.contains("-wire-crew-fixture-delayed-search")
+        pagedCrewSearch = arguments.contains("-wire-crew-fixture-paged-search")
+        duplicateCrewSearchPage = arguments.contains("-wire-crew-fixture-duplicate-search-page")
+        pagedMyApplications = arguments.contains("-wire-crew-fixture-paged-applications")
         delayedWrites = arguments.contains("-wire-crew-fixture-delay-writes")
         delayedPostWrites = arguments.contains("-wire-crew-fixture-delay-post-writes")
         accountSwitchDuringRead = arguments.contains("-wire-crew-fixture-account-switch-during-read")
@@ -620,6 +761,13 @@ actor WireframeCrewServiceFixture: CrewServing {
             BackendCrewApplication(applicationId: "301", crewId: "101", memberId: "202", note: "주말에 함께 달리고 싶어요.", grade: nil, status: "PENDING", createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z"),
             BackendCrewApplication(applicationId: "302", crewId: "101", memberId: "203", note: nil, grade: nil, status: "PENDING", createdAt: "2026-10-17T11:00:00Z", updatedAt: "2026-10-17T11:00:00Z")
         ]
+        myApplications = []
+        if pagedMyApplications {
+            myApplications = Array((301...322).map { id in
+                BackendCrewMyApplication(applicationId: String(id), crewId: String(id), crewName: "모브 새벽 크루 \(id)",
+                    note: nil, grade: nil, status: "PENDING", createdAt: "2026-10-17T10:00:00Z", updatedAt: "2026-10-17T10:00:00Z")
+            }.reversed())
+        }
         if fillBoardCapacity {
             boards = [
                 BackendCrewBoard(boardId: "501", crewId: "101", name: "러닝 일정", kind: "INTERNAL", status: "ACTIVE", createdAt: "2026-10-17T10:00:00Z"),
@@ -671,9 +819,10 @@ actor WireframeCrewServiceFixture: CrewServing {
             failMyCrewsOnce = false
             throw CrewClientFailure.serviceUnavailable(code: "TEMPORARY")
         }
-        return nonMember ? [] : [crew(role: currentRole)] + createdCrews
+        return nonMember ? [] : [updatedCrews["101"] ?? crew(role: currentRole)] + createdCrews
     }
     func fetchCrew(id: String) async throws -> BackendCrew {
+        if let updated = updatedCrews[id] { return updated }
         if let created = createdCrews.first(where: { $0.id == id }) { return created }
         guard id == "101" else { throw CrewClientFailure.notFound }
         return crew(role: currentRole)
@@ -710,12 +859,51 @@ actor WireframeCrewServiceFixture: CrewServing {
     func fetchRecruitmentPosts(cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewPost> {
         BackendCrewPage(items: [recruitmentPost()], nextCursor: nil)
     }
+    func searchCrews(query: String, cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrew> {
+        if delayedCrewSearch { await Task.detached { try? await Task.sleep(for: .milliseconds(1800)) }.value }
+        let base = [updatedCrews["101"] ?? crew(role: currentRole)] + createdCrews
+        let all: [BackendCrew]
+        if pagedCrewSearch {
+            all = (101...124).reversed().map { id in
+                if String(id) == "101" { return base[0] }
+                return crew(role: nil, id: String(id), name: "모브 러닝 크루 \(id)")
+            }
+        } else { all = base }
+        let filtered = all.filter { value in
+            query.isEmpty || value.name.localizedCaseInsensitiveContains(query) || (value.introduction ?? "").localizedCaseInsensitiveContains(query)
+        }
+        let afterCursor = cursor.flatMap(Int.init).map { cursorID in filtered.filter { (Int($0.id) ?? 0) < cursorID } } ?? filtered
+        var pageItems = Array(afterCursor.prefix(size))
+        if duplicateCrewSearchPage, cursor != nil, let duplicate = filtered.first { pageItems.insert(duplicate, at: 0) }
+        let hasMore = afterCursor.count > size
+        let next = hasMore ? pageItems.last?.id : nil
+        return BackendCrewPage(items: pageItems, nextCursor: next)
+    }
+    func fetchMyPendingApplications(cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewMyApplication> {
+        let afterCursor = cursor.flatMap(Int.init).map { cursorID in myApplications.filter { (Int($0.id) ?? 0) < cursorID } } ?? myApplications
+        let items = Array(afterCursor.prefix(size))
+        return BackendCrewPage(items: items, nextCursor: afterCursor.count > size ? items.last?.id : nil)
+    }
+    func updateCrew(crewID: String, name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew {
+        guard manager || operatorRole else { throw CrewClientFailure.forbidden }
+        guard let previous = updatedCrews[crewID] ?? (crewID == "101" ? crew(role: currentRole) : createdCrews.first(where: { $0.id == crewID })) else {
+            throw CrewClientFailure.notFound
+        }
+        if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
+        let updated = BackendCrew(crewId: crewID, name: name, introduction: introduction, joinGuide: joinGuide,
+            capacity: previous.capacity, memberCount: previous.memberCount, status: previous.status, role: currentRole)
+        updatedCrews[crewID] = updated
+        return updated
+    }
     func apply(crewID: String, note: String?, grade: String?) async throws -> BackendCrewApplication {
         if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
         let id = String(nextApplicationID); nextApplicationID += 1
         let now = "2026-10-17T12:00:00Z"
         let application = BackendCrewApplication(applicationId: id, crewId: crewID, memberId: "204", note: note, grade: grade, status: "PENDING", createdAt: now, updatedAt: now)
         pendingApplications.append(application)
+        myApplications.insert(BackendCrewMyApplication(applicationId: id, crewId: crewID,
+            crewName: updatedCrews[crewID]?.name ?? "모브 새벽 크루", note: note, grade: grade, status: "PENDING",
+            createdAt: now, updatedAt: now), at: 0)
         return application
     }
     func fetchPendingApplications(crewID: String) async throws -> [BackendCrewApplication] {
@@ -734,8 +922,14 @@ actor WireframeCrewServiceFixture: CrewServing {
         return result
     }
     func cancelApplication(crewID: String, applicationID: String) async throws {
+        guard myApplications.contains(where: { $0.id == applicationID && $0.crewId == crewID }) else { throw CrewClientFailure.notFound }
+        if failCancelOnce {
+            failCancelOnce = false
+            throw CrewClientFailure.serviceUnavailable(code: "TEMPORARY")
+        }
         if delayedWrites { try await Task.sleep(for: .milliseconds(1100)) }
         pendingApplications.removeAll { $0.crewId == crewID && $0.id == applicationID }
+        myApplications.removeAll { $0.crewId == crewID && $0.id == applicationID }
     }
     func fetchBoards(crewID: String) async throws -> [BackendCrewBoard] {
         guard !nonMember else { throw CrewClientFailure.forbidden }

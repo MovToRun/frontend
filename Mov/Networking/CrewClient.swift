@@ -41,6 +41,19 @@ struct BackendCrewApplication: Codable, Equatable, Sendable, Identifiable {
     var id: String { applicationId }
 }
 
+struct BackendCrewMyApplication: Codable, Equatable, Sendable, Identifiable {
+    let applicationId: String
+    let crewId: String
+    let crewName: String
+    let note: String?
+    let grade: String?
+    let status: String
+    let createdAt: String
+    let updatedAt: String
+
+    var id: String { applicationId }
+}
+
 struct BackendCrewBoard: Codable, Equatable, Sendable, Identifiable {
     let boardId: String
     let crewId: String
@@ -129,6 +142,9 @@ protocol CrewServing: Sendable {
     func releaseRejoinRestriction(crewID: String, memberID: String) async throws
     func transferOwnership(crewID: String, memberID: String) async throws
     func fetchRecruitmentPosts(cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewPost>
+    func searchCrews(query: String, cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrew>
+    func fetchMyPendingApplications(cursor: String?, size: Int) async throws -> BackendCrewPage<BackendCrewMyApplication>
+    func updateCrew(crewID: String, name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew
     func apply(crewID: String, note: String?, grade: String?) async throws -> BackendCrewApplication
     func fetchPendingApplications(crewID: String) async throws -> [BackendCrewApplication]
     func decide(crewID: String, applicationID: String, approve: Bool) async throws -> BackendCrewApplication
@@ -259,6 +275,65 @@ struct CrewClient: CrewServing, Sendable {
         let page = try Self.decode(BackendCrewPage<BackendCrewPost>.self, from: response.data)
         guard page.items.allSatisfy(Self.isValidRecruitmentPost) else { throw CrewClientFailure.invalidResponse }
         return page
+    }
+
+    func searchCrews(query: String, cursor: String? = nil, size: Int = 20) async throws -> BackendCrewPage<BackendCrew> {
+        guard Self.isValidPage(cursor: cursor, size: size),
+              cursor.map(Self.isResourceID) ?? true,
+              query.count <= 30 else { throw CrewClientFailure.invalidRequest }
+        var queryItems = [URLQueryItem(name: "size", value: String(size))]
+        if !query.isEmpty { queryItems.append(URLQueryItem(name: "q", value: query)) }
+        if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let response = try await send(path: "crews", method: "GET", queryItems: queryItems)
+        guard response.statusCode == 200 else { throw Self.mapFailure(response) }
+        let page = try Self.decode(BackendCrewPage<BackendCrew>.self, from: response.data)
+        guard page.items.allSatisfy({ Self.isValid($0) && $0.status == "ACTIVE" }),
+              page.nextCursor.map(Self.isResourceID) ?? true else { throw CrewClientFailure.invalidResponse }
+        return page
+    }
+
+    func fetchMyPendingApplications(cursor: String? = nil, size: Int = 20) async throws -> BackendCrewPage<BackendCrewMyApplication> {
+        guard Self.isValidPage(cursor: cursor, size: size), cursor.map(Self.isResourceID) ?? true else {
+            throw CrewClientFailure.invalidRequest
+        }
+        var queryItems = [URLQueryItem(name: "size", value: String(size))]
+        if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+        let response = try await send(path: "crews/me/applications", method: "GET", queryItems: queryItems)
+        guard response.statusCode == 200 else { throw Self.mapFailure(response) }
+        let page = try Self.decode(BackendCrewPage<BackendCrewMyApplication>.self, from: response.data)
+        guard page.items.allSatisfy(Self.isValid), page.nextCursor.map(Self.isResourceID) ?? true else {
+            throw CrewClientFailure.invalidResponse
+        }
+        return page
+    }
+
+    func updateCrew(crewID: String, name: String, introduction: String?, joinGuide: String?) async throws -> BackendCrew {
+        guard !Task.isCancelled, Self.isResourceID(crewID), !name.isEmpty, name.count <= 30,
+              (introduction?.count ?? 0) <= 300, (joinGuide?.count ?? 0) <= 500 else {
+            throw CrewClientFailure.invalidRequest
+        }
+        let request = try Self.encode(UpdateCrewRequest(name: name, introduction: introduction, joinGuide: joinGuide))
+        let response: APIClientResponse
+        do { response = try await send(path: "crews/\(crewID)", method: "PUT", body: request) }
+        catch let failure as CrewClientFailure {
+            switch failure {
+            case .transport, .invalidResponse, .cancelled: throw CrewClientFailure.mutationResultUnknown
+            default: throw failure
+            }
+        } catch { throw CrewClientFailure.mutationResultUnknown }
+        guard response.statusCode == 200 else {
+            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
+                throw CrewClientFailure.mutationResultUnknown
+            }
+            throw Self.mapFailure(response)
+        }
+        do {
+            let crew = try Self.decode(BackendCrew.self, from: response.data)
+            guard Self.isValid(crew), crew.crewId == crewID, ["OWNER", "OPERATOR"].contains(crew.role ?? "") else {
+                throw CrewClientFailure.mutationResultUnknown
+            }
+            return crew
+        } catch { throw CrewClientFailure.mutationResultUnknown }
     }
 
     func apply(crewID: String, note: String?, grade: String? = nil) async throws -> BackendCrewApplication {
@@ -699,6 +774,13 @@ struct CrewClient: CrewServing, Sendable {
             && ["PENDING", "APPROVED", "REJECTED", "CANCELLED"].contains(application.status)
     }
 
+    private static func isValid(_ application: BackendCrewMyApplication) -> Bool {
+        isResourceID(application.applicationId) && isResourceID(application.crewId)
+            && !application.crewName.isEmpty && application.crewName.count <= 30
+            && (application.note?.count ?? 0) <= 300
+            && application.status == "PENDING" && !application.createdAt.isEmpty && !application.updatedAt.isEmpty
+    }
+
     private static func isValid(_ board: BackendCrewBoard) -> Bool {
         isResourceID(board.boardId) && isResourceID(board.crewId) && !board.name.isEmpty
             && ["INTERNAL", "RECRUITMENT"].contains(board.kind) && ["ACTIVE", "ARCHIVED"].contains(board.status)
@@ -722,6 +804,18 @@ struct CrewClient: CrewServing, Sendable {
     }
 
     private struct CreateCrewRequest: Encodable { let name: String; let introduction: String?; let joinGuide: String? }
+    private struct UpdateCrewRequest: Encodable {
+        let name: String
+        let introduction: String?
+        let joinGuide: String?
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(name, forKey: .name)
+            try container.encode(introduction, forKey: .introduction)
+            try container.encode(joinGuide, forKey: .joinGuide)
+        }
+        private enum CodingKeys: String, CodingKey { case name, introduction, joinGuide }
+    }
     private struct RoleRequest: Encodable { let role: String }
     private struct TransferRequest: Encodable { let memberId: Int64 }
     private struct CreateBoardRequest: Encodable { let name: String; let kind: String }

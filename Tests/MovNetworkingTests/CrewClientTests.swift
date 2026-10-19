@@ -103,6 +103,77 @@ final class CrewClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
     }
 
+    func testCrewDirectoryAndMyApplicationPagesUseBE117RoutesAndIDs() async throws {
+        let directoryPage = #"{"items":[{"crewId":"101","name":"모브 새벽 크루","introduction":"아침 러닝","joinGuide":"편하게 인사해요","capacity":20,"memberCount":3,"status":"ACTIVE","role":null}],"nextCursor":"101"}"#
+        let myApplicationPage = #"{"items":[{"applicationId":"301","crewId":"101","crewName":"모브 새벽 크루","note":"같이 달리고 싶어요","grade":null,"status":"PENDING","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}],"nextCursor":"301"}"#
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data(directoryPage.utf8)),
+            APIClientResponse(statusCode: 200, data: Data(myApplicationPage.utf8))
+        ])
+        let client = try makeRecordingClient(transport)
+
+        let crews = try await client.searchCrews(query: "새벽 러닝", cursor: "105", size: 7)
+        let applications = try await client.fetchMyPendingApplications(cursor: "302", size: 9)
+
+        XCTAssertEqual(crews.items.map(\.id), ["101"])
+        XCTAssertEqual(crews.nextCursor, "101")
+        XCTAssertEqual(applications.items.map(\.id), ["301"])
+        XCTAssertEqual(applications.items.first?.crewName, "모브 새벽 크루")
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.map(\.path), ["crews", "crews/me/applications"])
+        XCTAssertEqual(requests.map(\.method), ["GET", "GET"])
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "q" })?.value, "새벽 러닝")
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "cursor" })?.value, "105")
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "size" })?.value, "7")
+        XCTAssertEqual(requests[1].queryItems.first(where: { $0.name == "cursor" })?.value, "302")
+        XCTAssertEqual(requests[1].queryItems.first(where: { $0.name == "size" })?.value, "9")
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
+    }
+
+    func testCrewInformationUpdateSendsFullReplacementIncludingExplicitNulls() async throws {
+        let updated = #"{"crewId":"101","name":"새벽 러닝 크루","introduction":null,"joinGuide":null,"capacity":20,"memberCount":3,"status":"ACTIVE","role":"OWNER"}"#
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 200, data: Data(updated.utf8))])
+        let result = try await makeRecordingClient(transport).updateCrew(
+            crewID: "101", name: "새벽 러닝 크루", introduction: nil, joinGuide: nil
+        )
+
+        XCTAssertEqual(result.name, "새벽 러닝 크루")
+        let captured = await transport.capturedRequests()
+        let request = try XCTUnwrap(captured.first)
+        XCTAssertEqual(request.path, "crews/101")
+        XCTAssertEqual(request.method, "PUT")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.body)) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), Set(["name", "introduction", "joinGuide"]))
+        XCTAssertEqual(json["name"] as? String, "새벽 러닝 크루")
+        XCTAssertTrue(json["introduction"] is NSNull)
+        XCTAssertTrue(json["joinGuide"] is NSNull)
+    }
+
+    func testDirectoryPageAndInformationMutationRejectInvalidContractsBeforeRetry() async throws {
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 403, data: Data(#"{"code":"FORBIDDEN"}"#.utf8))])
+        let client = try makeRecordingClient(transport)
+        do {
+            _ = try await client.searchCrews(query: "a", cursor: "opaque", size: 20)
+            XCTFail("The contract cursor is a positive numeric resource ID")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        do {
+            _ = try await client.searchCrews(query: String(repeating: "a", count: 31), cursor: nil, size: 20)
+            XCTFail("Search input is limited to 30 graphemes by the API contract")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        do {
+            _ = try await client.updateCrew(crewID: "101", name: "변경", introduction: nil, joinGuide: nil)
+            XCTFail("Non-manager updates must keep the server's forbidden response")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .forbidden)
+        }
+        let captured = await transport.capturedRequests()
+        XCTAssertEqual(captured.count, 1)
+    }
+
     func testApplicationSubmissionUsesContractBodyAndOneAttemptOnUnknownOutcome() async throws {
         let transport = CrewRecordingTransport([APIClientResponse(statusCode: 201, data: Data(application.utf8))])
         let submitted = try await makeRecordingClient(transport).apply(crewID: "101", note: "같이 달리고 싶어요", grade: nil)
