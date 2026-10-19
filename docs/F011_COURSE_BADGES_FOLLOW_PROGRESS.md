@@ -35,4 +35,4 @@
 
 ## Review state
 
-The implementation is submitted as a draft PR for independent final verification. Do not merge until the documented response-contract gaps are resolved or explicitly accepted and the separate reviewer completes validation.
+Draft PR [#95](https://github.com/MovToRun/frontend/pull/95) is open for independent final verification. Do not merge until the documented response-contract gaps are resolved or explicitly accepted and the separate reviewer completes validation.
