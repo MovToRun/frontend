@@ -448,7 +448,7 @@ enum WireframeRemoteReadFeature: String, Equatable, Sendable {
         switch screen {
         case "M01", "M02", "T02": .profile
         case "POINTS", "B02": .points
-        case "L01", "L04", "L07": .runs
+        case "L01", "L04", "L07", "C13": .runs
         case "H00", "H04", "H07", "H08", "H09", "H10": .progressGoals
         default: nil
         }
@@ -477,6 +477,7 @@ struct WireframeRemoteReadDependencies {
     let authSessionClient: AuthSessionClient?
     let runUploadAPIClient: (any APIResponseSending)?
     let crewService: (any CrewServing)?
+    let communityCourseService: (any CommunityCourseServing)?
     let cosmeticStoreService: (any CosmeticStoreServing)?
     let pointsWalletReader: (any PointsWalletReading)?
     let cosmeticStoreSessionProvider: (any RunUploadSessionProviding)?
@@ -503,6 +504,7 @@ struct WireframeRemoteReadDependencies {
         authSessionClient: AuthSessionClient? = nil,
         runUploadAPIClient: (any APIResponseSending)? = nil,
         crewService: (any CrewServing)? = nil,
+        communityCourseService: (any CommunityCourseServing)? = nil,
         cosmeticStoreService: (any CosmeticStoreServing)? = nil,
         pointsWalletReader: (any PointsWalletReading)? = nil,
         cosmeticStoreSessionProvider: (any RunUploadSessionProviding)? = nil,
@@ -528,6 +530,7 @@ struct WireframeRemoteReadDependencies {
         self.authSessionClient = authSessionClient
         self.runUploadAPIClient = runUploadAPIClient
         self.crewService = crewService
+        self.communityCourseService = communityCourseService
         self.cosmeticStoreService = cosmeticStoreService
         self.pointsWalletReader = pointsWalletReader
         self.cosmeticStoreSessionProvider = cosmeticStoreSessionProvider
@@ -627,7 +630,7 @@ actor WireframeRunUploadNetworkFixture:RunUploadEnqueueing,RunUploadDraining {
         let seconds=Int64(max(0,payload.movingSeconds))
         let elapsed=Int64(max(payload.movingSeconds,Int(payload.endedAt.timeIntervalSince(payload.startedAt))))
         return BackendRunSummary(
-            id:"fixture-\(payload.clientRunID.uuidString)",clientRunID:payload.clientRunID,version:1,
+            id:"1001",clientRunID:payload.clientRunID,version:1,
             startedAt:payload.startedAt,endedAt:payload.endedAt,runDate:date,elapsedSeconds:elapsed,
             movingSeconds:seconds,distanceMeters:distance,verdict:"VALID",verdictReason:nil,
             validDistanceMeters:distance,validSeconds:seconds,
@@ -3612,7 +3615,8 @@ struct RootView:View {
         #else
         let crewFixtureService: (any CrewServing)? = nil
         #endif
-        let runFixture = args.contains("-wire-run-records-fixture")
+        let courseRunFixture = args.contains("-wire-community-course-run-fixture")
+        let runFixture = args.contains("-wire-run-records-fixture") || courseRunFixture
         let runEditFixture = args.contains("-wire-run-records-edit-fixture")
         let runDeleteFixture = args.contains("-wire-run-records-delete-fixture")
         let weeklyGoalWriteFixture = args.contains("-wire-weekly-goal-write-fixture")
@@ -3726,7 +3730,7 @@ struct RootView:View {
                 pointsWalletReader = nil
             }
         }
-        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || cosmeticStoreFixture != nil || crewFixtureService != nil || authComposition.store != nil || authComposition.client != nil else { return nil }
+        guard runFixture || runEditFixture || runDeleteFixture || progressFixture || profileFixture != nil || logoutFixture != nil || passwordResetFixture != nil || passwordResetSessionStore != nil || accountLinkFixture != nil || cosmeticStoreFixture != nil || crewFixtureService != nil || (WReviewMode.tools && args.contains("-wire-community-course-fixture")) || authComposition.store != nil || authComposition.client != nil else { return nil }
         let profileLoader = profileFixture.map { MemberProfileLoader(fetcher:$0) }
         let runClient = (runFixture || runEditFixture || runDeleteFixture) ? WireframeRunRecordsFixture(
             fails:args.contains("-wire-run-records-fail"),
@@ -3735,9 +3739,14 @@ struct RootView:View {
             missingWrite:args.contains("-wire-run-records-write-404"),
             deletionFailure:args.contains("-wire-run-records-delete-404") ? .recordNotFound : args.contains("-wire-run-records-delete-fail") ? .serverFailure(statusCode:503,requestID:"fixture-run-delete-unavailable") : nil,
             losesFirstDeleteResponse:args.contains("-wire-run-records-delete-response-lost"),
-            removesRunOnNextRefresh:args.contains("-wire-run-records-remote-delete-on-refresh")
+            removesRunOnNextRefresh:args.contains("-wire-run-records-remote-delete-on-refresh"),
+            numericCourseRunID:courseRunFixture
         ):nil
-        let runLoader = runClient.map { RunRecordsLoader(client:$0) }
+        let remoteRunReader: (any RunRecordsReading)? = runClient ?? {
+            guard let apiClient=authComposition.apiClient,let authClient=authComposition.client else{return nil}
+            return RunRecordsClient(apiClient:apiClient,tokenProvider:authClient)
+        }()
+        let runLoader = remoteRunReader.map { RunRecordsLoader(client:$0) }
         let progressClient = progressFixture ? WireframeProgressGoalsFixture(
             failsOverview:args.contains("-wire-progress-goals-fail"),
             failsDaily:args.contains("-wire-progress-daily-fail"),
@@ -3790,6 +3799,15 @@ struct RootView:View {
             authSessionClient:authComposition.client,
             runUploadAPIClient:authComposition.apiClient,
             crewService:crewFixtureService,
+            communityCourseService: {
+                #if DEBUG
+                if WReviewMode.tools && args.contains("-wire-community-course-fixture") {
+                    return WireframeCommunityCourseFixture(arguments: args)
+                }
+                #endif
+                guard let apiClient=authComposition.apiClient,let authClient=authComposition.client else{return nil}
+                return CommunityCourseClient(apiClient:apiClient,tokenProvider:authClient)
+            }(),
             cosmeticStoreService:cosmeticStoreService,
             pointsWalletReader:pointsWalletReader,
             cosmeticStoreSessionProvider:cosmeticStoreSessionProvider,
@@ -4015,10 +4033,10 @@ private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating,Ru
     private var listReadCount=0
     private var currentSummary:BackendRunSummary
 
-    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false,removesRunOnNextRefresh:Bool=false){
+    init(fails:Bool,failsWrite:Bool=false,conflictsFirstWrite:Bool=false,missingWrite:Bool=false,deletionFailure:RunRecordsFailure?=nil,losesFirstDeleteResponse:Bool=false,removesRunOnNextRefresh:Bool=false,numericCourseRunID:Bool=false){
         self.fails=fails;self.failsWrite=failsWrite;self.conflictsFirstWrite=conflictsFirstWrite
         self.missingWrite=missingWrite;self.deletionFailure=deletionFailure;self.losesFirstDeleteResponse=losesFirstDeleteResponse
-        self.removesRunOnNextRefresh=removesRunOnNextRefresh;self.currentSummary=Self.makeSummary()
+        self.removesRunOnNextRefresh=removesRunOnNextRefresh;self.currentSummary=Self.makeSummary(id:numericCourseRunID ? "1001":"fixture-run-104")
     }
 
     func fetchRuns(cursor:String?,size:Int) async throws -> BackendRunPage {
@@ -4073,9 +4091,9 @@ private actor WireframeRunRecordsFixture:RunRecordsReading,RunRecordsUpdating,Ru
         }
     }
 
-    private static func makeSummary()->BackendRunSummary {
+    private static func makeSummary(id:String="fixture-run-104")->BackendRunSummary {
         BackendRunSummary(
-            id:"fixture-run-104",clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:2,
+            id:id,clientRunID:UUID(uuidString:"0b8f6c1e-5a44-4d0b-9a0e-3f2f7f0c9d11")!,version:2,
             startedAt:Date(timeIntervalSince1970:1_791_213_000),endedAt:Date(timeIntervalSince1970:1_791_215_400),
             runDate:"2026-10-05",elapsedSeconds:2400,movingSeconds:2280,distanceMeters:6400,
             verdict:"VALID",verdictReason:nil,validDistanceMeters:6100,validSeconds:2150,paceSecondsPerKm:352,
@@ -4103,6 +4121,7 @@ struct WireframeRoot:View {
     @StateObject var cosmeticStoreFlow:CosmeticStoreFlow
     @State var remoteReads:WireframeRemoteReadBridge
     @State var crewFlow:WireframeCrewRemoteFlow
+    @State var courseFlow:WireframeCommunityCourseFlow
     @State var pendingRemoteCrewCancellation:BackendCrewMyApplication?
     @State var showingRemoteCrewCancellation=false
     let cosmeticStoreFixture: Bool
@@ -4170,6 +4189,13 @@ struct WireframeRoot:View {
             return CrewClient(apiClient: apiClient, sessionProvider: WireframeRunUploadSessionProvider(sessionStore: sessionStore, authClient: authClient))
         }()
         _crewFlow=State(initialValue:WireframeCrewRemoteFlow(service:crewService))
+        let courseService: (any CommunityCourseServing)? = remoteReadDependencies?.communityCourseService ?? {
+            guard let dependencies=remoteReadDependencies,
+                  let apiClient=dependencies.runUploadAPIClient,
+                  let authClient=dependencies.authSessionClient else{return nil}
+            return CommunityCourseClient(apiClient:apiClient,tokenProvider:authClient)
+        }()
+        _courseFlow=State(initialValue:WireframeCommunityCourseFlow(service:courseService))
         #if DEBUG
         let socialLoginFixture: SocialLoginCoordinator? = {
             guard WReviewMode.tools, args.contains("-wire-social-login-fixture") else{return nil}
@@ -4316,7 +4342,7 @@ struct WireframeRoot:View {
     var reviewTools:Bool {WReviewMode.tools}
     var isAccountScreen:Bool {ui.screen.hasPrefix("A") || (5...17).contains(Int(ui.screen.dropFirst()) ?? 0) && ui.screen.hasPrefix("T")}
     var isRoot:Bool {roots.contains(ui.screen) || ["H02","H05","L01"].contains(ui.screen) || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
-    var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C03" || ui.screen=="C15" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
+    var isCommunityPrimaryTabScreen:Bool {ui.screen=="C01" || ui.screen=="C02" || ui.screen=="C03" || ui.screen=="C10" || ui.screen=="C11" || ui.screen=="C12" || ui.screen=="C13" || ui.screen=="C14" || ui.screen=="C15" || ui.screen=="C44" || ui.screen=="C45" || (ui.screen=="C08" && ui.communitySelectedUserID==ui.communityViewerMemberID)}
     var routeScreenTransition:AnyTransition {
         guard !isAccountScreen else{return .identity}
         let insertion:AnyTransition=reduceMotion ? .opacity:.move(edge:ui.forward ? .trailing:.leading)
@@ -4365,6 +4391,8 @@ struct WireframeRoot:View {
             }
             .onChange(of:ui.remoteAccountScopeID){_,scopeID in
                 crewFlow.setAccountScope(scopeID)
+                courseFlow.setAccountScope(scopeID)
+                courseFlow.restoreDraftCreateUnknown(memberID:store.authenticatedUploadMemberID)
                 showingRemoteCrewPostDeleteConfirmation=false
                 showingRemoteCrewPostEditDiscardConfirmation=false
                 cosmeticStoreFlow.accountContextDidChange()
@@ -4421,6 +4449,7 @@ struct WireframeRoot:View {
                 }
             }
             .task(id:ui.remoteAccountScopeID){ crewFlow.setAccountScope(ui.remoteAccountScopeID) }
+            .task(id:ui.remoteAccountScopeID){ courseFlow.setAccountScope(ui.remoteAccountScopeID); courseFlow.restoreDraftCreateUnknown(memberID:store.authenticatedUploadMemberID); await courseFlow.loadCertification() }
             .task {
                 runUploadNetworkMonitor.onReconnect={Task{@MainActor in _=await store.retryPendingRunUploads()}}
                 runUploadNetworkMonitor.start()
@@ -4764,7 +4793,7 @@ struct WireframeRoot:View {
         if ui.communityProfileEditing && route != "C08"{requestCommunityProfileExit(destination:"route:\(route)");return}
         if ui.communityCrewDraftID != nil && route != "C20"{requestCommunityCrewExit(destination:"route:\(route)");return}
         if let draft=ui.communityCrewManageDraft,route != communityCrewManageScreen(for:draft.kind){requestCommunityCrewManageExit(destination:"route:\(route)");return}
-        if ["C05","C13"].contains(ui.screen),route != "C09"{requestCommunityComposerExit(destination:"route:\(route)");return}
+        if ["C05","C13"].contains(ui.screen),route != "C09" && !(ui.screen=="C13" && courseFlow.isAvailable){requestCommunityComposerExit(destination:"route:\(route)");return}
         performNavigation(route)
     }
     func performNavigation(_ route:String){
@@ -4788,7 +4817,7 @@ struct WireframeRoot:View {
         if ui.communityProfileEditing{requestCommunityProfileExit(destination:"back");return}
         if ui.communityCrewDraftID != nil{requestCommunityCrewExit(destination:"back");return}
         if ui.communityCrewManageDraft != nil{requestCommunityCrewManageExit(destination:"back");return}
-        if ["C05","C13"].contains(ui.screen){requestCommunityComposerExit(destination:"back");return}
+        if ["C05","C13"].contains(ui.screen), !(ui.screen=="C13" && courseFlow.isAvailable){requestCommunityComposerExit(destination:"back");return}
         performBack()
     }
     func performBack(){
@@ -5136,11 +5165,11 @@ struct WireframeRoot:View {
         case "A24","A25","A26","A27","A28":passwordResetVerification
         case "C01":community
         case "C06":communityLikedPosts
-        case "C10":communityVerificationForm
-        case "C11":communityVerificationStatus
-        case "C12":communityCourseDetail
-        case "C13":communityCourseCompose
-        case "C14":communityGhostRun
+        case "C10":if courseFlow.isAvailable{remoteCommunityVerificationForm}else{communityVerificationForm}
+        case "C11":if courseFlow.isAvailable{remoteCommunityVerificationStatus}else{communityVerificationStatus}
+        case "C12":if courseFlow.isAvailable{remoteCommunityCourseCatalogOrDetail}else{communityCourseDetail}
+        case "C13":if courseFlow.isAvailable{remoteCommunityCourseComposer}else{communityCourseCompose}
+        case "C14":if courseFlow.isAvailable{remoteCommunityFollowRun}else{communityGhostRun}
         case "C15":if crewFlow.isAvailable{remoteCommunityCrewOverview()}else{communityCrewOverview}
         case "C16":if crewFlow.isAvailable{remoteCommunityCrewDetail}else{communityCrewDetail}
         case "C17":if crewFlow.isAvailable{remoteCommunityCrewJoinForm}else{communityCrewJoinForm}
@@ -5170,6 +5199,8 @@ struct WireframeRoot:View {
         case "C41":communityHotPosts
         case "C42":communityBlockedUsers
         case "C43":communityActivity
+        case "C44":if courseFlow.isAvailable{remoteCommunityOperatorQueue}else{informationPage}
+        case "C45":if courseFlow.isAvailable{remoteCommunityOperatorApplication}else{informationPage}
         case "C02":communityBoards
         case "C03":communityBoardPosts
         case "C27":communityAllBoards

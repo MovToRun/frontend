@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
-    printf 'Usage: %s <build-derived-data-dir> <destination-specifier> [execution-work-dir] [all|crew-contracts|c36-ui|crew-edit-ui|crew-info-ui]\n' "$0" >&2
+    printf 'Usage: %s <build-derived-data-dir> <destination-specifier> [execution-work-dir] [all|crew-contracts|c36-ui|crew-edit-ui|crew-info-ui|f011-community-course]\n' "$0" >&2
     exit 2
 fi
 
@@ -35,9 +35,9 @@ PRODUCT_BUNDLE_IDENTIFIER='local.mov.prototype.MovTests' \
     "$repo_root/scripts/verify-ui-test-isolation.sh"
 
 products_root=$(dirname "$products_dir")
-set -- "$products_root"/Mov_*.xctestrun
+set -- "$products_root"/MovUITestHost_*.xctestrun
 test -f "$1" && test "$#" -eq 1 || {
-    printf 'Expected one build-for-testing .xctestrun beside %s.\n' "$products_dir" >&2
+    printf 'Expected one MovUITestHost build-for-testing .xctestrun beside %s.\n' "$products_dir" >&2
     exit 1
 }
 xctestrun=$1
@@ -103,6 +103,25 @@ case "$test_selection" in
             -destination "$destination" -parallel-testing-enabled NO \
             -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
             -only-testing:MovUITests/LaunchTests/testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft
+        exit $?
+        ;;
+    f011-community-course)
+        "$xcodebuild" test-without-building -xctestrun "$xctestrun" \
+            -destination "$destination" -parallel-testing-enabled NO \
+            -derivedDataPath "$derived_data_path" -resultBundlePath "$result_bundle" \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityCertificationSubmitAndWithdrawUsesHTTPSEvidence \
+            -only-testing:MovUITests/LaunchTests/testRemoteCertificationRequestCanBeLeftWhileInFlightWithoutRedirect \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityCertificationOperatorApprovalIsServerGated \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityOperatorCanRejectAndQueueAndReapplicationShowEmptyStates \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityCourseUsesMaskedRouteAndBoundFollowRun \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityCourseStopsWhenPinnedRevisionIsUnavailableAndHandlesEmptyCatalog \
+            -only-testing:MovUITests/LaunchTests/testRemoteCommunityCourseShareCreatesPrivateDraftThenRequiresConsentToPublish \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationRecoversAcceptedSubmissionAfterLostResponse \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationWithdrawalRecoversWithdrawnStatusAfterLostResponse \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testRepeatedCertificationTapWhileRequestIsPendingSendsOnce \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testCertificationReadFromPreviousAccountIsDiscarded \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testOperatorRejectAndCertificationGateUseServerRoleAndStatus \
+            -only-testing:MovTests/WireframeCommunityCourseFlowTests/testUnknownCourseDraftCreationBlocksRetryAcrossFlowRestartForSameRun
         exit $?
         ;;
     *)

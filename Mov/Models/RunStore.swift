@@ -810,7 +810,7 @@ enum RunStoreUploadDrainResult: Equatable {
         }
     }
 
-    @discardableResult func start(at now: Date = Date(),weight:Double?=nil) -> Bool {
+    @discardableResult func start(at now: Date = Date(),weight:Double?=nil,clientRunID:UUID?=nil) -> Bool {
         guard session == nil, storageMessage == nil else { return false }
         let memberID = uploadIdentityProvider?.currentAuthenticatedMemberID().flatMap(Self.validMemberID)
         session = DemoSession(
@@ -819,7 +819,7 @@ enum RunStoreUploadDrainResult: Equatable {
             goal: goal,
             weightKg: weight,
             uploadOwnerID: memberID,
-            clientRunID: UUID(),
+            clientRunID: clientRunID ?? UUID(),
             routePoints: locationCapture == nil ? nil : [],
             pauseIntervals: locationCapture == nil ? nil : [],
             locationCaptureEnabled: locationCapture != nil

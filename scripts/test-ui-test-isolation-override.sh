@@ -54,13 +54,13 @@ tmp_products_dir="$tmp_products_root/$products_dir_name"
 mkdir -p "$tmp_products_dir"
 cp -R "$products_dir/MovUITestHost.app" "$tmp_products_dir/MovUITestHost.app"
 ln -s "$products_dir/MovUITests-Runner.app" "$tmp_products_dir/MovUITests-Runner.app"
-set -- "$products_root"/Mov_*.xctestrun
+set -- "$products_root"/MovUITestHost_*.xctestrun
 test -f "$1" || {
-    printf 'build-for-testing configuration is missing: %s\n' "$products_root" >&2
+    printf 'MovUITestHost build-for-testing configuration is missing: %s\n' "$products_root" >&2
     exit 1
 }
 test "$#" -eq 1 || {
-    printf 'expected one Mov .xctestrun configuration, found %s\n' "$#" >&2
+    printf 'expected one MovUITestHost .xctestrun configuration, found %s\n' "$#" >&2
     exit 1
 }
 cp "$1" "$tmp_products_root/$(basename "$1")"

@@ -2288,8 +2288,12 @@ extension WireframeRoot {
         VStack(alignment:.leading,spacing:0){
             HStack(spacing:9){Text("지금 많이 보는 글").font(W.font(17,.semibold));Text("HOT").font(W.font(10,.bold)).foregroundStyle(Color(red:0.92,green:0.30,blue:0.32));Spacer();Button("더 보기"){go("C41")}.font(W.font(11,.medium)).foregroundStyle(W.muted).accessibilityIdentifier("communityHotMore")}
                 .padding(.top,16).padding(.bottom,8)
-            Button { ui.communitySelectedCourse=WCommunityCourseFixtures.sample;go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 예시");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenSampleCourse")
-            if ui.communityAccountVerified{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true;ui.communityCourseError="";communityComposerOriginal=nil;go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
+            if courseFlow.isAvailable {
+                Button { courseFlow.clearSelectedCourse(); go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 찾아보기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenCourseCatalog")
+            } else {
+                Button { ui.communitySelectedCourse=WCommunityCourseFixtures.sample;go("C12") } label:{HStack{Image(systemName:"point.topleft.down.to.point.bottomright.curvepath");Text("공유 코스 예시");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityOpenSampleCourse")
+            }
+            if ui.communityAccountVerified || courseFlow.isAvailable{Button{ui.communityCourseDraftOwnerID=ui.communityViewerMemberID;ui.communityCourseTitle="";ui.communityCourseIntroduction="";ui.communityCourseRecordID="";ui.communityCourseHideEnds=true;ui.communityCourseError="";communityComposerOriginal=nil;go("C13")}label:{HStack{Image(systemName:"plus");Text("내 코스 공유하기");Spacer();Image(systemName:"chevron.right").foregroundStyle(W.muted)}.font(W.font(13,.medium)).padding(14).background(W.soft,in:RoundedRectangle(cornerRadius:12))}.buttonStyle(.plain).accessibilityIdentifier("communityStartCourseShare")}
             ForEach(Array(communityHotVisiblePosts.prefix(3).enumerated()),id:\.element.id){rank,post in
                 Button { openCommunityPost(post) } label:{HStack(spacing:12){Text("\(rank+1)").font(W.font(13,.medium)).foregroundStyle(W.muted).frame(width:18);Text(post.title).font(W.font(14,.medium)).lineLimit(1);Spacer(minLength:4);Text("♡ \(post.likes + (ui.communityLikedPosts.contains(post.id) ? 1:0))").font(W.font(11)).foregroundStyle(W.muted)}.frame(minHeight:44).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("communityHot-\(post.id)")
             }
@@ -3717,13 +3721,13 @@ extension WireframeRoot {
     func communityRunner(_ id:String)->WCommunityRunner {
         if id==ui.communityViewerMemberID {
             let rank=store.totalDistance==0 ? "시작러너":store.tier=="마스터" ? "러닝마스터":store.tier=="도전" ? "도전러너":store.tier=="열정" ? "열정러너":"새싹러너"
-            return WCommunityRunner(id:id,name:ui.profile.nickname,rank:rank,introduction:ui.profile.introduction,region:ui.profile.region,averageDistance:store.averageDistance,verified:ui.communityAccountVerified)
+            return WCommunityRunner(id:id,name:ui.profile.nickname,rank:rank,introduction:ui.profile.introduction,region:ui.profile.region,averageDistance:store.averageDistance,verified:ui.communityAccountVerified || courseFlow.verified)
         }
         return WCommunityRunnerFixtures.values.first{$0.id==id} ?? WCommunityRunnerFixtures.values[0]
     }
 
     @ViewBuilder func communityVerifiedBadge(memberID:String,identifier:String)->some View {
-        if memberID==ui.communityViewerMemberID && ui.communityAccountVerified {
+        if memberID==ui.communityViewerMemberID && (ui.communityAccountVerified || courseFlow.verified) {
             Image(systemName:"checkmark.seal.fill").font(.system(size:13)).foregroundStyle(Color.wire(0x2580EB,0x63A5F2)).accessibilityLabel("계정 인증 완료").accessibilityIdentifier(identifier)
         }
     }

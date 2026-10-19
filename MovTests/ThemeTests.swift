@@ -79,6 +79,122 @@ final class WireframeCrewGuidanceFlowTests: XCTestCase {
     }
 }
 
+final class WireframeCommunityCourseFlowTests: XCTestCase {
+    @MainActor
+    func testCertificationRecoversAcceptedSubmissionAfterLostResponse() async {
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-submit-fail-once"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-submit")
+        flow.applicationReason = "주간 러닝 활동을 기록하고 있어요."
+        flow.evidenceURLs = "https://example.org/running-proof"
+
+        await flow.submitCertification()
+
+        XCTAssertEqual(flow.application?.status, .pending)
+        XCTAssertEqual(flow.noticeMessage, "신청 접수를 확인했어요.")
+        let submissionCount = await service.certificationSubmissionCount()
+        XCTAssertEqual(submissionCount, 1, "The accepted request is recovered with GET instead of a second POST")
+    }
+
+    @MainActor
+    func testCertificationWithdrawalRecoversWithdrawnStatusAfterLostResponse() async {
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-pending", "-wire-community-course-withdraw-fail-once"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-withdraw-recovery")
+        await flow.loadCertification()
+        XCTAssertEqual(flow.application?.status, .pending)
+
+        await flow.withdrawCertification()
+
+        XCTAssertNil(flow.application, "The confirmed WITHDRAWN application is cleared from the member view")
+        XCTAssertEqual(flow.noticeMessage, "대기 중인 신청 철회를 확인했어요.")
+        XCTAssertTrue(flow.errorMessage.isEmpty)
+    }
+
+    @MainActor
+    func testRepeatedCertificationTapWhileRequestIsPendingSendsOnce() async {
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-delay-submit"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-repeat")
+        flow.applicationReason = "주간 러닝 활동을 기록하고 있어요."
+        flow.evidenceURLs = "https://example.org/running-proof"
+
+        let first = Task { await flow.submitCertification() }
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(flow.busy)
+        await flow.submitCertification()
+        await first.value
+
+        let submissionCount = await service.certificationSubmissionCount()
+        XCTAssertEqual(submissionCount, 1)
+        XCTAssertEqual(flow.application?.status, .pending)
+    }
+
+    @MainActor
+    func testCertificationReadFromPreviousAccountIsDiscarded() async {
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-approved", "-wire-community-course-delay-status"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-old-account")
+        let read = Task { await flow.loadCertification() }
+        try? await Task.sleep(for: .milliseconds(100))
+
+        flow.setAccountScope("scope-new-account")
+        await read.value
+
+        XCTAssertNil(flow.application, "A delayed certification result from the previous account is ignored")
+    }
+
+    @MainActor
+    func testOperatorRejectAndCertificationGateUseServerRoleAndStatus() async throws {
+        let memberService = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-pending"])
+        do {
+            _ = try await memberService.decideOperatorApplication(id: "501", action: "REJECT", reason: "검토")
+            XCTFail("A member without service-operator rights must not decide an application")
+        } catch let failure as CommunityCourseFailure {
+            XCTAssertEqual(failure, .forbidden)
+        }
+
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-pending", "-wire-community-course-operator"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-operator")
+        await flow.loadOperatorQueue()
+        await flow.openOperatorApplication(id: "501")
+        flow.operatorDecisionReason = "활동 내용을 보완해 주세요."
+        await flow.decideOperatorApplication(action: "REJECT")
+        XCTAssertEqual(flow.operatorApplication?.status, .rejected)
+
+        do {
+            _ = try await service.createCourseDraft(runID: 10, startMaskMeters: 300, endMaskMeters: 300)
+            XCTFail("A rejected account must not create a course draft")
+        } catch let failure as CommunityCourseFailure {
+            XCTAssertEqual(failure, .forbidden)
+        }
+    }
+
+    @MainActor
+    func testUnknownCourseDraftCreationBlocksRetryAcrossFlowRestartForSameRun() async {
+        let memberID = "course-draft-unknown-\(UUID().uuidString)"
+        let service = WireframeCommunityCourseFixture(arguments: ["-wire-community-course-approved", "-wire-community-course-create-fail-once"])
+        let flow = WireframeCommunityCourseFlow(service: service)
+        flow.setAccountScope("scope-course-draft-unknown")
+        await flow.loadCertification()
+        flow.courseRunID = "812"
+
+        await flow.createCourseDraftAndPublish(memberID: memberID)
+        XCTAssertTrue(flow.draftCreateResultUnknown)
+        XCTAssertNil(flow.draftCourseID)
+
+        let reopened = WireframeCommunityCourseFlow(service: service)
+        reopened.setAccountScope("scope-course-draft-reopened")
+        reopened.courseRunID = "812"
+        reopened.restoreDraftCreateUnknown(memberID: memberID)
+        XCTAssertTrue(reopened.draftCreateResultUnknown, "The same account/run stays blocked after process state is reconstructed")
+        reopened.courseRunID = "813"
+        reopened.restoreDraftCreateUnknown(memberID: memberID)
+        XCTAssertFalse(reopened.draftCreateResultUnknown, "A different valid run retains a safe independent create path")
+    }
+}
+
 private struct V1PointsFixture: Codable {
     var balance: Int
     var entries: [V1PointEntryFixture]

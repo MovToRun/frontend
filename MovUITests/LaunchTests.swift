@@ -2187,6 +2187,158 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["communityCourseFact-기록 시간"].label.contains("30:08"))
     }
 
+    private func launchRemoteCourseFixture(_ screen: String, extras: [String] = []) {
+        let suite = makeFixtureStoreSuite("mov.ui.community-course")
+        app.launchArguments = ["-wire-screen", screen, "-wire-fixture", "-wire-community-course-fixture", "-wire-test-store-suite", suite, "-wire-reset", "-appearance", "light"] + extras
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-\(screen)"].waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    func testRemoteCommunityCertificationSubmitAndWithdrawUsesHTTPSEvidence() {
+        launchRemoteCourseFixture("C10", extras: ["-wire-community-course-submit-fail-once", "-wire-community-course-delay-submit", "-wire-community-course-withdraw-fail-once"])
+        let reason = app.textViews["communityVerificationNote"]
+        let evidence = app.textViews["communityCertificationEvidenceURLs"]
+        XCTAssertTrue(reason.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(evidence.waitForExistence(timeout: 5), app.debugDescription)
+        reason.tap(); reason.typeText("주간 러닝 활동을 기록하고 있어요.")
+        evidence.tap(); evidence.typeText("https://example.org/running-proof")
+        let submit = app.buttons["communityVerificationSubmit"]
+        submit.tap()
+        XCTAssertFalse(submit.isEnabled, "Only one certification submission can be in flight")
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C11"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label, "인증을 검토하고 있어요")
+        XCTAssertEqual(app.staticTexts["communityCertificationNotice"].label, "신청 접수를 확인했어요.", "A lost response is reconciled through the current status")
+        app.buttons["communityCertificationWithdraw"].tap()
+        XCTAssertTrue(waitForLayout({ self.app.staticTexts["communityVerificationHeading"].label == "계정 인증을 신청해 보세요" }, timeout: 5), app.debugDescription)
+        XCTAssertEqual(app.staticTexts["communityCertificationNotice"].label, "대기 중인 신청 철회를 확인했어요.")
+    }
+
+    func testRemoteCertificationRequestCanBeLeftWhileInFlightWithoutRedirect() {
+        launchRemoteCourseFixture("C10", extras: ["-wire-community-course-delay-submit"])
+        let reason = app.textViews["communityVerificationNote"]
+        let evidence = app.textViews["communityCertificationEvidenceURLs"]
+        reason.tap(); reason.typeText("주간 러닝 활동을 기록하고 있어요.")
+        evidence.tap(); evidence.typeText("https://example.org/running-proof")
+        app.buttons["communityVerificationSubmit"].tap()
+        XCTAssertTrue(app.buttons["community-tab-feed"].waitForExistence(timeout: 3), app.debugDescription)
+        app.buttons["community-tab-feed"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C01"].waitForExistence(timeout: 5), app.debugDescription)
+        Thread.sleep(forTimeInterval: 1.1)
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C01"].exists, "A completed request must not redirect after leaving C10")
+        XCTAssertFalse(app.descendants(matching: .any)["screen-C11"].exists)
+    }
+
+    func testRemoteCommunityCertificationOperatorApprovalIsServerGated() {
+        launchRemoteCourseFixture("C44", extras: ["-wire-community-course-pending"])
+        XCTAssertTrue(app.staticTexts["communityOperatorRestricted"].waitForExistence(timeout: 5), app.debugDescription)
+        app.terminate()
+
+        launchRemoteCourseFixture("C44", extras: ["-wire-community-course-pending", "-wire-community-course-operator"])
+        let request = app.buttons["communityOperatorRequest-501"]
+        XCTAssertTrue(request.waitForExistence(timeout: 5), app.debugDescription)
+        request.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C45"].waitForExistence(timeout: 5), app.debugDescription)
+        let reason = app.textViews["communityOperatorDecisionReason"]
+        XCTAssertTrue(reason.waitForExistence(timeout: 5), app.debugDescription)
+        reason.tap(); reason.typeText("확인 자료와 러닝 활동을 검토했어요.")
+        app.buttons["communityOperatorApprove"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C45"].exists)
+        XCTAssertEqual(app.staticTexts["communityOperatorDecisionNotice"].label, "인증을 승인했어요.")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.staticTexts["communityOperatorQueueEmpty"].waitForExistence(timeout: 5), app.debugDescription)
+
+        app.terminate()
+        launchRemoteCourseFixture("C11", extras: ["-wire-community-course-approved"])
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label, "계정 인증이 완료됐어요")
+        app.buttons["communityVerificationContinue"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C13"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testRemoteCommunityOperatorCanRejectAndQueueAndReapplicationShowEmptyStates() {
+        launchRemoteCourseFixture("C44", extras: ["-wire-community-course-pending", "-wire-community-course-operator"])
+        let request = app.buttons["communityOperatorRequest-501"]
+        XCTAssertTrue(request.waitForExistence(timeout: 5), app.debugDescription)
+        request.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C45"].waitForExistence(timeout: 5), app.debugDescription)
+        let reason = app.textViews["communityOperatorDecisionReason"]
+        reason.tap(); reason.typeText("활동 내용을 보완해 주세요.")
+        app.buttons["communityOperatorReject"].tap()
+        XCTAssertEqual(app.staticTexts["communityOperatorDecisionNotice"].label, "인증 신청을 거부했어요.")
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.staticTexts["communityOperatorQueueEmpty"].waitForExistence(timeout: 5), app.debugDescription)
+
+        app.terminate()
+        launchRemoteCourseFixture("C11", extras: ["-wire-community-course-rejected"])
+        XCTAssertEqual(app.staticTexts["communityVerificationHeading"].label, "신청 내용을 다시 확인해 주세요")
+        app.buttons["communityVerificationContinue"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C10"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testRemoteCommunityCourseUsesMaskedRouteAndBoundFollowRun() {
+        launchRemoteCourseFixture("C12", extras: ["-wire-run-upload-fixture", "-wire-run-location-fixture"])
+        let summary = app.buttons["communityRemoteCourse-7001"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), app.debugDescription)
+        summary.tap()
+        XCTAssertTrue(app.otherElements["communityRemoteCourseMap"].waitForExistence(timeout: 5) || app.descendants(matching: .any)["communityRemoteCourseMap"].exists, app.debugDescription)
+        XCTAssertFalse(app.staticTexts["fixture-member"].exists, "Course detail must not show owner/source IDs")
+        app.buttons["communityRemoteFollowStart"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C14"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["communityFollowRouteVersion"].label.contains("1"))
+        XCTAssertTrue(app.buttons["community-tab-feed"].exists, "Course flow keeps the community-only bottom bar")
+        app.buttons["communityFollowPause"].tap()
+        XCTAssertTrue(app.buttons["communityFollowFinish"].waitForExistence(timeout: 5))
+        app.buttons["communityFollowFinish"].tap()
+        XCTAssertTrue(waitForLayout({ self.app.buttons["communityFollowCompareRetry"].exists || self.app.staticTexts["communityFollowComparisonTitle"].exists }, timeout: 8), app.debugDescription)
+        if app.buttons["communityFollowCompareRetry"].exists {
+            app.buttons["communityFollowCompareRetry"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["communityFollowComparisonTitle"].waitForExistence(timeout: 8), app.debugDescription)
+        app.buttons["communityFollowBackToCourse"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C12"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["community-tab-feed"].exists)
+        app.buttons["community-tab-feed"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C01"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testRemoteCommunityCourseStopsWhenPinnedRevisionIsUnavailableAndHandlesEmptyCatalog() {
+        launchRemoteCourseFixture("C12", extras: ["-wire-community-course-empty"])
+        XCTAssertTrue(app.staticTexts["communityRemoteCourseEmpty"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["community-tab-feed"].exists)
+        app.terminate()
+
+        launchRemoteCourseFixture("C12", extras: ["-wire-run-upload-fixture", "-wire-run-location-fixture", "-wire-community-course-follow-revision-changed"])
+        let summary = app.buttons["communityRemoteCourse-7001"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), app.debugDescription)
+        summary.tap()
+        app.buttons["communityRemoteFollowStart"].tap()
+        XCTAssertTrue(app.staticTexts["communityRemoteCourseDetailError"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["screen-C14"].exists, "An unavailable pinned revision cannot start a local run")
+    }
+
+    func testRemoteCommunityCourseShareCreatesPrivateDraftThenRequiresConsentToPublish() {
+        launchRemoteCourseFixture("C13", extras: ["-wire-community-course-approved", "-wire-community-course-run-fixture", "-wire-run-upload-fixture"])
+        let picker = app.descendants(matching: .any)["communityRemoteCourseRunPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 8), app.debugDescription)
+        picker.tap()
+        let runOption = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "6.10 km")).firstMatch
+        XCTAssertTrue(runOption.waitForExistence(timeout: 5), app.debugDescription)
+        runOption.tap()
+        XCTAssertTrue(app.buttons["communityRemoteCoursePublish"].isEnabled, "A valid server run can create a private draft before public consent")
+        app.buttons["communityRemoteCoursePublish"].tap()
+        XCTAssertTrue(app.staticTexts["communityCourseDraftReady"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C13"].exists, "Draft creation does not publish or leave the composer")
+        XCTAssertFalse(app.buttons["communityRemoteCoursePublish"].isEnabled, "Publishing stays disabled until explicit consent")
+
+        let consent = app.descendants(matching: .any)["communityRemoteCourseConsent"]
+        XCTAssertTrue(consent.exists, app.debugDescription)
+        consent.tap()
+        let startMask = app.textFields["communityCourseStartMask"]
+        if startMask.exists { replace("450", into: startMask) }
+        app.buttons["communityRemoteCoursePublish"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen-C12"].waitForExistence(timeout: 8), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["communityCourseTitle"].exists, "Only a successful publish opens the public course detail")
+    }
+
     func testCommunityCourseCancelAndBackPreserveOnlyUnpublishedDraft() {
         launchCommunity("C01",verificationStatus:"approved",twoCourseRecords:true)
         app.buttons["communityStartCourseShare"].tap()
