@@ -1003,13 +1003,14 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10))
     }
 
-    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,operatorRole:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,failCancelOnce:Bool=false,delayedWrites:Bool=false,delayedSearch:Bool=false,pagedSearch:Bool=false,duplicateSearchPage:Bool=false,pagedApplications:Bool=false,accountSwitchDuringRead:Bool=false,fullBoards:Bool=false,postAuthorOther:Bool=false,failPostUpdateOnce:Bool=false,failPostDeleteOnce:Bool=false,delayPostWrites:Bool=false,crewID:String?="101") {
+    private func openRemoteCrewFixture(_ screen:String,manager:Bool=false,operatorRole:Bool=false,nonMember:Bool=false,failMyCrewsOnce:Bool=false,failCancelOnce:Bool=false,failApplyUnknownOnce:Bool=false,delayedWrites:Bool=false,delayedSearch:Bool=false,pagedSearch:Bool=false,duplicateSearchPage:Bool=false,pagedApplications:Bool=false,accountSwitchDuringRead:Bool=false,fullBoards:Bool=false,postAuthorOther:Bool=false,failPostUpdateOnce:Bool=false,failPostDeleteOnce:Bool=false,delayPostWrites:Bool=false,crewID:String?="101") {
         app.launchArguments=["-wire-screen",screen,"-wire-fixture","-wire-crew-api-fixture","-wire-test-store-suite","remote-crew-\(UUID().uuidString)","-wire-reset","-appearance","light"]
         if manager { app.launchArguments.append("-wire-crew-fixture-manager") }
         if operatorRole { app.launchArguments.append("-wire-crew-fixture-operator") }
         if nonMember { app.launchArguments.append("-wire-crew-fixture-non-member") }
         if failMyCrewsOnce { app.launchArguments.append("-wire-crew-fixture-fail-my-crews-once") }
         if failCancelOnce { app.launchArguments.append("-wire-crew-fixture-fail-cancel-once") }
+        if failApplyUnknownOnce { app.launchArguments.append("-wire-crew-fixture-apply-unknown-once") }
         if delayedWrites { app.launchArguments.append("-wire-crew-fixture-delay-writes") }
         if delayedSearch { app.launchArguments.append("-wire-crew-fixture-delayed-search") }
         if pagedSearch { app.launchArguments.append("-wire-crew-fixture-paged-search") }
@@ -1236,6 +1237,23 @@ import UIKit
         XCTAssertTrue(app.descendants(matching:.any)["screen-C16"].waitForExistence(timeout:5))
     }
 
+    func testRemoteCrewApplicationUnknownOutcomeBlocksDuplicateRetry() {
+        openRemoteCrewFixture("C16",nonMember:true,failApplyUnknownOnce:true)
+        XCTAssertTrue(app.buttons["communityCrewJoin"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["communityCrewJoin"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].waitForExistence(timeout:5),app.debugDescription)
+
+        let submit=app.buttons["communityCrewSubmitApplication"]
+        XCTAssertTrue(submit.waitForExistence(timeout:5),app.debugDescription)
+        submit.tap()
+        XCTAssertTrue(app.staticTexts["remoteCrewMutationMessage"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(app.staticTexts["remoteCrewMutationMessage"].label,"신청 결과를 확인하지 못했어요. 중복 신청을 막기 위해 다시 보내지 않았어요.")
+        XCTAssertTrue(app.staticTexts["신청 결과를 확인하지 못했어요. 이 신청은 다시 보내지 않도록 잠겨 있어요."].exists,app.debugDescription)
+        XCTAssertFalse(submit.isEnabled,"An unknown write outcome stays blocked instead of offering a duplicate retry")
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C17"].exists,"The unresolved result stays on the application form")
+        XCTAssertFalse(app.descendants(matching:.any)["screen-C18"].exists,"An unconfirmed application is not presented as a confirmed submission")
+    }
+
     func testRemoteCrewDirectoryCancelsSlowOldQueryAndDeduplicatesCursorPages() {
         openRemoteCrewFixture("C15",nonMember:true,delayedSearch:true,pagedSearch:true,duplicateSearchPage:true,crewID:nil)
         app.buttons["communityCrewTab-find"].tap()
@@ -1277,7 +1295,7 @@ import UIKit
         XCTAssertTrue(app.buttons["communityCrewApplicationCancel-322"].exists,"A failed cancel keeps the application and permits an explicit retry")
         app.buttons["communityCrewApplicationCancel-322"].tap()
         app.alerts.buttons.matching(identifier:"communityCrewApplicationCancelConfirm").firstMatch.tap()
-        XCTAssertFalse(app.buttons["communityCrewApplicationOpen-322"].exists,"A successful cancellation removes its row")
+        XCTAssertTrue(waitForLayout({ !self.app.buttons["communityCrewApplicationOpen-322"].exists },timeout:5),"A successful cancellation removes its row")
         let more=app.buttons["communityCrewApplicationsMore"]
         for _ in 0..<5 where !more.isHittable { app.swipeUp() }
         XCTAssertTrue(more.isHittable,app.debugDescription)

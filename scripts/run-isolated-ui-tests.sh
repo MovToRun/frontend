@@ -79,6 +79,7 @@ printf 'UI-test run DerivedData: %s\nUI-test result bundle: %s\n' "$derived_data
     -only-testing:MovUITests/LaunchTests/testCommunityPublishBusyPreventsReturningToEditableComposer \
     -only-testing:MovUITests/LaunchTests/testCommunityAmbiguousCreateRemainsBlockedInPreview \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewSearchApplyCancelEmptyStateAndCommunityTab \
+    -only-testing:MovUITests/LaunchTests/testRemoteCrewApplicationUnknownOutcomeBlocksDuplicateRetry \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewDirectoryCancelsSlowOldQueryAndDeduplicatesCursorPages \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewPendingApplicationsPaginateRetryCancellationAndReentry \
     -only-testing:MovUITests/LaunchTests/testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft \

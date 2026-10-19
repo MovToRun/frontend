@@ -707,6 +707,7 @@ actor WireframeCrewServiceFixture: CrewServing {
     private let nonMember: Bool
     private var failMyCrewsOnce: Bool
     private var failCancelOnce: Bool
+    private var failApplyUnknownOnce: Bool
     private let delayedCrewSearch: Bool
     private let pagedCrewSearch: Bool
     private let duplicateCrewSearchPage: Bool
@@ -746,6 +747,7 @@ actor WireframeCrewServiceFixture: CrewServing {
         nonMember = arguments.contains("-wire-crew-fixture-non-member")
         failMyCrewsOnce = arguments.contains("-wire-crew-fixture-fail-my-crews-once")
         failCancelOnce = arguments.contains("-wire-crew-fixture-fail-cancel-once")
+        failApplyUnknownOnce = arguments.contains("-wire-crew-fixture-apply-unknown-once")
         delayedCrewSearch = arguments.contains("-wire-crew-fixture-delayed-search")
         pagedCrewSearch = arguments.contains("-wire-crew-fixture-paged-search")
         duplicateCrewSearchPage = arguments.contains("-wire-crew-fixture-duplicate-search-page")
@@ -904,6 +906,10 @@ actor WireframeCrewServiceFixture: CrewServing {
         myApplications.insert(BackendCrewMyApplication(applicationId: id, crewId: crewID,
             crewName: updatedCrews[crewID]?.name ?? "모브 새벽 크루", note: note, grade: grade, status: "PENDING",
             createdAt: now, updatedAt: now), at: 0)
+        if failApplyUnknownOnce {
+            failApplyUnknownOnce = false
+            throw CrewClientFailure.applicationResultUnknown
+        }
         return application
     }
     func fetchPendingApplications(crewID: String) async throws -> [BackendCrewApplication] {

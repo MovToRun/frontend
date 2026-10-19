@@ -185,10 +185,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        guard response.statusCode == 201 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 201)
         do {
             let crew = try Self.decode(BackendCrew.self, from: response.data)
             guard Self.isValid(crew), crew.role == "OWNER" else { throw CrewClientFailure.mutationResultUnknown }
@@ -321,12 +318,7 @@ struct CrewClient: CrewServing, Sendable {
             default: throw failure
             }
         } catch { throw CrewClientFailure.mutationResultUnknown }
-        guard response.statusCode == 200 else {
-            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
-                throw CrewClientFailure.mutationResultUnknown
-            }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 200)
         do {
             let crew = try Self.decode(BackendCrew.self, from: response.data)
             guard Self.isValid(crew), crew.crewId == crewID, ["OWNER", "OPERATOR"].contains(crew.role ?? "") else {
@@ -352,10 +344,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.applicationResultUnknown
         }
-        guard response.statusCode == 201 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.applicationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 201, unknownFailure: .applicationResultUnknown)
         do {
             let application = try Self.decode(BackendCrewApplication.self, from: response.data)
             guard Self.isValid(application), application.crewId == crewID else {
@@ -394,10 +383,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        guard response.statusCode == 200 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 200)
         do {
             let application = try Self.decode(BackendCrewApplication.self, from: response.data)
             guard Self.isValid(application), application.crewId == crewID, application.applicationId == applicationID else {
@@ -424,10 +410,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        guard response.statusCode == 204 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 200)
     }
 
     func fetchBoards(crewID: String) async throws -> [BackendCrewBoard] {
@@ -523,10 +506,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        guard response.statusCode == 201 else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 201)
         do {
             let post = try Self.decode(BackendCrewPost.self, from: response.data)
             guard Self.isValid(post), post.crewId == crewID, post.boardId == boardID else { throw CrewClientFailure.mutationResultUnknown }
@@ -555,12 +535,7 @@ struct CrewClient: CrewServing, Sendable {
         } catch {
             throw CrewClientFailure.mutationResultUnknown
         }
-        guard response.statusCode == 200 else {
-            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
-                throw CrewClientFailure.mutationResultUnknown
-            }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 200)
         do {
             let post = try Self.decode(BackendCrewPost.self, from: response.data)
             guard Self.isValid(post), post.crewId == crewID, post.boardId == boardID, post.postId == postID else {
@@ -601,12 +576,7 @@ struct CrewClient: CrewServing, Sendable {
             default: throw failure
             }
         } catch { throw CrewClientFailure.mutationResultUnknown }
-        guard response.statusCode == 204 else {
-            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
-                throw CrewClientFailure.mutationResultUnknown
-            }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: 204)
     }
 
     private func sendDecodedMutation<T: Decodable & Sendable>(
@@ -628,10 +598,7 @@ struct CrewClient: CrewServing, Sendable {
             default: throw failure
             }
         } catch { throw CrewClientFailure.mutationResultUnknown }
-        guard response.statusCode == expectedStatus else {
-            if (500..<600).contains(response.statusCode) { throw CrewClientFailure.mutationResultUnknown }
-            throw Self.mapFailure(response)
-        }
+        try Self.requireMutationStatus(response, expectedStatus: expectedStatus)
         do {
             let value = try Self.decode(T.self, from: response.data)
             guard let board = value as? BackendCrewBoard,
@@ -725,6 +692,19 @@ struct CrewClient: CrewServing, Sendable {
         case 503: return .serviceUnavailable(code: problem?.code)
         case 500...599: return .serverFailure(statusCode: response.statusCode)
         default: return .invalidResponse
+        }
+    }
+
+    private static func requireMutationStatus(
+        _ response: APIClientResponse,
+        expectedStatus: Int,
+        unknownFailure: CrewClientFailure = .mutationResultUnknown
+    ) throws {
+        guard response.statusCode == expectedStatus else {
+            if (200..<300).contains(response.statusCode) || (500..<600).contains(response.statusCode) {
+                throw unknownFailure
+            }
+            throw mapFailure(response)
         }
     }
 
