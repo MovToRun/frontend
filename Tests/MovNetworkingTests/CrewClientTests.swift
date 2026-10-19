@@ -103,6 +103,77 @@ final class CrewClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
     }
 
+    func testCrewDirectoryAndMyApplicationPagesUseBE117RoutesAndIDs() async throws {
+        let directoryPage = #"{"items":[{"crewId":"101","name":"모브 새벽 크루","introduction":"아침 러닝","joinGuide":"편하게 인사해요","capacity":20,"memberCount":3,"status":"ACTIVE","role":null}],"nextCursor":"101"}"#
+        let myApplicationPage = #"{"items":[{"applicationId":"301","crewId":"101","crewName":"모브 새벽 크루","note":"같이 달리고 싶어요","grade":null,"status":"PENDING","createdAt":"2026-10-17T10:00:00Z","updatedAt":"2026-10-17T10:00:00Z"}],"nextCursor":"301"}"#
+        let transport = CrewRecordingTransport([
+            APIClientResponse(statusCode: 200, data: Data(directoryPage.utf8)),
+            APIClientResponse(statusCode: 200, data: Data(myApplicationPage.utf8))
+        ])
+        let client = try makeRecordingClient(transport)
+
+        let crews = try await client.searchCrews(query: "새벽 러닝", cursor: "105", size: 7)
+        let applications = try await client.fetchMyPendingApplications(cursor: "302", size: 9)
+
+        XCTAssertEqual(crews.items.map(\.id), ["101"])
+        XCTAssertEqual(crews.nextCursor, "101")
+        XCTAssertEqual(applications.items.map(\.id), ["301"])
+        XCTAssertEqual(applications.items.first?.crewName, "모브 새벽 크루")
+        let requests = await transport.capturedRequests()
+        XCTAssertEqual(requests.map(\.path), ["crews", "crews/me/applications"])
+        XCTAssertEqual(requests.map(\.method), ["GET", "GET"])
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "q" })?.value, "새벽 러닝")
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "cursor" })?.value, "105")
+        XCTAssertEqual(requests[0].queryItems.first(where: { $0.name == "size" })?.value, "7")
+        XCTAssertEqual(requests[1].queryItems.first(where: { $0.name == "cursor" })?.value, "302")
+        XCTAssertEqual(requests[1].queryItems.first(where: { $0.name == "size" })?.value, "9")
+        XCTAssertTrue(requests.allSatisfy { $0.headers["Cache-Control"] == "no-store" })
+    }
+
+    func testCrewInformationUpdateSendsFullReplacementIncludingExplicitNulls() async throws {
+        let updated = #"{"crewId":"101","name":"새벽 러닝 크루","introduction":null,"joinGuide":null,"capacity":20,"memberCount":3,"status":"ACTIVE","role":"OWNER"}"#
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 200, data: Data(updated.utf8))])
+        let result = try await makeRecordingClient(transport).updateCrew(
+            crewID: "101", name: "새벽 러닝 크루", introduction: nil, joinGuide: nil
+        )
+
+        XCTAssertEqual(result.name, "새벽 러닝 크루")
+        let captured = await transport.capturedRequests()
+        let request = try XCTUnwrap(captured.first)
+        XCTAssertEqual(request.path, "crews/101")
+        XCTAssertEqual(request.method, "PUT")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.body)) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), Set(["name", "introduction", "joinGuide"]))
+        XCTAssertEqual(json["name"] as? String, "새벽 러닝 크루")
+        XCTAssertTrue(json["introduction"] is NSNull)
+        XCTAssertTrue(json["joinGuide"] is NSNull)
+    }
+
+    func testDirectoryPageAndInformationMutationRejectInvalidContractsBeforeRetry() async throws {
+        let transport = CrewRecordingTransport([APIClientResponse(statusCode: 403, data: Data(#"{"code":"FORBIDDEN"}"#.utf8))])
+        let client = try makeRecordingClient(transport)
+        do {
+            _ = try await client.searchCrews(query: "a", cursor: "opaque", size: 20)
+            XCTFail("The contract cursor is a positive numeric resource ID")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        do {
+            _ = try await client.searchCrews(query: String(repeating: "a", count: 31), cursor: nil, size: 20)
+            XCTFail("Search input is limited to 30 graphemes by the API contract")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .invalidRequest)
+        }
+        do {
+            _ = try await client.updateCrew(crewID: "101", name: "변경", introduction: nil, joinGuide: nil)
+            XCTFail("Non-manager updates must keep the server's forbidden response")
+        } catch let failure as CrewClientFailure {
+            XCTAssertEqual(failure, .forbidden)
+        }
+        let captured = await transport.capturedRequests()
+        XCTAssertEqual(captured.count, 1)
+    }
+
     func testApplicationSubmissionUsesContractBodyAndOneAttemptOnUnknownOutcome() async throws {
         let transport = CrewRecordingTransport([APIClientResponse(statusCode: 201, data: Data(application.utf8))])
         let submitted = try await makeRecordingClient(transport).apply(crewID: "101", note: "같이 달리고 싶어요", grade: nil)
@@ -253,6 +324,96 @@ final class CrewClientTests: XCTestCase {
         let requests = await transport.capturedRequests()
         XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(requests.map(\.method), ["PATCH", "PATCH", "DELETE"])
+    }
+
+    func testEveryCrewMutationClassifiesUnexpected2xxAsUnknown() async throws {
+        typealias Mutation = (CrewClient) async throws -> Void
+        let board = #"{"boardId":"501","crewId":"101","name":"러닝 일정","kind":"INTERNAL","status":"ACTIVE","createdAt":"2026-10-17T10:00:00Z"}"#
+        let approvedApplication = application.replacingOccurrences(of: "PENDING", with: "APPROVED")
+        let mutations: [(String, APIClientResponse, CrewClientFailure, Mutation)] = [
+            ("create crew", .init(statusCode: 200, data: Data(crew.utf8)), .mutationResultUnknown,
+             { _ = try await $0.createCrew(name: "새 크루", introduction: nil, joinGuide: nil) }),
+            ("update crew", .init(statusCode: 201, data: Data(crew.utf8)), .mutationResultUnknown,
+             { _ = try await $0.updateCrew(crewID: "101", name: "수정", introduction: nil, joinGuide: nil) }),
+            ("apply", .init(statusCode: 200, data: Data(application.utf8)), .applicationResultUnknown,
+             { _ = try await $0.apply(crewID: "101", note: nil) }),
+            ("approve/reject", .init(statusCode: 201, data: Data(approvedApplication.utf8)), .mutationResultUnknown,
+             { _ = try await $0.decide(crewID: "101", applicationID: "301", approve: true) }),
+            ("cancel application", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.cancelApplication(crewID: "101", applicationID: "301") }),
+            ("create board", .init(statusCode: 200, data: Data(board.utf8)), .mutationResultUnknown,
+             { _ = try await $0.createBoard(crewID: "101", name: "새 게시판") }),
+            ("rename board", .init(statusCode: 201, data: Data(board.utf8)), .mutationResultUnknown,
+             { _ = try await $0.renameBoard(crewID: "101", boardID: "501", name: "수정 게시판") }),
+            ("archive board", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.archiveBoard(crewID: "101", boardID: "501") }),
+            ("restore board", .init(statusCode: 201, data: Data(board.utf8)), .mutationResultUnknown,
+             { _ = try await $0.restoreBoard(crewID: "101", boardID: "501") }),
+            ("create post", .init(statusCode: 200, data: Data(post.utf8)), .mutationResultUnknown,
+             { _ = try await $0.createPost(crewID: "101", boardID: "501", title: "제목", content: "내용") }),
+            ("update post", .init(statusCode: 201, data: Data(post.utf8)), .mutationResultUnknown,
+             { _ = try await $0.updatePost(crewID: "101", boardID: "501", postID: "401", title: "제목", content: "내용") }),
+            ("delete post", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.deletePost(crewID: "101", boardID: "501", postID: "401") }),
+            ("update member role", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.updateMemberRole(crewID: "101", memberID: "202", role: "OPERATOR") }),
+            ("remove member", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.removeMember(crewID: "101", memberID: "202") }),
+            ("release rejoin restriction", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.releaseRejoinRestriction(crewID: "101", memberID: "202") }),
+            ("transfer ownership", .init(statusCode: 200, data: Data()), .mutationResultUnknown,
+             { try await $0.transferOwnership(crewID: "101", memberID: "202") })
+        ]
+
+        for (name, response, expectedFailure, mutation) in mutations {
+            let transport = CrewRecordingTransport([response])
+            do {
+                try await mutation(makeRecordingClient(transport))
+                XCTFail("\(name): an out-of-contract 2xx response must not be treated as confirmed success")
+            } catch let failure as CrewClientFailure {
+                XCTAssertEqual(failure, expectedFailure, "\(name)")
+            }
+            let requests = await transport.capturedRequests()
+            XCTAssertEqual(requests.count, 1, "\(name): an unknown outcome must not issue an automatic second write")
+        }
+    }
+
+    func testEveryDecodedCrewMutationClassifiesMalformedSuccessBodyAsUnknown() async throws {
+        typealias Mutation = (CrewClient) async throws -> Void
+        let mutations: [(String, Int, CrewClientFailure, Mutation)] = [
+            ("create crew", 201, .mutationResultUnknown,
+             { _ = try await $0.createCrew(name: "새 크루", introduction: nil, joinGuide: nil) }),
+            ("update crew", 200, .mutationResultUnknown,
+             { _ = try await $0.updateCrew(crewID: "101", name: "수정", introduction: nil, joinGuide: nil) }),
+            ("apply", 201, .applicationResultUnknown,
+             { _ = try await $0.apply(crewID: "101", note: nil) }),
+            ("approve/reject", 200, .mutationResultUnknown,
+             { _ = try await $0.decide(crewID: "101", applicationID: "301", approve: true) }),
+            ("create board", 201, .mutationResultUnknown,
+             { _ = try await $0.createBoard(crewID: "101", name: "새 게시판") }),
+            ("rename board", 200, .mutationResultUnknown,
+             { _ = try await $0.renameBoard(crewID: "101", boardID: "501", name: "수정 게시판") }),
+            ("restore board", 200, .mutationResultUnknown,
+             { _ = try await $0.restoreBoard(crewID: "101", boardID: "501") }),
+            ("create post", 201, .mutationResultUnknown,
+             { _ = try await $0.createPost(crewID: "101", boardID: "501", title: "제목", content: "내용") }),
+            ("update post", 200, .mutationResultUnknown,
+             { _ = try await $0.updatePost(crewID: "101", boardID: "501", postID: "401", title: "제목", content: "내용") })
+        ]
+
+        for (name, statusCode, expectedFailure, mutation) in mutations {
+            let transport = CrewRecordingTransport([
+                APIClientResponse(statusCode: statusCode, data: Data("not-json".utf8))
+            ])
+            do {
+                try await mutation(makeRecordingClient(transport))
+                XCTFail("\(name): a malformed success body must be classified as an unknown mutation outcome")
+            } catch let failure as CrewClientFailure {
+                XCTAssertEqual(failure, expectedFailure, "\(name)")
+            }
+            let requests = await transport.capturedRequests()
+            XCTAssertEqual(requests.count, 1, "\(name): malformed success must not be retried automatically")
+        }
     }
 
     func testSessionChangeWhileResponseIsInFlightDiscardsOldAccountData() async throws {

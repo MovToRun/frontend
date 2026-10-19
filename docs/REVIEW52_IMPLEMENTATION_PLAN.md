@@ -33,13 +33,13 @@
 
 ### 남은 로컬 UI 구현 backlog
 
-상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C36/C39의 가입 안내·알림 예시, C41–C43 인기글·차단 해제·최근 활동, C10–C14 인증·코스 흐름은 로컬 fixture로 구현했습니다. 크루 흐름은 F010에서 확인된 API 범위(C15–C22, C32–C35, C37–C38, C40)와 로컬 wireframe 상태를 구분합니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
+상태 체크리스트에서 아직 미완료인 사용자 UI는 로그인 `A01`과 이메일 로그인/비밀번호 관리 및 완료 예시 `A16–A18`입니다. 체크리스트 145개 항목 중 141개가 로컬 화면·전이 구현 완료이며, 이 수에는 원본에 없던 검수 상태 `A24–A28` 5개가 포함됩니다. **이 집계는 화면 상태의 렌더·전이 coverage이며, 합의된 제품 기능의 구현률이나 기능·시각 검증 완료를 뜻하지 않습니다.** 게시글 첨부와 편집 같은 별도 요구사항은 아래 커뮤니티 backlog에서 따로 관리합니다. C06 좋아요 목록, C24 커뮤니티 알림, C26 작성 초안 이탈 확인, C28 설정, C29 공개 콘텐츠 검색, C30 연결, C36 가입 안내 전용 화면과 C39 알림 예시, C41–C43 인기글·차단 해제·최근 활동, C10–C14 인증·코스 흐름은 로컬 fixture로 구현했습니다. C36 별도 설정 화면은 로컬 예시지만, 실제 가입 안내 필드(joinGuide)는 C20의 BE117 PUT으로 수정됩니다. 크루 흐름은 F010에서 확인된 API 범위(C15–C22, C32–C35, C37–C38, C40)와 로컬 wireframe 상태를 구분합니다. C01/C29/C41은 익명 게시판 및 크루 전용 글을 공개 피드·검색·HOT에서 제외합니다. HOT는 원본과 같이 명시된 fixture `hot` 값과 현재 목록 순서를 사용하며 점수 산정이나 실제 인기 집계는 없습니다. 위 시각 coverage 표에 남은 다른 화면들은 로컬 UI 완료 표기 상태여도 원본 대비 픽셀·모션 QA가 남아 있을 수 있습니다.
 
-**2026-10-19 F010 follow-up:** The PR #91 baseline at `0761feebc5dbd2a2f0570e8ac1b0eda3d4ef1c4d` connected the confirmed crew features except board-post edit/delete. This follow-up connects the existing PATCH/DELETE post routes: the author may edit; the author or crew owner/operator may delete. C19 confirms discard and delete, locks duplicate writes, updates/removes the same server post ID in the board list, and ignores late responses after account/board changes. No creation idempotency or new API policy was added. The separate F010 limits remain: general crew search/filter and the current member's application list. See [F010 crew progress](F010_CREW_PROGRESS.md) for contract details and current verification status.
+**2026-10-19 F010 follow-up:** PR #92 added the existing crew-board post edit/delete routes. This branch starts from current frontend `main` at `8d98039fb5345bc35f827f837ec061052bb152c1` and the read-only BE117 contract snapshot `de51d83a79a5d63f5d754c5c952001919a15b9b3`. It connects paginated server crew search, the signed-in member's pending-application page and cancellation, and OWNER/OPERATOR crew information replacement. Search covers name/introduction only; no region/level filters are exposed. C36 has no separate guidance-settings route; the persisted joinGuide field is editable through C20 using the confirmed BE117 PUT. C39 announcements, warnings, and other fields absent from these controllers remain outside this API integration. See [F010 crew progress](F010_CREW_PROGRESS.md) for the exact routes, test evidence, and limits.
 
 ## 현재 구조 요약
 
-`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 피드·좋아요·신고·설정 등 기존 로컬 화면과 F010에서 계약을 확인한 크루 화면을 구분합니다. C15–C22, C32–C35, C37–C38, C40은 서비스가 구성되면 확인된 crew API를 사용하고, C36 가입 안내 수정과 C39 알림 예시는 로컬 fixture로 유지합니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
+`WireframeCore.swift`가 루트 화면/상태 전이와 5탭을 관리합니다. 인증, 홈·목표·통계, 러닝·기록, 프로필 설정, 포인트 상점, 공유 화면은 각각 `WireframeAuth.swift`, `WireframeHome.swift`, `WireframeRun.swift`, `WireframeProfile.swift`, `WireframePoints.swift`, `WireframeShare.swift`에 있습니다. 커뮤니티 피드·좋아요·신고·설정 등 기존 로컬 화면과 F010에서 계약을 확인한 크루 화면을 구분합니다. C15–C22, C32–C35, C37–C38, C40은 서비스가 구성되면 확인된 crew API를 사용하고, C36 별도 화면은 로컬 예시이며, 가입 안내(joinGuide)는 C20에서 BE117 PUT으로 저장합니다. C39 알림 예시는 로컬로 유지합니다. 구현 완료는 화면 렌더, 전이 동작 및 확인 근거를 기준으로 판단합니다.
 
 러닝 `pointReward` 모델은 확정 backend DTO의 null·PENDING·SETTLED(0 포함)·UNAVAILABLE 상태를 준비하고, 완료·기록 목록·상세에 기존 포인트 표시 체계를 재사용합니다. 로컬 예시 기록은 유지하며 API 요청이나 실제 서버 연결은 추가하지 않았습니다. [DTO 매핑과 검증 범위](RUN_POINT_REWARD_FRONTEND_CONTRACT.md)를 참고하세요. 이 화면 묶음도 전체 source 대비 픽셀·모션 QA는 남아 있습니다.
 
@@ -53,7 +53,7 @@
 | 4 | `feature/records-stats-sharing` | H07–H09, L01–L07, Q01–Q03 | 기록/통계 빈·오류 상태, 로컬 편집·삭제, 공유 이미지 편집 및 저장 결과 예시 |
 | 5 | `feature/profile-settings-notifications` | M01–M02, N01, T01–T18 | 프로필·러닝카드·설정·테마·계정·알림 흐름과 로컬 상태 |
 | 6 | `feature/points-shop` | B01–B10 | 가상 잔액/내역/아이템, 구매 결과는 예시로 표시하며 실제 결제·차감 없음 |
-| 7 | `feature/community-crew` | C01–C43 | 앱 별도 5탭 구조와 커뮤니티 화면; 서버 계약이 있는 F010 크루 기능은 API 연결, 지원하지 않는 검색·내 신청 목록 등은 문서화 |
+| 7 | `feature/community-crew` | C01–C43 | 앱 별도 5탭 구조와 커뮤니티 화면; BE117에서 확인된 F010 검색·신청 목록·수정 계약을 포함해 API 연결, 지원하지 않는 지역·등급 필터 등은 문서화 |
 | 8 | `feature/review52-visual-qa` | 전체 140 상태 × 라이트/다크 | 전체 구현 뒤 통합 시각 검수 1회. 차이는 수정 후 해당 상태만 재검수 |
 
 PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책)가 main에 병합했습니다. H07–H09는 같은 source/app 비교 viewport를 사용합니다. 로컬 시뮬레이션의 GPS·구매·인증·동기화 예시는 백엔드에 연결하지 않으며 서버 성공으로 오인시키지 않습니다. 기능 브랜치마다 화면을 대조하고 테스트·diff 검토 후 커밋·푸시·draft PR로 제출합니다. 다음 merge는 사용자 승인 후 진행합니다.
@@ -231,12 +231,12 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C12` | 공유 코스 | `communityCourseDetail` — 코스 요약·작성자·경로·따라달리기 |
 | [x] | `C13` | 코스 공유 작성 | `communityCourseCompose` — 승인 로컬 계정·유효 기기 기록 선택·끝 위치 숨김·게시 미리보기 |
 | [x] | `C14` | 따라달리기 미리보기 | `communityGhostRun` — 60배속 로컬 시간축, 재생/정지/처음부터/끝 위치 설정 |
-| [x] | `C15` | 크루 탐색 | `communityCrewOverview` — F010: `/crews/me`와 공개 모집 게시글 첫 페이지; 모집 검색은 받은 결과 안에서 로컬 필터 |
+| [x] | `C15` | 크루 탐색 | `communityCrewOverview` — F010: `/crews/me`와 BE117 `/crews?q&cursor&size` 서버 검색·페이지네이션; 이름·소개만 검색 |
 | [x] | `C16` | 크루 소개 | `communityCrewDetail` — F010: 서버 소개·정원·역할을 읽고 가입/게시판 진입; 지역·등급은 API 미제공 |
 | [x] | `C17` | 크루 가입 신청 | `communityCrewJoinForm` — F010: 선택 메모로 가입 신청; 중복 전송 잠금과 알 수 없는 결과 보존 |
-| [x] | `C18` | 가입 신청 상태 | `communityCrewApplicationStatus` — F010: 이번 앱 실행에서 제출한 신청 상태 및 확인 뒤 취소 |
+| [x] | `C18` | 가입 신청 상태 | `communityCrewApplicationStatus` — F010: 서버 신청 상태와 확인 뒤 취소; 취소 뒤 재진입에도 서버 목록 반영 |
 | [x] | `C19` | 크루 게시판 | `communityCrewBoard` — F010: 서버 게시판·목록·상세·작성·수정·삭제; 작성자 수정, 작성자 또는 크루장/운영자 삭제, C37/C38 보관된 글 유지·복원 연동 |
-| [x] | `C20` | 크루 만들기·수정 | F010: 확인된 생성 API로 이름·소개·가입 안내 생성; 수정 API는 없음. 생성 API에 없는 사진·지역·등급은 보내지 않음 |
+| [x] | `C20` | 크루 만들기·수정 | F010: 생성 API로 이름·소개·가입 안내 생성, BE117 `PUT /crews/{crewId}`로 관리자가 같은 필드를 수정; 지역·등급·사진은 보내지 않음 |
 | [x] | `C21` | 크루 관리 | F010: 서버 역할에 따른 권한 확인과 신청 검토·멤버 관리·게시판 관리 진입 |
 | [x] | `C22` | 가입 신청 검토 | `communityCrewApplicationReview` — F010: 서버 승인/거절, 권한 오류는 서버 응답으로 처리 |
 | [x] | `C23` | 신고 | 네 가지 사유와 선택 상세(최대 300자), 로컬 접수 |
@@ -248,11 +248,11 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 | [x] | `C29` | 커뮤니티 검색 | `communitySearch` — 공개 게시물·프로필·크루별 결과, NFC·공백 정리·한국어 locale 대소문자 비교, 차단 사용자/크루 제외, 뒤로·상세/프로필/크루 복귀 때 검색어 유지; 로컬 fixture |
 | [x] | `C30` | 팔로워·팔로잉 | `communityConnections` — 로컬 관계 목록과 카드 미리보기 |
 | [x] | `C31` | 프로필 사진 | `communityPhotoViewer` — 등록 사진 확대 또는 빈 사진 안내 |
-| [x] | `C32` | 크루 정보 | `communityCrewInformation` — F010: 서버가 제공하는 이름·소개·가입 안내·멤버 수·역할·상태; 지역·레벨·크루장 이름은 미표시 |
-| [x] | `C33` | 신청 중인 크루 | `communityCrewApplicationList` — F010: 현재 앱 실행 중 제출한 신청만 표시; 빈 상태·행 표시 모두 내 신청 목록 API 한계를 안내 |
+| [x] | `C32` | 크루 정보 | `communityCrewInformation` — F010: 이름·소개·가입 안내·멤버 수·역할·상태; OWNER/OPERATOR만 정보 수정, 지역·등급·사진은 미표시 |
+| [x] | `C33` | 신청 중인 크루 | `communityCrewApplicationList` — F010: BE117 `/crews/me/applications`에서 현재 회원의 PENDING 신청을 페이지 단위로 읽고 취소 |
 | [x] | `C34` | 멤버 관리 | `communityCrewMemberList` — F010: 서버 멤버 DTO(회원 ID·역할·가입 시각), 소유자용 재가입 제한 관리 |
 | [x] | `C35` | 멤버 상세 관리 | `communityCrewMemberDetail` — F010: 소유자 역할 변경, API 권한 범위 내 멤버 내보내기; 회원 ID 표시 |
-| [x] | `C36` | 가입 안내 설정 | `communityCrewGuidanceSettings` — 크루장·운영자 권한, 500자 제한, 저장/취소와 변경 폐기 확인; 로컬 fixture |
+| [x] | `C36` | 가입 안내 설정 | `communityCrewGuidanceSettings` — 별도 화면은 로컬 fixture; 실제 joinGuide는 C20의 BE117 PUT 편집에서 저장 |
 | [x] | `C37` | 게시판 관리 | `communityCrewBoardManagement` — F010: 서버 활성 게시판, 활성 5개 상한, 보관 목록·복원 |
 | [x] | `C38` | 게시판 편집 | `communityCrewBoardEditor` — F010: 서버 INTERNAL 게시판 생성·이름 변경; 보관/복원은 C37에서 실행 |
 | [x] | `C39` | 크루 알림 관리 | `communityCrewAnnouncementEditor` — 제목 60자/내용 300자 제한, 회원 게시판에 로컬 예시로 표시; 실제 푸시 없음 |
@@ -265,13 +265,13 @@ PR #10(A01/H00/H01), PR #11(R02/L01/L04/B05/B06), PR #14(프로필 사진 정책
 
 - C04 본인 게시글 수정은 제목·본문·게시판 등 현재 지원 데이터를 C05 초안으로 불러오고, 저장할 때 원래 게시글 ID를 갱신합니다. 변경 전 원본은 저장 전까지 유지하며 변경 없는 이탈은 바로 복귀하고, 변경 초안의 이탈은 C26 확인을 사용합니다. 예시 이미지·코스·댓글·반응 데이터는 텍스트 수정으로 덮어쓰지 않습니다. 크루 글은 `crewID`와 안정된 `crewBoardID`를 함께 갱신하고, 게시판 이름 변경에도 같은 글 ID와 관계를 유지합니다.
 - C04 삭제는 확인 후 게시글과 포함된 댓글을 함께 제거합니다. 작성자는 자기 글을 수정·삭제할 수 있고, 크루장·운영자는 해당 크루 게시글·댓글만 삭제할 수 있습니다. 다른 사람의 글을 수정할 수 없습니다. 댓글 삭제는 tombstone을 남기고 답글 계층을 보존합니다.
-- 로컬 fixture 경로에서 C19와 C04는 단일 `WireState.communityPosts`의 같은 `WCommunityPost`를 사용합니다. F010 remote C19는 서버 게시판·글·상세·작성·수정·삭제 흐름을 사용합니다. Backend main `f13d07609dac15ccc44fc3d277c7b78847972587`의 `CrewBoardContentController` PATCH/DELETE 계약으로 연결했습니다. 서비스 권한은 작성자만 수정, 작성자 또는 크루장/운영자 삭제입니다. 편집 초안 취소 확인·삭제 확인, 중복 요청 잠금, 알려진 충돌 후 명시적 재시도, 계정/게시판 전환 후 늦은 응답 무시를 구현했습니다. 서버 응답은 같은 글 ID의 행에 반영되고 삭제 후 게시판으로 돌아옵니다. 이번 follow-up의 UI 실행 검증은 Xcode의 시뮬레이터 런타임 부재로 남아 있으며 [F010 진행 문서](F010_CREW_PROGRESS.md)에 근거와 한계를 기록했습니다. 로컬 path에서는 C19 행에서 C04 상세로 진입하고 편집·삭제 후에도 원래 크루/게시판으로 돌아옵니다. 크루 전용 글은 공개 피드·검색·HOT 결과에서 제외합니다.
+- 로컬 fixture 경로에서 C19와 C04는 단일 `WireState.communityPosts`의 같은 `WCommunityPost`를 사용합니다. F010 remote C19는 서버 게시판·글·상세·작성·수정·삭제 흐름을 사용합니다. Backend main `f13d07609dac15ccc44fc3d277c7b78847972587`의 `CrewBoardContentController` PATCH/DELETE 계약으로 연결했습니다. 서비스 권한은 작성자만 수정, 작성자 또는 크루장/운영자 삭제입니다. 편집 초안 취소 확인·삭제 확인, 중복 요청 잠금, 알려진 충돌 후 명시적 재시도, 계정/게시판 전환 후 늦은 응답 무시를 구현했습니다. 서버 응답은 같은 글 ID의 행에 반영되고 삭제 후 게시판으로 돌아옵니다. PR #92의 격리된 UI 검증은 16 UI·4 hosted contract tests로 통과했습니다. 이번 BE117 follow-up의 추가 결과와 범위는 [F010 진행 문서](F010_CREW_PROGRESS.md)에 기록합니다. 로컬 path에서는 C19 행에서 C04 상세로 진입하고 편집·삭제 후에도 원래 크루/게시판으로 돌아옵니다. 크루 전용 글은 공개 피드·검색·HOT 결과에서 제외합니다.
 - [x] C05/C09/C04 게시글 사진·영상 첨부의 로컬 UI를 구현했습니다. 사진은 기존 20 MB 원본/5 MB 변환 제한을 적용하고, 영상은 원본 50,000,000 bytes·15초 이하를 확인한 뒤 MP4·1080p(긴 변 1,920/짧은 변 1,080 이하)·20,000,000 bytes 이하로 변환합니다. 사진과 영상 합계는 10개/100,000,000 bytes 이하입니다. 영상 선택·중복 차단·취소 가능한 변환·포스터·재생/일시정지·닫을 때 정지, 초안/게시 파일의 게시·폐기·수정·삭제 수명주기를 지원합니다. C26은 첨부 ID와 순서를 비교하고 비동기 요청은 생성 토큰과 초안 ID를 다시 확인합니다. 데이터는 앱 전용 임시 저장소에만 있으며 서버 업로드/푸시는 연결하지 않았습니다.
 - [x] 영상 처리 경계·손상 파일·요청 무효화·초안/게시 파일 수명주기와 C05→C09→영상 미리보기 및 C01→C04→영상 재생/일시정지/닫기 후 정지를 합성 fixture로 확인합니다. PhotosPicker의 실사용 취소/빠른 재선택 경쟁을 UI 자동화로 재현하지는 않았으므로 해당 OS picker 경쟁의 실제 기기 동작은 남은 검증 항목입니다. 전체 source-to-app 픽셀·모션 QA도 계속 남아 있습니다.
 - 검증 상태는 분리합니다. 화면·전이 구현, 기능 테스트 통과, 원본 대조 픽셀·모션 검수는 각각 별도 기준이며, 이번 코드 변경의 기능 테스트 완료도 전체 시각 QA 완료를 뜻하지 않습니다.
 
 신고는 네 가지 사유와 모든 사유에 사용할 수 있는 선택 상세 입력(최대 300자)을 제공하고, 접수 후 작성자 차단 선택을 표시합니다. 차단하면 해당 사용자의 글·댓글과 양방향 노출을 로컬에서 제한하고 C42에서 해제할 수 있습니다. 신고·차단 상태는 기기 내 fixture이며 서버 전송은 없습니다. C28 개인 목록은 현재 계정의 좋아요 상태와 로컬 열람 이력을 사용합니다. 열람 이력은 메모리 안의 검토 fixture로만 유지하며 실제 개인 정보나 서버 호출은 추가하지 않습니다.
 
-C15–C22, C32–C35, C37–C38, C40은 서비스가 구성되면 F010에서 확인된 controller/DTO 계약을 사용합니다. C15의 모집 검색은 첫 공개 모집 페이지 안에서만 동작하며 일반 크루 검색 API는 없습니다. C20은 이름·소개·가입 안내를 생성 API로 전송합니다. C16/C17/C18은 크루 정보·가입 신청·현재 실행의 신청 상태와 확인된 취소를 제공합니다. C21/C22/C40은 서버 역할과 대기 신청 API를 사용해 신청을 승인·거절합니다. C32는 DTO의 이름·소개·가입 안내·멤버 수·역할·상태만 표시합니다. C33은 현재 사용자의 신청 목록 API가 없어 이전 실행 신청은 복구할 수 없다는 안내를 항상 표시합니다. C34/C35는 회원 ID·역할·가입 시각을 보여 주며 소유자만 역할을 변경하고, 서버가 허용한 관리자만 멤버를 내보낼 수 있습니다. 소유자 전용 재가입 제한 목록과 해제는 C34에 연결합니다. C37/C38은 확인된 board API로 내부 게시판을 만들고 이름을 바꾸며, 보관·복원 시 게시글을 유지하고 활성 최대 5개 제한을 적용합니다. C19 글 수정·삭제는 기존 post 경로를 사용하며, 작성자만 수정하고 작성자 또는 크루장/운영자만 삭제합니다. 생성 idempotency 계약은 이 follow-up에 포함하지 않습니다. C36 가입 안내 편집, C39 알림, 크루 정보 수정, 주의 메모는 현재 컨트롤러 계약에 없습니다. 회원 프로필 이름은 멤버 DTO에 없어 ID로 표시합니다. 이 F010 범위에서 빠진 API는 일반 크루 검색/필터와 현재 사용자 신청 목록이며, 전체 픽셀·모션 QA는 별도 검증 항목입니다.
+C15–C22, C32–C35, C37–C38, C40은 확인된 controller/DTO 계약을 사용합니다. C15 검색은 BE117 `/crews`의 커서 페이지를 호출하며 이름·소개만 검색하므로 지역·등급 필터와 모집 게시글 내용 검색을 제공하지 않습니다. C18/C33은 `/crews/me/applications`로 로그인 사용자의 PENDING 신청을 페이지 단위로 읽고 기존 DELETE 경로로 취소합니다. C20 생성은 이름·소개·가입 안내를 보내며, 수정은 BE117 PUT 전체 대체를 사용하고 OWNER/OPERATOR 권한은 서버가 검증합니다. C21/C22/C40은 서버 역할과 대기 신청 API를 사용해 신청을 승인·거절합니다. C32는 DTO의 이름·소개·가입 안내·멤버 수·역할·상태만 표시하고 관리자에게만 편집 진입을 보여 줍니다. C34/C35는 회원 ID·역할·가입 시각을 보여 주며 소유자만 역할을 변경하고, 서버가 허용한 관리자만 멤버를 내보낼 수 있습니다. 소유자 전용 재가입 제한 목록과 해제는 C34에 연결합니다. C37/C38은 확인된 board API로 내부 게시판을 만들고 이름을 바꾸며, 보관·복원 시 게시글을 유지하고 활성 최대 5개 제한을 적용합니다. C19 글 수정·삭제는 기존 post 경로를 사용하며, 작성자만 수정하고 작성자 또는 크루장/운영자만 삭제합니다. 생성 idempotency 계약은 별도 후속 범위입니다. C36 전용 설정 endpoint는 없지만 joinGuide는 C20의 BE117 PUT으로 수정됩니다. C39 알림과 주의 메모는 현재 컨트롤러 계약에 없습니다. 회원 프로필 이름은 멤버 DTO에 없어 ID로 표시합니다. 지역·등급 검색은 BE117에서 제공하지 않으며 전체 픽셀·모션 QA는 별도 검증 항목입니다.
 
 인증·가입·비밀번호 재설정 화면은 서버/API나 실제 이메일 발송에 연결되어 있지 않습니다. 재설정 A24–A28은 가입 A19–A23의 검수 규칙과 UI 구조를 재사용하지만 별도 세션·발급기·증명 ID를 사용하며, 가입 상태를 읽거나 변경하지 않습니다. 각 로컬 challenge 안에서 OTP 발급기는 이전에 발행한 여섯 자리 값을 재사용하지 않습니다. 실제 발급·비밀번호 변경 권위는 서버에 두어야 하며, 5분 만료·60초 재요청·5회 잠금은 로컬 검토 흐름으로 보안 인증 구현이 아닙니다. 비밀번호 재설정 완료 화면은 실제 비밀번호나 로그인 상태를 바꾸지 않습니다. 일반 사용자 흐름은 서버 닉네임 사용 가능 여부를 조회하지 않으며, 고정 닉네임 fixture 검사는 검토 모드에만 적용합니다. 실제 계정 생성이나 인증 결과로 간주하지 않습니다.

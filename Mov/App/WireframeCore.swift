@@ -4103,7 +4103,7 @@ struct WireframeRoot:View {
     @StateObject var cosmeticStoreFlow:CosmeticStoreFlow
     @State var remoteReads:WireframeRemoteReadBridge
     @State var crewFlow:WireframeCrewRemoteFlow
-    @State var pendingRemoteCrewCancellation:BackendCrewApplication?
+    @State var pendingRemoteCrewCancellation:BackendCrewMyApplication?
     @State var showingRemoteCrewCancellation=false
     let cosmeticStoreFixture: Bool
     let mediaUploadClient: MediaUploadClient?
@@ -4891,7 +4891,7 @@ struct WireframeRoot:View {
         if destination.hasPrefix("route:"){performNavigation(String(destination.dropFirst(6)))}
     }
     func communityCrewDraftHasChanges()->Bool {
-        WCommunityCrewPolicy.draftHasChanges(communityCrewDraftOriginal,name:ui.communityCrewDraftName,introduction:ui.communityCrewDraftIntroduction,region:ui.communityCrewDraftRegion,minimumRank:ui.communityCrewDraftRank,photoData:ui.communityCrewDraftPhoto)
+        WCommunityCrewPolicy.draftHasChanges(communityCrewDraftOriginal,name:ui.communityCrewDraftName,introduction:ui.communityCrewDraftIntroduction,region:ui.communityCrewDraftRegion,minimumRank:ui.communityCrewDraftRank,photoData:ui.communityCrewDraftPhoto,joinGuide:ui.communityCrewDraftJoinGuide)
     }
     func requestCommunityCrewExit(destination:String){
         guard ui.communityCrewDraftID != nil else{completeCommunityCrewExit(destination);return}
@@ -4899,7 +4899,7 @@ struct WireframeRoot:View {
         communityCrewExitDestination=destination;communityDiscardContext = .crew;showingCommunityDiscardConfirmation=true
     }
     func discardCommunityCrewDraftAndExit(){
-        if let original=communityCrewDraftOriginal{ui.communityCrewDraftName=original.name;ui.communityCrewDraftIntroduction=original.introduction;ui.communityCrewDraftRegion=original.region;ui.communityCrewDraftRank=original.minimumRank;ui.communityCrewDraftPhoto=original.photoData}
+        if let original=communityCrewDraftOriginal{ui.communityCrewDraftName=original.name;ui.communityCrewDraftIntroduction=original.introduction;ui.communityCrewDraftRegion=original.region;ui.communityCrewDraftRank=original.minimumRank;ui.communityCrewDraftPhoto=original.photoData;ui.communityCrewDraftJoinGuide=original.joinGuide}
         ui.communityCrewDraftError="";ui.communityCrewNameCheck="";ui.communityCrewDraftID=nil;communityCrewDraftOriginal=nil
         let destination=communityCrewExitDestination;communityCrewExitDestination=nil
         if let destination{Task{@MainActor in await Task.yield();completeCommunityCrewExit(destination)}}
