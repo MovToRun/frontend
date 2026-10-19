@@ -13,6 +13,72 @@ private struct V1PointEntryFixture: Codable {
     var date: Date
 }
 
+final class WireframeCrewGuidanceFlowTests: XCTestCase {
+    @MainActor
+    func testGuidanceSaveRefreshesAndPreservesLatestCrewNameAndIntroduction() async throws {
+        let service = WireframeCrewServiceFixture(arguments: ["-wire-crew-fixture-manager"])
+        let flow = WireframeCrewRemoteFlow(service: service)
+        flow.setAccountScope("scope-guidance")
+        flow.selectCrew("101")
+        await flow.loadCrewDetail()
+        let loaded = await flow.loadFreshSelectedCrewForGuidance()
+        XCTAssertTrue(loaded)
+
+        _ = try await service.updateCrew(
+            crewID: "101", name: "Newer crew name", introduction: "Newer introduction", joinGuide: "Old guide"
+        )
+        let saved = await flow.updateSelectedCrewJoinGuide("Updated guide")
+        XCTAssertTrue(saved)
+
+        let persisted = try await service.fetchCrew(id: "101")
+        XCTAssertEqual(persisted.name, "Newer crew name")
+        XCTAssertEqual(persisted.introduction, "Newer introduction")
+        XCTAssertEqual(persisted.joinGuide, "Updated guide")
+        XCTAssertEqual(flow.selectedCrew?.name, "Newer crew name")
+    }
+
+    @MainActor
+    func testGuidanceSaveRecoversLostPutResponseByReadingBeforeRetry() async throws {
+        let service = WireframeCrewServiceFixture(arguments: [
+            "-wire-crew-fixture-manager", "-wire-crew-fixture-lose-crew-update-response-once"
+        ])
+        let flow = WireframeCrewRemoteFlow(service: service)
+        flow.setAccountScope("scope-guidance")
+        flow.selectCrew("101")
+        await flow.loadCrewDetail()
+        let loaded = await flow.loadFreshSelectedCrewForGuidance()
+        XCTAssertTrue(loaded)
+
+        let firstSave = await flow.updateSelectedCrewJoinGuide("Updated guide")
+        XCTAssertFalse(firstSave)
+        XCTAssertTrue(flow.isWriteBlocked("update-crew|101"))
+        XCTAssertTrue(flow.mutationError)
+
+        let recoveredSave = await flow.updateSelectedCrewJoinGuide("Updated guide")
+        XCTAssertTrue(recoveredSave)
+        XCTAssertFalse(flow.isWriteBlocked("update-crew|101"))
+        let calls = await service.crewUpdateCalls()
+        XCTAssertEqual(calls, 1, "A saved PUT with a lost response is confirmed by GET, not duplicated")
+        XCTAssertEqual(flow.selectedCrew?.joinGuide, "Updated guide")
+    }
+
+    @MainActor
+    func testOrdinaryCrewMemberCannotSaveGuidance() async throws {
+        let service = WireframeCrewServiceFixture(arguments: [])
+        let flow = WireframeCrewRemoteFlow(service: service)
+        flow.setAccountScope("scope-member")
+        flow.selectCrew("101")
+        await flow.loadCrewDetail()
+
+        let saved = await flow.updateSelectedCrewJoinGuide("Not authorized")
+        XCTAssertFalse(saved)
+        let persisted = try await service.fetchCrew(id: "101")
+        XCTAssertEqual(persisted.joinGuide, "처음 오신 분도 편하게 인사해 주세요.")
+        let calls = await service.crewUpdateCalls()
+        XCTAssertEqual(calls, 0)
+    }
+}
+
 private struct V1PointsFixture: Codable {
     var balance: Int
     var entries: [V1PointEntryFixture]

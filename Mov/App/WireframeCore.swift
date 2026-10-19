@@ -5149,7 +5149,7 @@ struct WireframeRoot:View {
         case "C20":if crewFlow.isAvailable{remoteCommunityCrewEditor}else{communityCrewEditor}
         case "C21":if crewFlow.isAvailable{remoteCommunityCrewManagement}else{communityCrewManagement}
         case "C22":if crewFlow.isAvailable{remoteCommunityCrewApplicationReview}else{communityCrewApplicationReview}
-        case "C36":communityCrewGuidanceSettings
+        case "C36":crewFlow.isAvailable ? AnyView(remoteCommunityCrewGuidanceSettings) : AnyView(communityCrewGuidanceSettings)
         case "C37":if crewFlow.isAvailable{remoteCommunityCrewBoardManagement}else{communityCrewBoardManagement}
         case "C38":if crewFlow.isAvailable{remoteCommunityCrewBoardEditor}else{communityCrewBoardEditor}
         case "C39":communityCrewAnnouncementEditor
@@ -5160,7 +5160,7 @@ struct WireframeRoot:View {
         case "C08":communityRunnerProfile
         case "C30":communityConnections
         case "C31":communityPhotoViewer
-        case "C32":if crewFlow.isAvailable{remoteCommunityCrewInformation}else{communityCrewInformation}
+        case "C32":crewFlow.isAvailable ? AnyView(remoteCommunityCrewInformation) : AnyView(communityCrewInformation)
         case "C33":if crewFlow.isAvailable{remoteCommunityCrewApplicationList}else{communityCrewApplicationList}
         case "C23":communityReport
         case "C24":communityNotifications

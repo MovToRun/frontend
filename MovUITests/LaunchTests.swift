@@ -103,16 +103,16 @@ import UIKit
         paste.tap()
     }
     private func replace(_ value:String,into element:XCUIElement){if !element.exists || !element.isHittable{scrollCurrentScreen()};XCTAssertTrue(element.waitForExistence(timeout:5));element.tap();let old=element.value as? String ?? "";element.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:old.count)+value)}
-    private func replaceTextEditor(_ value:String,into element:XCUIElement){
+    private func insertTextEditor(_ value:String,into element:XCUIElement)->String{
         if !element.exists || !element.isHittable{scrollCurrentScreen()}
         XCTAssertTrue(element.waitForExistence(timeout:5),app.debugDescription)
+        let original=element.value as? String ?? ""
         element.tap()
-        element.press(forDuration:0.8)
-        let selectAll=app.descendants(matching:.any).matching(NSPredicate(format:"label == %@ OR label == %@ OR label == %@","Select All","모두 선택","전체 선택")).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout:5),app.debugDescription)
-        selectAll.tap()
         element.typeText(value)
-        XCTAssertEqual(element.value as? String,value,"TextEditor replacement must not append to the server-provided text")
+        let updated=element.value as? String ?? ""
+        XCTAssertTrue(updated.contains(value),"Typed TextEditor content must appear in the updated draft")
+        XCTAssertNotEqual(updated,original,"Typing must change the draft")
+        return updated
     }
     func waitHittable(_ element:XCUIElement,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in element.exists && element.isHittable},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
     func waitForLayout(_ condition:@escaping()->Bool,timeout:Double=3)->Bool{let ready=XCTNSPredicateExpectation(predicate:NSPredicate{_,_ in condition()},object:nil);return XCTWaiter.wait(for:[ready],timeout:timeout) == .completed}
@@ -1026,6 +1026,14 @@ import UIKit
         app.launch()
         XCTAssertTrue(app.descendants(matching:.any)["screen-\(screen)"].waitForExistence(timeout:10),app.debugDescription)
     }
+    private func openRemoteCrewInformation(manager:Bool){
+        openRemoteCrewFixture("C16",manager:manager,crewID:"101")
+        XCTAssertTrue(app.staticTexts["communityCrewDetailName"].waitForExistence(timeout:10),app.debugDescription)
+        let information=app.buttons["communityCrewInformation"]
+        XCTAssertTrue(waitHittable(information,timeout:8),app.debugDescription)
+        information.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:8),app.debugDescription)
+    }
     private func enterRemoteCrewBoard(){
         let enter=app.buttons["communityCrewEnterBoard"]
         XCTAssertTrue(waitHittable(enter,timeout:8),"The board-entry action must be visible before it is tapped.\n\(app.debugDescription)")
@@ -1311,7 +1319,7 @@ import UIKit
     }
 
     func testRemoteCrewInformationEditRequiresManagerAndDiscardsDirtyDraft() {
-        openRemoteCrewFixture("C32",manager:true,crewID:"101")
+        openRemoteCrewInformation(manager:true)
         let edit=app.buttons["communityCrewInfoEdit"]
         XCTAssertTrue(edit.waitForExistence(timeout:8),app.debugDescription)
         edit.tap()
@@ -1333,19 +1341,49 @@ import UIKit
 
         app.buttons["communityCrewInfoEdit"].tap()
         replace("수정한 새벽 크루",into:app.textFields["communityCrewDraftName"])
-        replaceTextEditor("새벽마다 함께 달려요.",into:app.textViews["communityCrewDraftIntroduction"])
-        replaceTextEditor("가입 후 첫 모임에서 만나요.",into:app.textViews["communityCrewDraftJoinGuide"])
+        let expectedIntroduction=insertTextEditor("새벽마다 함께 달려요.",into:app.textViews["communityCrewDraftIntroduction"])
+        let expectedJoinGuide=insertTextEditor("가입 후 첫 모임에서 만나요.",into:app.textViews["communityCrewDraftJoinGuide"])
         let save=app.buttons["communityCrewSave"]
         save.tap()
         XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:8),app.debugDescription)
         XCTAssertEqual(app.staticTexts["communityCrewInfoName"].label,"수정한 새벽 크루")
-        XCTAssertEqual(app.staticTexts["communityCrewInfoIntroduction"].label,"새벽마다 함께 달려요.")
+        XCTAssertEqual(app.staticTexts["communityCrewInfoIntroduction"].label,expectedIntroduction)
+        app.buttons["communityCrewInfoManage"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:5),app.debugDescription)
+        app.buttons["뒤로"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C32"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(app.staticTexts["communityCrewInfoJoinGuide"].label,expectedJoinGuide)
 
         openRemoteCrewFixture("C32",operatorRole:true,crewID:"101")
         XCTAssertTrue(app.buttons["communityCrewInfoEdit"].waitForExistence(timeout:8),"Operators have the server-confirmed crew information edit permission")
 
-        openRemoteCrewFixture("C32",crewID:"101")
+        openRemoteCrewInformation(manager:false)
         XCTAssertFalse(app.buttons["communityCrewInfoEdit"].exists,"Ordinary members cannot enter the edit flow")
+    }
+
+    func testRemoteCrewJoinGuideSaveUsesManagerOnlyC36AndPersistsServerValue() {
+        openRemoteCrewFixture("C21",manager:true,crewID:"101")
+        let edit=app.buttons["communityCrewGuidance"]
+        XCTAssertTrue(waitHittable(edit,timeout:8),app.debugDescription)
+        edit.tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C36"].waitForExistence(timeout:5),app.debugDescription)
+        let guidance=app.textViews["communityCrewGuidanceText"]
+        XCTAssertTrue(guidance.waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(guidance.value as? String,"처음 오신 분도 편하게 인사해 주세요.")
+        let expectedGuidance=insertTextEditor("가입 후 첫 모임에서 만나요.",into:guidance)
+        app.buttons["communityCrewGuidanceSave"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C21"].waitForExistence(timeout:8),app.debugDescription)
+        XCTAssertFalse(app.staticTexts["communityCrewGuidanceDetails"].exists,
+                       "C36 saves remotely and does not claim a local-only mutation")
+
+        app.buttons["communityCrewGuidance"].tap()
+        XCTAssertTrue(app.descendants(matching:.any)["screen-C36"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertEqual(app.textViews["communityCrewGuidanceText"].value as? String,expectedGuidance)
+
+        openRemoteCrewFixture("C21",crewID:"101")
+        XCTAssertTrue(app.staticTexts["communityCrewManageRestricted"].waitForExistence(timeout:5),app.debugDescription)
+        XCTAssertFalse(app.buttons["communityCrewGuidance"].exists,
+                       "Members without manager permissions cannot enter C36")
     }
 
     func testRemoteCrewAccountSwitchDiscardsLateOldAccountListResponse() {
@@ -1525,7 +1563,7 @@ import UIKit
         app.buttons["remoteCrewPostEdit"].tap()
         XCTAssertTrue(app.textFields["remoteCrewPostEditTitle"].waitForExistence(timeout:5),app.debugDescription)
         replace("수정된 토요일 일정",into:app.textFields["remoteCrewPostEditTitle"])
-        replaceTextEditor("오전 9시에 만나요.",into:app.textViews["remoteCrewPostEditContent"])
+        let expectedPostContent=insertTextEditor("오전 9시에 만나요.",into:app.textViews["remoteCrewPostEditContent"])
         let save=app.buttons["remoteCrewPostEditSave"]
         save.tap()
         XCTAssertTrue(app.staticTexts["상태가 바뀌었어요. 목록을 새로고침해 주세요."].waitForExistence(timeout:5),app.debugDescription)
@@ -1533,7 +1571,7 @@ import UIKit
         save.tap()
         XCTAssertTrue(app.staticTexts["remoteCrewPostDetailTitle"].waitForExistence(timeout:8),app.debugDescription)
         XCTAssertEqual(app.staticTexts["remoteCrewPostDetailTitle"].label,"수정된 토요일 일정")
-        XCTAssertEqual(app.staticTexts["remoteCrewPostDetailBody"].label,"오전 9시에 만나요.")
+        XCTAssertEqual(app.staticTexts["remoteCrewPostDetailBody"].label,expectedPostContent)
 
         app.buttons["remoteCrewPostEdit"].tap()
         replace("저장 전 변경",into:app.textFields["remoteCrewPostEditTitle"])
@@ -5049,7 +5087,7 @@ extension LaunchTests {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","완료될 때까지 기다려 주세요")).firstMatch.waitForExistence(timeout:5))
     }
 
-    func testCommunityAmbiguousCreateRemainsBlockedInPreview() {
+    func testCommunityAmbiguousCreateOffersExplicitRecoveryWithoutEditingPayload() {
         let suite="mov.wireframe.test.create-unknown.\(UUID().uuidString)"
         defer { app.terminate();UserDefaults(suiteName:suite)?.removePersistentDomain(forName:suite) }
         app.launchArguments=["-wire-screen","C09","-wire-fixture","-wire-test-store-suite",suite,
@@ -5058,8 +5096,9 @@ extension LaunchTests {
         XCTAssertTrue(app.descendants(matching:.any)["screen-C09"].waitForExistence(timeout:10))
         let publish=app.buttons["communityPublishButton"]
         XCTAssertTrue(publish.waitForExistence(timeout:5))
-        XCTAssertFalse(publish.isEnabled,"The client must not replay a create request with an unknown result")
-        XCTAssertEqual(publish.label,"응답 확인 필요")
+        XCTAssertTrue(publish.isEnabled,"Recovery is an explicit user action that resolves the saved key before any replay")
+        XCTAssertEqual(publish.label,"결과 확인 후 복구")
+        XCTAssertFalse(app.buttons["다시 수정"].isEnabled,"The original payload stays frozen while its create result is unknown")
     }
 
     func testProfilePhotoUploadCanBeCancelledWithoutApplyingLateResult() {

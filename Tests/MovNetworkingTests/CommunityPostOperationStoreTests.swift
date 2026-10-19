@@ -181,6 +181,15 @@ final class CommunityPostDraftAccountBindingTests: XCTestCase {
         XCTAssertFalse(CommunityPostDraftAccountBinding(memberID: nil, accountScopeID: "scope")
             .permitsPublish(memberID: "123", accountScopeID: "scope"))
     }
+
+    func testSameMemberCanRecoverAcrossReloginButAnotherMemberCannot() {
+        let binding = CommunityPostDraftAccountBinding(memberID: "123", accountScopeID: "first-login")
+
+        XCTAssertTrue(binding.permitsRecovery(memberID: "123"))
+        XCTAssertFalse(binding.permitsRecovery(memberID: "456"))
+        XCTAssertFalse(CommunityPostDraftAccountBinding(memberID: nil, accountScopeID: "first-login")
+            .permitsRecovery(memberID: "123"))
+    }
 }
 
 final class CommunityPostPublishingServiceTests: XCTestCase {
@@ -339,21 +348,75 @@ final class CommunityPostPublishingServiceTests: XCTestCase {
         XCTAssertNil(try restartedStore.load(memberID: memberID))
     }
 
-    func testAmbiguousCreateRecoveredAfterRestartIsBlockedWithoutAnotherRequest() async throws {
+    func testKeyedAmbiguousCreateAfterRestartResolvesExistingPostWithoutRepeatingCreate() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-unknown-\(UUID())", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = FileCommunityPostOperationStore(rootURL: root)
-        let record = makeRecord(memberID: memberID, phase: .creatingPost, postID: nil, attachments: [])
+        var record = makeRecord(memberID: memberID, phase: .creatingPost, postID: nil, attachments: [])
+        record.idempotencyKey = "operation-unknown-42"
         try store.save(record, attachmentData: [:])
         let restartedStore = FileCommunityPostOperationStore(rootURL: root)
-        let api = GatedCommunityAPI()
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "community/me/post-creation-result", method: "GET",
+                  response: .init(statusCode: 200, data: post(id: "42", version: 0))),
+            .init(path: "community/posts/42/attachments", method: "PUT",
+                  response: .init(statusCode: 200, data: attachmentSet(version: 1, assetID: nil)))
+        ])
         let service = makeService(api: api, store: restartedStore,
                                   sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID)))
         let recovered = try XCTUnwrap(try service.recover(memberID: memberID))
 
+        let result = try await service.publish(record: recovered.0, attachmentData: recovered.1,
+                                               recoverAmbiguousCreate: true, isScopeCurrent: { true })
+        XCTAssertEqual(result.snapshot.postID, "42")
+        XCTAssertEqual(result.operation.phase, .postCreated)
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["GET", "PUT"])
+        XCTAssertEqual(requests[0].headers["Idempotency-Key"], "operation-unknown-42")
+    }
+
+    func testMissingResultExplicitlyReplaysOnlyTheSameKeyAndAcceptsReplay200() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-replay-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        var record = makeRecord(memberID: memberID, phase: .createResultUnknown, postID: nil, attachments: [])
+        record.idempotencyKey = "operation-replay-42"
+        try store.save(record, attachmentData: [:])
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "community/me/post-creation-result", method: "GET", response: .init(statusCode: 404, data: Data())),
+            .init(path: "community/boards/free/posts", method: "POST", response: .init(statusCode: 200, data: post(id: "42", version: 0))),
+            .init(path: "community/posts/42/attachments", method: "PUT",
+                  response: .init(statusCode: 200, data: attachmentSet(version: 1, assetID: nil)))
+        ])
+        let service = makeService(api: api, store: FileCommunityPostOperationStore(rootURL: root),
+                                  sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID)))
+        let recovered = try XCTUnwrap(try service.recover(memberID: memberID))
+
+        let result = try await service.publish(record: recovered.0, attachmentData: recovered.1,
+                                               recoverAmbiguousCreate: true, isScopeCurrent: { true })
+
+        XCTAssertEqual(result.snapshot.postID, "42")
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["GET", "POST", "PUT"])
+        XCTAssertEqual(requests[0].headers["Idempotency-Key"], "operation-replay-42")
+        XCTAssertEqual(requests[1].headers["Idempotency-Key"], "operation-replay-42")
+    }
+
+    func testLegacyAmbiguousCreateWithoutKeyStaysBlockedAfterRestart() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-legacy-unknown-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        let record = makeRecord(memberID: memberID, phase: .creatingPost, postID: nil, attachments: [])
+        try store.save(record, attachmentData: [:])
+        let api = GatedCommunityAPI()
+        let service = makeService(api: api, store: FileCommunityPostOperationStore(rootURL: root),
+                                  sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID)))
+        let recovered = try XCTUnwrap(try service.recover(memberID: memberID))
+
         do {
-            _ = try await service.publish(record: recovered.0, attachmentData: recovered.1, isScopeCurrent: { true })
-            XCTFail("an ambiguous create must remain blocked after process restart")
+            _ = try await service.publish(record: recovered.0, attachmentData: recovered.1,
+                                          recoverAmbiguousCreate: true, isScopeCurrent: { true })
+            XCTFail("legacy ambiguous requests have no server key to reconcile")
         } catch let failure as CommunityPostPublishingFailure {
             XCTAssertEqual(failure, .recoveryRequired)
         } catch { XCTFail("unexpected error: \(error)") }
@@ -361,7 +424,84 @@ final class CommunityPostPublishingServiceTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
-    func testJournalWriteFailureStopsBeforeNonIdempotentPost() async throws {
+    func testDeletedCreateReceiptBlocksRecoveryWithoutAnotherPost() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-deleted-receipt-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        var record = makeRecord(memberID: memberID, phase: .createResultUnknown, postID: nil, attachments: [])
+        record.idempotencyKey = "operation-deleted-42"
+        try store.save(record, attachmentData: [:])
+        let gone = try JSONSerialization.data(withJSONObject: ["code": "COMMUNITY_POST_RESULT_UNAVAILABLE"])
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "community/me/post-creation-result", method: "GET", response: .init(statusCode: 410, data: gone))
+        ])
+        let service = makeService(api: api, store: FileCommunityPostOperationStore(rootURL: root),
+                                  sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: memberID)))
+        let recovered = try XCTUnwrap(try service.recover(memberID: memberID))
+
+        do {
+            _ = try await service.publish(record: recovered.0, attachmentData: recovered.1,
+                                          recoverAmbiguousCreate: true, isScopeCurrent: { true })
+            XCTFail("a gone receipt must never be replayed")
+        } catch let failure as CommunityMediaFailure {
+            XCTAssertEqual(failure, .postCreationReceiptUnavailable)
+        } catch { XCTFail("unexpected error: \(error)") }
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.map(\.method), ["GET"])
+        XCTAssertTrue(try XCTUnwrap(try store.load(memberID: memberID)).hasAmbiguousCreate)
+    }
+
+    func testSameMemberReloginCanRecoverButDifferentMemberCannotUseJournal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-relogin-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        var record = makeRecord(memberID: memberID, phase: .createResultUnknown, postID: nil, attachments: [])
+        record.idempotencyKey = "operation-relogin-42"
+        try store.save(record, attachmentData: [:])
+        let api = GatedCommunityAPI(steps: [
+            .init(path: "community/me/post-creation-result", method: "GET", response: .init(statusCode: 200, data: post(id: "42", version: 0))),
+            .init(path: "community/posts/42/attachments", method: "PUT", response: .init(statusCode: 200, data: attachmentSet(version: 1, assetID: nil)))
+        ])
+        let relaunchedSession = try AuthSessionSnapshot(accessToken: "new-login-token", refreshToken: "refresh-123", memberID: memberID)
+        let service = makeService(api: api, store: FileCommunityPostOperationStore(rootURL: root),
+                                  sessionStore: MutableCommunitySessionStore(snapshot: relaunchedSession))
+        let recovered = try XCTUnwrap(try service.recover(memberID: memberID))
+        _ = try await service.publish(record: recovered.0, attachmentData: recovered.1,
+                                      recoverAmbiguousCreate: true, isScopeCurrent: { true })
+        let requests = await api.recordedRequests()
+        XCTAssertEqual(requests.first?.headers["Authorization"], "Bearer new-login-token")
+
+        let otherRoot = FileManager.default.temporaryDirectory.appendingPathComponent("community-other-member-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: otherRoot) }
+        try FileCommunityPostOperationStore(rootURL: otherRoot).save(record, attachmentData: [:])
+        let otherMemberAPI = GatedCommunityAPI()
+        let otherMemberService = makeService(api: otherMemberAPI, store: FileCommunityPostOperationStore(rootURL: otherRoot),
+                                             sessionStore: MutableCommunitySessionStore(snapshot: try makeSession(memberID: "456")))
+        do {
+            _ = try await otherMemberService.publish(record: record, attachmentData: [:],
+                                                      recoverAmbiguousCreate: true, isScopeCurrent: { true })
+            XCTFail("another member must not recover a different member's receipt")
+        } catch let failure as AuthSessionFailure {
+            XCTAssertEqual(failure, .memberIdentityChanged)
+        } catch { XCTFail("unexpected error: \(error)") }
+        let otherRequests = await otherMemberAPI.recordedRequests()
+        XCTAssertTrue(otherRequests.isEmpty)
+    }
+
+    func testAmbiguousJournalRejectsPayloadOrKeyChanges() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-immutable-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FileCommunityPostOperationStore(rootURL: root)
+        var record = makeRecord(memberID: memberID, phase: .creatingPost, postID: nil, attachments: [])
+        record.idempotencyKey = "operation-fixed-42"
+        try store.save(record, attachmentData: [:])
+        record.title = "Changed after create"
+        XCTAssertThrowsError(try store.save(record, attachmentData: [:])) {
+            XCTAssertEqual($0 as? CommunityPostOperationStoreError, .recoveryRequired)
+        }
+    }
+
+    func testJournalWriteFailureStopsBeforeKeyedPost() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("community-fail-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let base = FileCommunityPostOperationStore(rootURL: root)
